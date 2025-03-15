@@ -1929,27 +1929,31 @@ def set_curveinfo_stretch(rigname, curve, typ='', duplicate_ends=True):
 
     # Create a detached curve between the two points
     # This will allow us to directly measure the arc length between them
-    detach_curve = cmds.createNode('detachCurve', n=f'{typ}{rigname}_detach_curve', ss=True)
+    detach_curve = cmds.createNode('detachCurve', n=f'{typ}{rigname}_detach_curve', s=True, ss=True)
     cmds.connectAttr(f'{crvshape}.worldSpace[0]', f'{detach_curve}.inputCurve', f=True)
     cmds.setAttr(f'{detach_curve}.parameter[0]', srt_param_value)
     cmds.setAttr(f'{detach_curve}.parameter[1]', end_param_value)
 
     # Create a second curveInfo to measure the partial arc length
-    partial_curveinfo = cmds.createNode('curveInfo', n=f'{typ}{rigname}_partial_curveInfo', ss=True)
+    partial_curveinfo = cmds.createNode('curveInfo', n=f'{typ}{rigname}_partial_curveInfo', s=True, ss=True)
     cmds.connectAttr(f'{detach_curve}.outputCurve[0]', f'{partial_curveinfo}.inputCurve', f=True)
 
     # Create dynamic parameter update based on CV movement
     # We'll use a simple approach that updates parameters based on CV position changes
-    cv_tracker = cmds.createNode('transform', n=f'{typ}{rigname}_cv_tracker', ss=True)
+    cv_tracker = cmds.createNode('transform', n=f'{typ}{rigname}_cv_tracker', s=True, ss=True)
 
     # Create cluster handles if they don't exist to track CV movement
-    srt_cluster = f'{curve}_cv{srt_cv_i}_cluster'
-    end_cluster = f'{curve}_cv{end_cv_i}_cluster'
+    # TODO: replace with upvec cluster
+    srt_cluster = fstr(rigname, CLUSTER_UPV, TAG='_base') # cluster_upv_base
+    srt_cluster_handle = fstr(rigname, CLUSTER_UPV_HANDLE, TAG='_base') # cluster_handle_upv_base
+    end_cluster = fstr(rigname, CLUSTER_UPV, TAG='_end') # cluster_upv_end
+    end_cluster_handle = fstr(rigname, CLUSTER_UPV_HANDLE, TAG='_end') # cluster_handle_upv_end
+    #srt_cluster = f'{curve}_cv{srt_cv_i}_cluster'
+    #end_cluster = f'{curve}_cv{end_cv_i}_cluster'
 
     # Check if clusters exist, create them if not
     if not cmds.objExists(srt_cluster):
         srt_cluster = cmds.cluster(f'{curve}.cv[{srt_cv_i}]', n=f'{curve}_cv{srt_cv_i}_cluster')[1]
-
     if not cmds.objExists(end_cluster):
         end_cluster = cmds.cluster(f'{curve}.cv[{end_cv_i}]', n=f'{curve}_cv{end_cv_i}_cluster')[1]
 
@@ -2008,7 +2012,7 @@ def set_curveinfo_stretch(rigname, curve, typ='', duplicate_ends=True):
     cmds.expression(end_expr, e=True, s=end_expr_code, ae=True, uc="all")
 
     # Create remapValue to scale and offset the curve length as needed
-    remap = cmds.createNode('remapValue', n=f'{typ}{rigname}_spline_parameter_remapValue', ss=True)
+    remap = cmds.createNode('remapValue', n=f'{typ}{rigname}_spline_parameter_remapValue', s=True, ss=True)
 
     # Connect partial curve length to remap
     cmds.connectAttr(f'{partial_curveinfo}.arcLength', f'{remap}.inputValue', f=True)
@@ -3045,6 +3049,7 @@ def create_stretchy(rigname, joints, typ=''):
     else: # IK uses original curve
         curve = fstr(rigname, CURVE, typ)
     curveinfo, curvelen = set_curveinfo_stretch(rigname, curve, typ, duplicate_ends=True)
+    # init_crvlen in setup_joint_stretch
 
     # Setup stretch
     stretch_mult, stretch_blend, stretch_mult_nodes = setup_joint_stretch(
