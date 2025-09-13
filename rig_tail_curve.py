@@ -64,24 +64,27 @@ def create_curve(rigname, jnt_pos, typ=''):
             indices = list(linspace(0, len(jnt_pos)-1, NUM_CTRL_IK))
             sampled_pos = [jnt_pos[round(i)] for i in indices]
 
-            # Create upvec positions slightly extended beyond joint chain
-            # This provides clean advanced twist calculation at extremes
-            first_pos = jnt_pos[0]
-            last_pos = jnt_pos[-1]
+            # CHANGED: create upvec positions at start/end
+            all_pos = [jnt_pos[0]] + sampled_pos + [jnt_pos[-1]]
 
-            # Calculate extension vector (2% of total chain length)
-            chain_vec = [last_pos[i] - first_pos[i] for i in range(3)]
-            chain_len = sum(v**2 for v in chain_vec) ** 0.5
-            if chain_len > 0:
-                extension_factor = 0.02
-                norm_vec = [v / chain_len for v in chain_vec]
-                extension = [v * chain_len * extension_factor for v in norm_vec]
-                upvec_srt = [first_pos[i] - extension[i] for i in range(3)]
-                upvec_end = [last_pos[i] + extension[i] for i in range(3)]
-            else:
-                upvec_srt = first_pos
-                upvec_end = last_pos
-            all_pos = [upvec_srt] + sampled_pos + [upvec_end]
+            # # Create upvec positions slightly extended beyond joint chain
+            # # This provides clean advanced twist calculation at extremes
+            # first_pos = jnt_pos[0]
+            # last_pos = jnt_pos[-1]
+            #
+            # # Calculate extension vector (2% of total chain length)
+            # chain_vec = [last_pos[i] - first_pos[i] for i in range(3)]
+            # chain_len = sum(v**2 for v in chain_vec) ** 0.5
+            # if chain_len > 0:
+            #     extension_factor = 0.02
+            #     norm_vec = [v / chain_len for v in chain_vec]
+            #     extension = [v * chain_len * extension_factor for v in norm_vec]
+            #     upvec_srt = [first_pos[i] - extension[i] for i in range(3)]
+            #     upvec_end = [last_pos[i] + extension[i] for i in range(3)]
+            # else:
+            #     upvec_srt = first_pos
+            #     upvec_end = last_pos
+            # all_pos = [upvec_srt] + sampled_pos + [upvec_end]
 
             # Create curve with all control points
             degree = min(3, len(all_pos) - 1)
@@ -103,6 +106,10 @@ def create_curve(rigname, jnt_pos, typ=''):
         rename_shapes(curve, typ='crv')
         set_curve_visibility(curve)
         cmds.delete(curve, ch=1)
+
+        spline_grp = fstr(rigname, SPLINE_GRP, typ)
+        parent_to(curve, spline_grp)
+
         num_cv = cmds.getAttr(f'{curve}.controlPoints', size=True)
         logger.info(f"Created curve '{curve}' with {num_cv} CVs, degree {degree} from {len(jnt_pos)} joints")
         return curve
@@ -111,88 +118,86 @@ def create_curve(rigname, jnt_pos, typ=''):
         logger.error(f'Failed to create curve {curve}: {e}')
         return None
 
-
 def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
     '''
-    Create pointOnCurveInfo nodes to drive solver curve from driver curve.
-    Driver curve has clusters at CVs, while solver curve is minimal for ikHandle.
+    Connect driver curve to solver curve using pointOnCurveInfo sampling.
+    Allows the cluster-deformed driver curve to control the solver curve used by the ikHandle.
 
-    Arguments
-        rigname (str): Rig component name
-        driver_curve (str): Curve controlled by clusters
-        solver_curve (str): Curve used by ikHandle
-        typ (str): Rig type identifier (TYPE_FK, TYPE_IK)
+    The connection works by:
+    - Sampling positions along the driver curve at parameterized locations
+    - Using pointOnCurveInfo nodes to get world positions from the driver curve
+    - Feeding these positions directly to the solver curve's CV positions
+    - Maintaining real-time deformation transfer from clusters to IK solver
+
+    - Driver curve can have any number of CVs
+    - Solver curve has minimal CVs after rebuilding from create_spline_handle
+    - No dependency on ikHandle's automatic curve rebuilding
+    - Preserves user control over deformation resolution
+
+    Arguments:
+        rigname (str): name of rig component
+        driver_curve (str): curve with clusters (full CV set)
+        solver_curve (str): curve used by ikHandle (minimal CV set)
+        typ (str): type identifier (TYPE_IK)
     '''
-    logger.info(f"Setting up driver-solver connection: {driver_curve} -> {solver_curve}")
+    logger.info(f"Connecting driver curve '{driver_curve}' to solver curve '{solver_curve}'")
 
-    # Get curve information
+    # Get curve shape nodes for connections
     driver_shape = cmds.listRelatives(driver_curve, s=1, ni=1)[0]
     solver_shape = cmds.listRelatives(solver_curve, s=1, ni=1)[0]
 
-    # Get number of CVs on solver curve
+    # Get curve information for parameterization
     solver_num_cv = cmds.getAttr(f'{solver_curve}.controlPoints', size=True)
+    driver_num_cv = cmds.getAttr(f'{driver_curve}.controlPoints', size=True)
 
-    # Create group for pointOnCurveInfo nodes organization
-    spline_grp = fstr(rigname, SPLINE_GRP, typ)
-    poci_grp = fstr(rigname, '{rigname}_poci{GRP}', typ)
-    if not cmds.objExists(poci_grp):
-        cmds.group(em=True, n=poci_grp)
-        if cmds.objExists(spline_grp):
-            parent_to(poci_grp, spline_grp)
+    # Use solver curve's actual parameter range (after rebuilding)
+    solver_min_param = cmds.getAttr(f'{solver_curve}.minValue')
+    solver_max_param = cmds.getAttr(f'{solver_curve}.maxValue')
+    solver_param_range = solver_max_param - solver_min_param
 
-    # Get driver curve spans for parameter calculation
-    driver_spans = cmds.getAttr(f'{driver_curve}.spans')
+    # Driver curve parameter range for sampling
+    driver_min_param = cmds.getAttr(f'{driver_curve}.minValue') 
+    driver_max_param = cmds.getAttr(f'{driver_curve}.maxValue')
+    driver_param_range = driver_max_param - driver_min_param
 
-    # Create pointOnCurveInfo nodes for each solver CV
-    poci_nodes = []
-    for i in range(solver_num_cv):
-        poci_name = f'{typ}{rigname}_poci_{i:02d}'
-        if cmds.objExists(poci_name):
-            cmds.delete(poci_name)
+    logger.info(f"Solver CVs: {solver_num_cv}, Driver CVs: {driver_num_cv}")
+    logger.info(f"Solver param range: {solver_min_param:.3f} to {solver_max_param:.3f}")
+    logger.info(f"Driver param range: {driver_min_param:.3f} to {driver_max_param:.3f}")
 
-        poci = cmds.createNode('pointOnCurveInfo', n=poci_name)
-        poci_nodes.append(poci)
-
-        # Connect driver curve to pointOnCurveInfo
+    # Create pointOnCurveInfo nodes for each solver curve CV
+    for cv_i in range(solver_num_cv):
+        # Create pointOnCurveInfo node to sample driver curve
+        poci = f'{typ}{rigname}_poci_{cv_i:02d}_pointOnCurveInfo'
+        cmds.createNode('pointOnCurveInfo', n=poci, s=1, ss=1)
         cmds.connectAttr(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
 
-        # Calculate parameter position along driver curve
+        # Calculate parameter based on solver curve's position along its length
+        # Map solver CV position to driver curve parameter space
         if solver_num_cv == 1:
-            param = 0.5 * driver_spans  # middle
-        else:
-            # Evenly distribute parameters from 0 to spans
-            param = (float(i) / (solver_num_cv - 1)) * driver_spans
+            # If single CV, use middle of driver curve
+            driver_param = driver_min_param + (driver_param_range * 0.5)
+        else: # If multiple CVs, distribute evenly across driver curve
+            t = float(cv_i) / (solver_num_cv - 1) # 0 to 1
+            driver_param = driver_min_param + (driver_param_range * t)
 
-        cmds.setAttr(f'{poci}.parameter', param)
+        cmds.setAttr(f'{poci}.parameter', driver_param)
+        logger.debug(f"CV {cv_i}: parameter {driver_param:.3f}")
 
         # Connect position to solver curve CV
-        # We need to use a decomposeMatrix to extract position
-        decomp = f'{typ}{rigname}_decomp_{i:02d}_decomposeMatrix'
-        cmds.createNode('decomposeMatrix', n=decomp, s=1, ss=1)
-        # Create matrix setup to get world position
-        fourfour = f'{typ}{rigname}_4x4_{i:02d}_fourByFourMatrix'
-        cmds.createNode('fourByFourMatrix', n=fourfour, s=1, ss=1)
+        cmds.connectAttr(f'{poci}.positionX', 
+                         f'{solver_shape}.controlPoints[{cv_i}].xValue')
+        cmds.connectAttr(f'{poci}.positionY', 
+                         f'{solver_shape}.controlPoints[{cv_i}].yValue')
+        cmds.connectAttr(f'{poci}.positionZ', 
+                         f'{solver_shape}.controlPoints[{cv_i}].zValue')
 
-        # Connect position components to matrix
-        cmds.connectAttr(f'{poci}.positionX', f'{fourfour}.in30')
-        cmds.connectAttr(f'{poci}.positionY', f'{fourfour}.in31')
-        cmds.connectAttr(f'{poci}.positionZ', f'{fourfour}.in32')
-        cmds.setAttr(f'{fourfour}.in33', 1.0) # homogeneous coordinate
+    logger.info(f"Created {solver_num_cv} pointOnCurveInfo connections")
 
-        # Decompose matrix to get translation
-        cmds.connectAttr(f'{fourfour}.output', f'{decomp}.inputMatrix')
-
-        # Connect to solver curve CV
-        cmds.connectAttr(f'{decomp}.outputTranslateX', f'{solver_shape}.controlPoints[{i}].xValue')
-        cmds.connectAttr(f'{decomp}.outputTranslateY', f'{solver_shape}.controlPoints[{i}].yValue')
-        cmds.connectAttr(f'{decomp}.outputTranslateZ', f'{solver_shape}.controlPoints[{i}].zValue')
-
-    logger.info(f"Created {len(poci_nodes)} pointOnCurveInfo connections")
-
-    # Store reference to driver curve on solver curve for cleanup
+    # Store driver curve reference on solver curve for cleanup and debugging
     if not cmds.attributeQuery('driver_curve', n=solver_curve, ex=1):
         cmds.addAttr(solver_curve, ln='driver_curve', dt='string')
         cmds.setAttr(f'{solver_curve}.driver_curve', driver_curve, type='string')
+
 
 # SPLINE ===============================================================
 
@@ -200,6 +205,8 @@ def create_spline_handle(rigname, joints, curve, typ=TYPE_IK):
     '''
     Create spline handle with separated driver/solver curve system.
     Driver curve is controlled by clusters, solver curve is driven by pointOnCurveInfo nodes.
+
+    Note: Maya's ikHandle rebuilds the curve, which changes curve parameters.
 
     Arguments
         rigname (str): Name of rig component
@@ -216,75 +223,94 @@ def create_spline_handle(rigname, joints, curve, typ=TYPE_IK):
     if not cmds.objExists(curve): # Ensure curve exists for IK handle creation
         logger.error(f"Curve '{curve}' does not exist")
 
-    # Clean up old components
-    spline_list = get_spline_handle(rigname, joints, existing=True)
-    for obj in spline_list:
-        logger.info(f"Deleting '{obj}'")
-        remove(obj) # Delete spline component
+    # Clean up old spline list
+    old_spline_list = get_spline_handle(rigname, joints) or []
     if cmds.objExists('curveInfo1'):
         cmds.delete('curveInfo1')
-
-    # TODO
-    # num_cv, spans, degree = get_num_cv(curve)
-    # logger.info(f"Curve '{curve}' has {num_cv} CVs, {spans} spans, degree {degree}")
+    for obj in old_spline_list:
+        remove(obj)
 
     # IK handle object [ikhandle, effector, curve]
-    spline_list = cmds.ikHandle(n=fstr(rigname, SPLINE_HANDLE),
+    spline_list = cmds.ikHandle(n=fstr(rigname, SPLINE_HANDLE, typ),
                                 c=curve, fj=1,
                                 sj=joints[0], ee=joints[-1],
                                 sol='ikSplineSolver')
 
-    return rename_spline_handle(rigname, curve, spline_list, typ)
+    spline_grp = fstr(rigname, SPLINE_GRP, typ)
+    parent_to(spline_list[0], spline_grp)
+    parent_to(spline_list[2], spline_grp)
 
-def rename_spline_handle(rigname, curve, spline_list, typ=TYPE_IK):
-    spline_handle = fstr(rigname, SPLINE_HANDLE) # Handle
-    spline_effector = fstr(rigname, SPLINE_EFFECTOR) # Effector
+    return rename_spline_handle(rigname, spline_list, typ)
+
+def rename_spline_handle(rigname, spline_list, typ):
+    logger.debug(f"spline_list {spline_list}")
+    spline_handle = fstr(rigname, SPLINE_HANDLE, typ) # Handle
+    spline_effector = fstr(rigname, SPLINE_EFFECTOR, typ) # Effector
+    spline_curve = fstr(rigname, CURVE, typ, TAG='_spline') # Curve
     # Rename Handle, Effector, Curve
-    logger.debug(f"Original spline_list {spline_list}")
     cmds.rename(spline_list[0], spline_handle)
     cmds.rename(spline_list[1], spline_effector)
-    cmds.rename(spline_list[2], curve)
-    rename_shapes(curve, typ='crv')
-    set_curve_visibility(curve)
-    spline_list = [spline_handle, spline_effector, curve]
-    logger.debug(f"Renamed spline_list {spline_list}")
-    return spline_list
+    cmds.rename(spline_list[2], spline_curve)
+    rename_shapes(spline_curve, typ='crv')
+    set_curve_visibility(spline_curve)
+    return [spline_handle, spline_effector, spline_curve]
 
-def get_spline_handle(rigname, joints=None, existing=False):
+def get_spline_handle(rigname, joints=None, typ=TYPE_IK):
     '''
     Get spline handle components, return solver curve.
     Return
         spline_list (list): IK handle object [ikhandle, effector, curve]
     '''
-    spline_handle = fstr(rigname, SPLINE_HANDLE) # Handle
-    spline_effector = fstr(rigname, SPLINE_EFFECTOR) # Effector
-    curve = fstr(rigname, CURVE, TYPE_IK) # Curve
-
-    if existing:
-        # Get existing IK handle if it already exists
-        ex_ikhandles = cmds.ls(typ='ikHandle')
-        for i, ikh in enumerate(ex_ikhandles):
-            if i==0 and not joints:
-                # Return first find if joints not provided
-                return [ikh, cmds.ikHandle(ikh, q=1, ee=1),
-                        cmds.ikHandle(ikh, q=1, c=1).split('|')[-2]]
-            jl = cmds.ikHandle(ikh, q=1, jl=1)
+    if joints: # Find existing IK handle from joints
+        get_ikhandles = cmds.ls(typ='ikHandle')
+        for ikhandle in get_ikhandles:
+            # Check if it uses ikSplineSolver
+            solver = cmds.ikHandle(ikhandle, q=1, sol=1)
+            if solver != 'ikSplineSolver':
+                continue
+            # Check joint list that the handle manipulates
+            jl = cmds.ikHandle(ikhandle, q=1, jl=1)
             if is_equal_joint(jl[0], joints[0]) and is_equal_joint(jl[-1], joints[-2]):
                 # Return IK handle with matching start end joints
-                spline_list = [ikh, cmds.ikHandle(ikh, q=1, ee=1),
-                               cmds.ikHandle(ikh, q=1, c=1).split('|')[-2]]
-                logger.info(f"Found existing match {spline_list}")
+                spline_list = [ikhandle, cmds.ikHandle(ikhandle, q=1, ee=1),
+                               cmds.ikHandle(ikhandle, q=1, c=1).split('|')[-2]]
+                logger.info(f"Found IK Handle. spline_list {spline_list}")
                 return spline_list
-        logger.info(f"No existing spline handles match")
         return None
+
     else:
-        if not cmds.objExists(spline_handle):
-            spline_handle = None
-        if not cmds.objExists(spline_effector):
-            spline_effector = None
-        if not cmds.objExists(curve):
-            curve = None
-        return [spline_handle, spline_effector, curve]
+        handle = fstr(rigname, SPLINE_HANDLE, typ) # Handle
+        effector = fstr(rigname, SPLINE_EFFECTOR, typ) # Effector
+        curve = fstr(rigname, CURVE, typ, TAG='_spline') # Curve
+
+        if cmds.objExists(handle) and cmds.objExists(effector) and cmds.objExists(curve):
+            return [handle, effector, curve]
+
+        if cmds.objExists(handle):
+            effector = cmds.listConnections(f'{handle}.effector', s=1, d=0)[0]
+            curve = cmds.listConnections(f'{handle}.curve', s=1, d=0)[0]
+            return [handle, effector, curve]
+
+        if cmds.objExists(effector):
+            handles = cmds.listConnections(effector, type='ikHandle')
+            for handle in handles:
+                solver = cmds.ikHandle(ikhandle, q=1, sol=1)
+                if solver != 'ikSplineSolver':
+                    continue
+                curve = cmds.listConnections(f'{handle}.curve', s=1, d=0)[0]
+                return [handle, effector, curve]
+
+        if cmds.objExists(curve):
+            get_ikhandles = cmds.ls(typ='ikHandle')
+            for handle in get_ikhandles:
+                solver = cmds.ikHandle(handle, q=1, sol=1)
+                if solver != 'ikSplineSolver':
+                    continue
+                conns = cmds.listConnections(f'{handle}.curve', s=1, d=0) or []
+                if conns and curve in conns:
+                    effector = cmds.listConnections(f'{handle}.effector', s=1, d=0)[0]
+                    return [handle, effector, curve]
+        return None
 
 
 # CLUSTERS =============================================================

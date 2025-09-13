@@ -169,11 +169,11 @@ def create_controls_fk(rigname, joints, jnt_pos):
     match_transform(fkroot_grp, basectrl)
 
     # Calculate indices evenly distributed throughout FK chain
-    indices = list(linspace(0, len(jnt_pos)-1, NUM_CTRL_FK))
-    matchjoints = [joints[round(indices[num])] for num in range(NUM_CTRL_FK)]
+    indices = list(linspace(0, len(jnt_pos)-1, NUM_CTRL_FK+2))
+    positions = [joints[round(indices[i])] for i in range(1, NUM_CTRL_FK+1)]
     # Create variable FK controls
     varfk_ctrls, varfk_ctrl_grps = create_control_match_list(rigname,
-                                                             matchjoints,
+                                                             positions,
                                                              template_ctrl=CONTROL,
                                                              template_grp=CTRL_GRP,
                                                              typ='',

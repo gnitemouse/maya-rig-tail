@@ -611,64 +611,6 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
             cmds.addAttr(node, ln=ln, nn=nn, at='enum', en='Hide:Show', dv=dv, k=1)
         logger.debug(f"added attribute {node}.{ln}")
 
-def add_attribute_basectrl(rigname, jnt_scales):
-    '''
-    Add twist, offset, roll, scale attributes to basectrl
-    '''
-    spline_handle = fstr(rigname, SPLINE_HANDLE)
-    basectrl = fstr(rigname, BASECTRL)
-    add_attribute_enum(basectrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
-    if not cmds.attributeQuery('twist', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='twist', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('roll', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='roll', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('offset', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='offset', at='float', k=1, dv=0)
-    cmds.connectAttr(f"{basectrl}.twist", f"{spline_handle}.twist", f=1)
-    cmds.connectAttr(f"{basectrl}.roll", f"{spline_handle}.roll", f=1)
-    cmds.connectAttr(f"{basectrl}.offset", f"{spline_handle}.offset", f=1)
-    # Scale stretchy
-    add_attribute_basectrl_scale(rigname, basectrl, jnt_scales)
-
-def add_attribute_basectrl_scale(rigname, basectrl, jnt_scales):
-    '''
-    Add jntScaleY and jntScaleZ attributes to basectrl
-    '''
-    cog_ctrl = fstr(rigname, COG_CTRL)
-    ikfk_switch = fstr(rigname, IKFK)
-    # IKFK Divider
-    add_attribute_enum(basectrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-    # Proxy IKFK Switch attribute from Cog
-    add_attribute_enum(basectrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
-                       pxy=f"{cog_ctrl}.{ikfk_switch}")
-    # TODO Joint Scale
-    # add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
-    # for i, scale in enumerate(jnt_scales):
-    #     scale_mult = fstr(rigname, SCALE_MULT, NN=i)
-    #     if not cmds.attributeQuery(f"jntScaleY{i:02}", n=basectrl, ex=1):
-    #         cmds.addAttr(basectrl, ln=f"jntScaleY{i:02}", at='float', dv=scale[1], k=1)
-    #     if not cmds.attributeQuery(f"jntScaleZ{i:02}", n=basectrl, ex=1):
-    #         cmds.addAttr(basectrl, ln=f"jntScaleZ{i:02}", at='float', dv=scale[2], k=1)
-    #     cmds.connectAttr(f"{basectrl}.jntScaleY{i:02}", f"{scale_mult}.input2Y", f=1)
-    #     cmds.connectAttr(f"{basectrl}.jntScaleZ{i:02}", f"{scale_mult}.input2Z", f=1)
-
-def add_attribute_ik_proxy(rigname):
-    '''
-    Add proxy attributes from basectrl to IK controls.
-    '''
-    logger.info('Adding proxy attributes to IK controls')
-    basectrl = fstr(rigname, BASECTRL)
-    ik_controls = get_controls_all(fk=False, ik=True, bn=False, include_cog=False)
-    logger.info(f"IK controls: {ik_controls}")
-    # Add proxy attributes to IK controls
-    for ctrl in ik_controls:
-        add_attribute_enum(ctrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
-        for atr in ['squash', 'stretch']: # Squash and Stretch
-            add_attribute_enum(ctrl, ln=atr, nn=titlecase(atr), pxy=f"{basectrl}.{atr}")
-        add_attribute_enum(ctrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
-        for atr in ['twist', 'roll', 'offset']: # Twist, Roll, Offset
-            add_attribute_enum(ctrl, ln=atr, nn=titlecase(atr), pxy=f"{basectrl}.{atr}")
-
 
 # VISIBILITY ===========================================================
 
@@ -697,7 +639,6 @@ def set_control_visibility(fk, ik):
     '''
     Get all controls and set visibility keyable.
     '''
-    logger.info('Set control visibility')
     for control in get_controls_all(fk, ik, bn=False, include_cog=True):
         set_visibility(control, 1, k=1, cb=0, l=0) # Unlock and keyable
 
@@ -705,7 +646,7 @@ def set_curve_visibility(curve):
     '''
     Set curve visibility nonkeyable, attributes nonkeyable.
     '''
-    set_transform_visibility(curve, k=0, cb=0, l=1) # Lock and hide
+    set_transform_visibility(curve, k=0, cb=0, l=1) # Lock and hide transforms
     set_visibility(curve, 1, k=1, cb=0, l=0) # Unlock and keyable
 
 def set_group_visibility(group):

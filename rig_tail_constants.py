@@ -99,8 +99,7 @@ RIG_SYSTEMS_GRP = 'rig_systems{TAG}'
 LOCATORS_GRP = 'locators{TAG}'
 IKFK = '{rigname}{TAG}_ikfk'
 IKFK_COND = '{rigname}_ikfk{TAG}_condition'
-SCALE_MULT = '{rigname}_scale{TAG}{_NN}_multiplyDivide'
-SCALE_COND = '{rigname}_scale{TAG}{_NN}_condition'
+SCALE_MULT = '{TYPE}{rigname}_scale{TAG}{_NN}_multiplyDivide'
 
 # Attribute Template: (longName, niceName, enumName, dv)
 # Switch

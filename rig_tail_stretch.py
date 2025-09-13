@@ -28,21 +28,16 @@ def build_squash_stretch(rigname, curve, joints, typ):
         curve (str): Name of curve driving joint chain
         joints (str list): List of joint names
         typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
-
-    Return
-        scale_crv (str): Name of scale curve info node for length, None if failed
     '''
     logger.info(f"Build squash and stretch on '{typ}{rigname}'")
     basectrl = fstr(rigname, BASECTRL)
 
     if typ == TYPE_FK:
-        scale_crv, orig_crvinfo, scale_crvinfo = set_curveinfo_stretch(
-                rigname, curve, typ)
+        scale_crvinfo = set_curveinfo_stretch(rigname, curve, typ)
     elif typ == TYPE_IK:
-        scale_crv, orig_crvinfo, scale_crvinfo = set_curveinfo_stretch(
-                rigname, curve, typ)
+        scale_crvinfo = set_curveinfo_stretch(rigname, curve, typ)
     else:
-        logger.error('Invalid typ {typ}. Choose TYPE_FK or TYPE_IK.')
+        logger.error(f"Invalid type '{typ}'. Choose TYPE_FK or TYPE_IK.")
         return None
 
     if not scale_crvinfo:
@@ -61,10 +56,8 @@ def build_squash_stretch(rigname, curve, joints, typ):
     add_attribute_squash_stretch(basectrl, stretch_blend, squash_pma, squash_vol)
 
     # Connect control to world scale
-    scale_grp, scale_mult_ik, scale_mult_fk = stretchy_world_scale_mod(
+    scale_grp, scale_mult, scale_mult_fk = stretchy_world_scale_mod(
             rigname, basectrl, squash_pma, typ)
-
-    return scale_crv
 
 def setup_joint_stretch(rigname, joints, curvelen, typ):
     '''
@@ -226,20 +219,19 @@ def setup_joint_squash(rigname, joints, curvelen, stretch_mult, typ):
     # Apply squash to joint scales, Only scaleY scaleZ
     squash_mult_nodes = list()
     for i, jnt in enumerate(joints):
-        try: # Get original scale values
-            break_connection(f'{jnt}.scaleY')
-            break_connection(f'{jnt}.scaleZ')
-            current_scale = cmds.getAttr(f'{jnt}.scale')[0]
-        except:
-            current_scale = (1.0, 1.0, 1.0)
+        # Get original scale values
+        orig_scale = cmds.getAttr(f'{jnt}.scale')[0]
+        logger.info(f"Joint '{jnt}' orig_scale {orig_scale}")
+        break_connection(f'{jnt}.scaleY')
+        break_connection(f'{jnt}.scaleZ')
 
         # Create multiplier to maintain original scale while applying squash
         scale_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
         cmds.createNode('multiplyDivide', n=scale_mult, s=1, ss=1)
         cmds.setAttr(f'{scale_mult}.operation', 1)  # multiply
         # Store original Y,Z scale values
-        cmds.setAttr(f'{scale_mult}.input2Y', current_scale[1])
-        cmds.setAttr(f'{scale_mult}.input2Z', current_scale[2])
+        cmds.setAttr(f'{scale_mult}.input2Y', orig_scale[1])
+        cmds.setAttr(f'{scale_mult}.input2Z', orig_scale[2])
         # Connect squash to Y,Z
         cmds.connectAttr(f'{squash_blend}.output', f'{scale_mult}.input1Y', f=1)
         cmds.connectAttr(f'{squash_blend}.output', f'{scale_mult}.input1Z', f=1)
@@ -280,16 +272,6 @@ def joint_squash_scale(rigname, joints, typ, squash_blend=None, force=True):
     '''
     jnt_scales = list()
     for jnt in joints:
-        try:
-            break_connection(f"{jnt}.scaleY")
-            break_connection(f"{jnt}.scaleZ")
-            # Get original scale values
-            current_scale = cmds.getAttr(f"{jnt}.scale")[0]
-            jnt_scales.append(current_scale)
-        except Exception as e:
-            logger.warning(f"Could not get scale for {jnt}: {e}, using (1,1,1)")
-            jnt_scales.append((1.0, 1.0, 1.0))
-
         if not force and all(scale==(1,1,1) for scale in jnt_scales):
             # No need to maintain, return empty list but still connect directly
             if squash_blend:
@@ -337,7 +319,7 @@ def add_attribute_squash_stretch(control, stretch_blend, squash_pma, squash_vol)
     add_attribute_enum(control, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
     # Add stretch attribute (0 = no stretch, 10 = full stretch)
     if not cmds.attributeQuery('stretch', n=control, ex=1):
-        cmds.addAttr(control, ln='stretch', at='float', k=1, dv=10, min=0, max=10)
+        cmds.addAttr(control, ln='stretch', at='float', k=1, dv=0, min=-10, max=10)
     # Add squash attribute (-10 to 10, 0 = no change, negative = contract, positive = expand)
     if not cmds.attributeQuery('squash', n=control, ex=1):
         cmds.addAttr(control, ln='squash', at='float', k=1, dv=0, min=-10, max=10)
@@ -345,12 +327,11 @@ def add_attribute_squash_stretch(control, stretch_blend, squash_pma, squash_vol)
     if not cmds.attributeQuery('preserveVolume', n=control, ex=1):
             cmds.addAttr(control, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
 
-    # Stretch range remapping
-    # Range: 0 to 10 -> multiplier 0.0 to 1.0
+    # Stretch range remapping (positive = lengthen, negative = contract)
     stretch_remap = f'{control}_stretch_remap_multiplyDivide'
     cmds.createNode('multiplyDivide', n=stretch_remap, s=1, ss=1)
     cmds.setAttr(f'{stretch_remap}.operation', 1) # multiply
-    cmds.setAttr(f'{stretch_remap}.input2X', 0.1) # scale factor
+    cmds.setAttr(f'{stretch_remap}.input2X', -0.5) # scale factor
     cmds.connectAttr(f'{control}.stretch', f'{stretch_remap}.input1X', f=1)
     # Output f'{stretch_remap}.outputX'
 
@@ -358,25 +339,15 @@ def add_attribute_squash_stretch(control, stretch_blend, squash_pma, squash_vol)
     cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_blend}.attributesBlender', f=1)
 
     # Squash range remapping (positive = expand, negative = contract)
-    # Formula: multiplier = 1.0 + (value * 0.1)
-    # Range: -10 to 10 -> multiplier 0.0 to 2.0
     squash_remap = f'{control}_squash_remap_multiplyDivide'
     cmds.createNode('multiplyDivide', n=squash_remap, s=1, ss=1)
     cmds.setAttr(f'{squash_remap}.operation', 1) # multiply
-    cmds.setAttr(f'{squash_remap}.input2X', 0.1) # scale factor
+    cmds.setAttr(f'{squash_remap}.input2X', 0.01) # scale factor
     cmds.connectAttr(f'{control}.squash', f'{squash_remap}.input1X', f=1)
     # Output f'{squash_remap}.outputX'
 
-    # Add 1.0 offset to center multiplier around 1.0
-    squash_offset = f'{control}_squash_offset_plusMinusAverage'
-    cmds.createNode('plusMinusAverage', n=squash_offset, s=1, ss=1)
-    cmds.setAttr(f'{squash_offset}.operation', 1)  # sum
-    cmds.setAttr(f'{squash_offset}.input1D[0]', 1.0) # base multiplier
-    cmds.connectAttr(f'{squash_remap}.outputX', f'{squash_offset}.input1D[1]', f=1)
-    # Output f'{squash_offset}.output1D'
-
-    # Connect to user squash node (created in setup_joint_squash)
-    cmds.connectAttr(f'{squash_offset}.output1D', f'{squash_pma}.input1D[1]', f=1)
+    # Connect user squash to pma
+    cmds.connectAttr(f'{squash_remap}.outputX', f'{squash_pma}.input1D[1]', f=1)
 
     # Connect volume preservation toggle
     cmds.connectAttr(f'{control}.preserveVolume', f'{squash_vol}.attributesBlender', f=1)
@@ -399,33 +370,50 @@ def stretchy_world_scale_mod(rigname, control, squash_pma, typ):
         scale_constraint (str): scaleConstraint on scale group
     '''
     scale_grp = fstr(rigname, SCALE_GRP)
-    set_transform_visibility(scale_grp, k=0, cb=1, l=0) # Show channel box
+    set_transform_visibility(scale_grp, k=0, cb=1, l=0)
 
-    # Create scale constraint
-    constr_scale_grp = get_constraint(scale_grp, typ='scaleConstraint')
-    if not constr_scale_grp: # Constrain scale group
+    # Create a separate reference object that only tracks the control's scale
+    # This avoids feedback from the joint scaling affecting the measurement
+    scale_ref = f'{typ}{rigname}_scale_reference'
+    if not cmds.objExists(scale_ref):
+        scale_ref = cmds.createNode('transform', n=scale_ref)
+        # Parent to a neutral location to avoid inheriting transforms
+        if cmds.objExists(scale_grp):
+            parent_to(scale_ref, cmds.listRelatives(scale_grp, p=1)[0] or None)
+
+    # Constrain reference to control (not scale_grp to avoid feedback)
+    constr_scale_ref = get_constraint(scale_ref, typ='scaleConstraint')
+    if not constr_scale_ref:
+        constr_scale_ref = cmds.scaleConstraint(control, scale_ref, mo=1)[0]
+
+    # Also maintain the original scale group constraint for other purposes
+    constr_scale_grp = get_constraint(scale_grp, typ='scaleConstraint')  
+    if not constr_scale_grp:
         constr_scale_grp = cmds.scaleConstraint(control, scale_grp, mo=1)[0]
 
-    # (multiplyDivide) scale_mult - World scale compensation
+    # Use the reference object for world scale calculation (avoids feedback)
     scale_mult = f'{typ}{rigname}_world_scale_multiplyDivide'
-    cmds.createNode('multiplyDivide', n=scale_mult, s=1, ss=1)
-    cmds.setAttr(f'{scale_mult}.operation', 1)  # multiply
-    # Square scale value for volume compensation: scale^2 affects cross-sectional area
-    cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_mult}.input1X', f=1)
-    cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_mult}.input2X', f=1)
+    if not cmds.objExists(scale_mult):
+        cmds.createNode('multiplyDivide', n=scale_mult, s=1, ss=1)
+        cmds.setAttr(f'{scale_mult}.operation', 1)  # multiply
+        # Square scale value for volume compensation
+        cmds.connectAttr(f'{scale_ref}.scaleX', f'{scale_mult}.input1X', f=1)
+        cmds.connectAttr(f'{scale_ref}.scaleX', f'{scale_mult}.input2X', f=1)
 
-    # (multiplyDivide) squash_div - Divide squash multiplier
+    # Divide squash multiplier by world scale squared
     squash_div = f'{typ}{rigname}_squash_world_multiplyDivide'
-    cmds.createNode('multiplyDivide', n=squash_div, s=1, ss=1)
-    cmds.setAttr(f'{squash_div}.operation', 2)  # divide
-    cmds.connectAttr(f'{squash_pma}.output1D', f'{squash_div}.input1X', f=1)
-    cmds.connectAttr(f'{scale_mult}.outputX', f'{squash_div}.input2X', f=1)
+    if not cmds.objExists(squash_div):
+        cmds.createNode('multiplyDivide', n=squash_div, s=1, ss=1)
+        cmds.setAttr(f'{squash_div}.operation', 2)  # divide
+        cmds.connectAttr(f'{squash_pma}.output1D', f'{squash_div}.input1X', f=1)
+        cmds.connectAttr(f'{scale_mult}.outputX', f'{squash_div}.input2X', f=1)
 
-    # Connect outputs
-    connections = cmds.listConnections(f'{squash_pma}.output1D', s=0, p=1) or []
-    for dst in connections:
-        cmds.disconnectAttr(f'{squash_pma}.output1D', dst)
-        cmds.connectAttr(f'{squash_div}.outputX', dst, f=1)
+        # Redirect connections from squash_pma to squash_div
+        connections = cmds.listConnections(f'{squash_pma}.output1D', s=0, p=1) or []
+        for dst in connections:
+            if dst != f'{squash_div}.input1X':  # Don't disconnect our own input
+                cmds.disconnectAttr(f'{squash_pma}.output1D', dst)
+                cmds.connectAttr(f'{squash_div}.outputX', dst, f=1)
 
     return scale_grp, scale_mult, constr_scale_grp
 
@@ -436,10 +424,8 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     '''
     Set up squash and stretch curve measurement system.
 
-    Create measurement for stretch/squash:
-    - Create curveInfo for original curve length reference
-    - Create a scale curve that represents the deformable portion
-    - Length measurement nodes for stretch calculation
+    - FK: Measure the skinned curve
+    - IK: Measure the solver curve (used by ikHandle)
 
     Arguments
         curve (str): Name of curve
@@ -453,49 +439,27 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     '''
     if not cmds.objExists(curve): # Ensure curve exists
         logger.error(f"Curve '{curve}' does not exist")
-    # Create original curveInfo for total length reference
-    orig_curveinfo = create_curveinfo(rigname, curve, typ)
+    if typ == TYPE_IK:
+        curve = fstr(rigname, CURVE, typ, TAG='_spline')
 
-    # Get curve information
-    num_cv, spans, degree = get_num_cv(curve)
-    srt_cv = 0
-    end_cv = num_cv-1
-
-    # Create scale curve to measure the deformed length
-    scale_crv = create_scale_curve(rigname, curve, srt_cv, end_cv, typ, num_cv, spans)
-    if not scale_crv:
-        logger.warning('Scale curve creation failed, using fallback')
-        return None, orig_curveinfo, fallback_curve_length(rigname, typ)
-
-    # Create curveInfo for the segment to track deformed curve length
+    # Create curveInfo on deforming curve (driver curve) for stretchy measurement
     scale_crvinfo = f"{typ}{rigname}_scale_curveInfo"
     cmds.createNode('curveInfo', n=scale_crvinfo, s=1, ss=1)
-    # Connect original curve to measure its deformed length
+
+    # Connect deforming curve to measure its length
     curve_shape = cmds.listRelatives(curve, s=1, ni=1)[0]
     cmds.connectAttr(f"{curve_shape}.worldSpace[0]", f"{scale_crvinfo}.inputCurve", f=1)
 
-    # Store initial length from scale curve for reference
-    scale_shape = cmds.listRelatives(scale_crv, s=1, ni=1)[0]
-    tmp_crvinfo = cmds.createNode('curveInfo')
-    cmds.connectAttr(f"{scale_shape}.worldSpace[0]", f"{tmp_crvinfo}.inputCurve")
-
-    # Validate initial length measurement
-    cmds.dgeval(f'{tmp_crvinfo}.arcLength')
-    init_length = cmds.getAttr(f"{tmp_crvinfo}.arcLength")
-    cmds.delete(tmp_crvinfo)
-    if init_length <= 0:
-        logger.warning(f"Initial length of scale curve is invalid {init_length}")
-
-    # Store initial length as custom attribute on curveInfo node
-    cmds.addAttr(scale_crvinfo, ln='initial_length', nn='Init Length', at='float', dv=init_length)
-
-    # Validate current length measurement
+    # Get initial length
     cmds.dgeval(f'{scale_crvinfo}.arcLength')
-    current_length = cmds.getAttr(f'{scale_crvinfo}.arcLength')
-    if current_length <= 0:
-        logger.warning(f"Current length of scale curve is invalid {current_length}")
+    init_length = cmds.getAttr(f'{scale_crvinfo}.arcLength')
+    if init_length <= 0:
+        logger.warning(f"Initial length of curve '{curve}' is invalid {init_length:.3f}")
+    # Store as custom attribute
+    cmds.addAttr(scale_crvinfo, ln='initial_length', at='float', dv=init_length)
 
-    return scale_crv, orig_curveinfo, scale_crvinfo
+    logger.info(f"Measuring curve '{curve}' with initial length {init_length:.3f}")
+    return scale_crvinfo
 
 def create_scale_curve(rigname, curve, srt_cv, end_cv, typ, num_cv, spans):
     '''
