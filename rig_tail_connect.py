@@ -122,9 +122,14 @@ def connect_basectrl(rigname, fk, ik, stretchy):
     # Move basectrl under cog_ctrl
     parent_to(basectrl_grp, cog_ctrl)
 
-    if stretchy:
-        # Add Twist, Offset, Roll, Scale attributes
-        add_attribute_basectrl(rigname)
+    basectrl = fstr(rigname, BASECTRL)
+    if ik: # Add Twist, Offset, Roll attributes
+        add_attribute_basectrl_ik(rigname, basectrl)
+    if stretchy: # Add Scale attributes
+        if fk:
+            add_attribute_basectrl_scale(rigname, basectrl, TYPE_FK)
+        if ik:
+            add_attribute_basectrl_scale(rigname, basectrl, TYPE_IK)
 
     # Cleanup visibility condition
     basectrl_name = basectrl.rsplit(CTRL, 1)[0]
@@ -191,7 +196,7 @@ def connect_fk(rigname, fk, ik, stretchy):
         cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{fkroot_grp}.visibility", f=1)
         cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{fkjnt_grp}.visibility", f=1)
 
-    if stretchy: # Add Squash, Stretch, Twist, Offset, Roll attributes
+    if ik and stretchy: # Add Squash, Stretch, Twist, Offset, Roll attributes
         add_attribute_control_proxy(rigname, TYPE_FK)
 
     logger.info(f"DONE connecting FK '{rigname}'")
@@ -302,68 +307,66 @@ def connect_spline_ik(rigname, ik_controls, ik_ctrlgrps):
 
 # ADD ATTRIBUTES =======================================================
 
-def add_attribute_basectrl(rigname):
+def add_attribute_basectrl_ik(rigname, control):
     '''
-    Add twist, offset, roll, scale attributes to basectrl
+    Add twist, offset, roll, IKFK attributes
     '''
     spline_handle = fstr(rigname, SPLINE_HANDLE, TYPE_IK)
     if not cmds.objExists(spline_handle):
         logger.error(f"Could not find spline handle {spline_handle}")
-    basectrl = fstr(rigname, BASECTRL)
-    add_attribute_enum(basectrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
-    if not cmds.attributeQuery('twist', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='twist', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('roll', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='roll', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('offset', n=basectrl, ex=1):
-        cmds.addAttr(basectrl, ln='offset', at='float', k=1, dv=0)
-    cmds.connectAttr(f"{basectrl}.twist", f"{spline_handle}.twist", f=1)
-    cmds.connectAttr(f"{basectrl}.roll", f"{spline_handle}.roll", f=1)
-    cmds.connectAttr(f"{basectrl}.offset", f"{spline_handle}.offset", f=1)
-    # Scale stretchy
-    add_attribute_basectrl_scale(rigname, basectrl)
+    add_attribute_enum(control, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
+    if not cmds.attributeQuery('twist', n=control, ex=1):
+        cmds.addAttr(control, ln='twist', at='float', k=1, dv=0)
+    if not cmds.attributeQuery('roll', n=control, ex=1):
+        cmds.addAttr(control, ln='roll', at='float', k=1, dv=0)
+    if not cmds.attributeQuery('offset', n=control, ex=1):
+        cmds.addAttr(control, ln='offset', at='float', k=1, dv=0)
+    cmds.connectAttr(f"{control}.twist", f"{spline_handle}.twist", f=1)
+    cmds.connectAttr(f"{control}.roll", f"{spline_handle}.roll", f=1)
+    cmds.connectAttr(f"{control}.offset", f"{spline_handle}.offset", f=1)
 
-def add_attribute_basectrl_scale(rigname, basectrl):
-    '''
-    Add jntScaleY and jntScaleZ attributes to basectrl
-    Connect to the scale nodes created by setup_joint_squash()
-    '''
+    # IKFK Switch
     cog_ctrl = fstr(rigname, COG_CTRL)
     ikfk_switch = fstr(rigname, IKFK)
-    # IKFK Divider
-    add_attribute_enum(basectrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
     # Proxy IKFK Switch attribute from Cog
-    add_attribute_enum(basectrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
+    add_attribute_enum(control, IKFK_SWITCH[0], IKFK_SWITCH[1],
                        pxy=f"{cog_ctrl}.{ikfk_switch}")
 
+def add_attribute_basectrl_scale(rigname, control, typ):
+    '''
+    Add jntScaleY and jntScaleZ attributes
+    Connect to squash scale nodes created by setup_joint_squash()
+    '''
     # Add Scale attributes
-    add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
-    for typ in [TYPE_FK, TYPE_IK]:
-        for i in range(len(cst.JOINTS_IK[rigname])):
-            # Squash node from setup_joint_squash()
-            squash_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
-            if not cmds.objExists(squash_mult):
-                logger.warning(f'Squash node {squash_mult} does not exist, skipping joint {i}')
-                continue
+    add_attribute_enum(control, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
+    if typ == TYPE_FK:
+        joints = cst.JOINTS_FK[rigname]
+    elif typ == TYPE_IK:
+        joints = cst.JOINTS_IK[rigname]
+    else:
+        logger.error(f"Invalid type '{typ}'. Choose TYPE_FK or TYPE_IK.")
 
-            # Create multiplier node for scale
-            scale_mult = fstr(rigname, SCALE_MULT, typ)
-            cmds.createNode('multiplyDivide', n=scale_mult, s=1, ss=1)
-            cmds.setAttr(f'{scale_mult}.operation', 1)  # multiply
+    for i in range(len(joints)):
+        # Joint scale node from setup_joint_squash()
+        jnt_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
+        if not cmds.objExists(jnt_mult):
+            logger.warning(f"'{jnt_mult}' does not exist, skipping joint {i}")
+            continue
 
-            # Add scale attributes to basectrl
-            if not cmds.attributeQuery(f'jntScaleY{i:02}', n=basectrl, ex=1):
-                cmds.addAttr(basectrl, ln=f'jntScaleY{i:02}', at='float', k=1, dv=1, min=-10, max=10)
-            if not cmds.attributeQuery(f'jntScaleZ{i:02}', n=basectrl, ex=1):
-                cmds.addAttr(basectrl, ln=f'jntScaleZ{i:02}', at='float', k=1, dv=1, min=-10, max=10)
+        # Add scale attributes to control
+        if not cmds.attributeQuery(f'jntScaleY{i:02}', n=control, ex=1):
+            cmds.addAttr(control, ln=f'jntScaleY{i:02}', at='float', k=1, dv=1, min=0.1, max=10)
+        if not cmds.attributeQuery(f'jntScaleZ{i:02}', n=control, ex=1):
+            cmds.addAttr(control, ln=f'jntScaleZ{i:02}', at='float', k=1, dv=1, min=0.1, max=10)
 
-            # Replace static input2Y/Z values with scale value
-            # The squash_mult node structure is:
-            # input1Y/Z <- squash_blend.output (dynamic squash effect)  
-            # input2Y/Z <- original scale values (static) <- Replace with custom scale
-            # outputY/Z -> joint/SDK scale
-            cmds.connectAttr(f'{basectrl}.jntScaleY{i:02}', f'{squash_mult}.input2Y', f=1)
-            cmds.connectAttr(f'{basectrl}.jntScaleZ{i:02}', f'{squash_mult}.input2Z', f=1)
+        # Replace static input2Y/Z values with scale value
+        # The jnt_mult node structure is:
+        # input1Y/Z <- squash_blend.output (dynamic squash effect)
+        # input2Y/Z <- original scale values (static) <- Replace with custom scale
+        # outputY/Z -> joint/SDK scale
+        cmds.connectAttr(f'{control}.jntScaleY{i:02}', f'{jnt_mult}.input2Y', f=1)
+        cmds.connectAttr(f'{control}.jntScaleZ{i:02}', f'{jnt_mult}.input2Z', f=1)
 
 def add_attribute_control_proxy(rigname, typ):
     '''
@@ -393,7 +396,7 @@ def constrain_skeleton(rigname, fk, ik):
     Constrain FK IK skeleton to BN skeleton
     '''
     logger.info('Setting up Skeleton Constraints..')
-    # CleanUp old constraints
+    # Cleanup old constraints
     for bn_jnt in cst.JOINTS_BN[rigname]:
         constraints = cmds.listConnections(bn_jnt, type='constraint') or []
         for constr in constraints:
@@ -547,8 +550,8 @@ driving the joint chain.
     cluster_handle_bse = fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='_base')
     cluster_handle_end = fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='_end')
     # Match upvec control groups to base/end cluster handles
-    cmds.matchTransform(upvec_bsegrp, cluster_handle_bse, pos=1, rot=1, scl=0, piv=0)
-    cmds.matchTransform(upvec_endgrp, cluster_handle_end, pos=1, rot=1, scl=0, piv=0)
+    match_transform(upvec_bsegrp, cluster_handle_bse, pos=1, rot=1, scl=0, moc=0)
+    match_transform(upvec_endgrp, cluster_handle_end, pos=1, rot=1, scl=0, moc=0)
     # base/end cluster handles are constrained to upvec controls
     # These help drive twist and orientation for the spline IK
     cmds.parentConstraint(upvec_bsectrl, cluster_handle_bse, mo=1)

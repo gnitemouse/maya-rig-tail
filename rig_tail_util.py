@@ -254,7 +254,10 @@ def bind_skincluster(joints, node, name):
         toSelectedBones: True]
     '''
     logger.info(f"Bind jnts to '{node}' - skinCluster '{name}'")
-    return cmds.skinCluster(joints, node, n=name, nw=1, bm=0, sm=0, mi=4, tsb=True)
+    try: # Bind method - surface heat map diffusion
+        return cmds.skinCluster(joints, node, n=name, nw=1, bm=2, sm=0, mi=4, tsb=True)
+    except: # Bind method - Closest distance between joint and a point of the geometry
+        return cmds.skinCluster(joints, node, n=name, nw=1, bm=0, sm=0, mi=4, tsb=True)
 
 def unbind_skincluster(node, typ='crv'):
     '''
@@ -314,7 +317,7 @@ def has_non_default_locked_attributes(node, attrcheck=None):
     for attribute in attrcheck:
         default_value = 1 if attribute == "scale" else 0
         for axis in 'XYZ':
-            if cmds.attributeQuery(attribute + axis, n=node, ex=1):
+            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
                 plug = f"{node}.{attribute}{axis}"
                 current_value = cmds.getAttr(plug)
                 if cmds.getAttr(plug, lock=True) and current_value != default_value:
@@ -366,7 +369,7 @@ def reset_transforms(node, unlock=True):
     for attribute in ['translate', 'rotate', 'scale', 'shear', 'jointOrient']:
         default_value = 1 if attribute == "scale" else 0
         for axis in 'XYZ':
-            if cmds.attributeQuery(attribute + axis, n=node, ex=1):
+            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
                 plug = f"{node}.{attribute}{axis}"
                 if unlock:
                     break_connection(plug)
@@ -385,28 +388,42 @@ def reset_opm(node, unlock=True):
     if not cmds.getAttr(opm_attr, lock=True):
         cmds.setAttr(opm_attr, *identity_mtx, type='matrix')
 
-def match_transform(source, target, moc=True, unlock=True):
+def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, unlock=True):
     '''
     Match transforms from source to target.
-    By default matches position, rotation, and scaling.
+    Matches arguments set to True among pos(position), rot(rotation), scl(scale).
+    Otherwise matches all pos,rot,scl if left as False by default.
     If moc=True, keep children in their positions (maintain offset for children).
     If unlock=True, unlock attributes and break input connections.
     '''
+    # Apply match transform - Helper function
+    def apply_transform(source, target, pos, rot, scl):
+        if not (pos or rot or scl):
+            cmds.matchTransform(source, target)
+        else:
+            cmds.matchTransform(source, target, pos=pos, rot=rot, scl=scl)
+
     logger.debug(f"'{source}'->'{target}'")
     if unlock: # Unlock source
         disconnect_all(source, source=True)
     if moc:
         src_children = cmds.listRelatives(source, typ='transform') or []
-        # Create temporary group to keep children
+        # Create temporary group to preserve children during transform
         tmp_grp = cmds.group(em=True, n=f"{source}_tmp")
-        cmds.matchTransform(tmp_grp, target)
+        # Match transform to tmp group
+        apply_transform(tmp_grp, target, pos, rot, scl)
+
+        # Parent children to tmp group to maintain their offsets
         for child in src_children:
-            if unlock:
-                if not 'Constraint' in child:
-                    disconnect_all(child, source=True)
+            if unlock and 'Constraint' not in child:
+                disconnect_all(child, source=True)
             cmds.parent(child, tmp_grp, a=1) # Absolute parent
-        cmds.matchTransform(source, target)
+
+        # Match transform to tmp group
+        apply_transform(tmp_grp, target, pos, rot, scl)
         opm(source)
+
+        # Re-parent children back to original source
         for child in src_children:
             cmds.parent(child, source, a=1)
             if cmds.objectType(child, i='joint'):
@@ -416,8 +433,9 @@ def match_transform(source, target, moc=True, unlock=True):
                     cmds.ungroup(transf)
             opm(child)
         cmds.delete(tmp_grp)
-    else:
-        cmds.matchTransform(source, target)
+
+    else: # Apply transform directly
+        apply_transform(source, target, pos, rot, scl)
         opm(source)
 
 
@@ -632,7 +650,7 @@ def set_transform_visibility(node, k=1, cb=1, l=0):
     '''
     for attribute in ['translate', 'rotate', 'scale']:
         for axis in 'XYZ':
-            if cmds.attributeQuery(attribute + axis, n=node, ex=1):
+            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
                 cmds.setAttr(f"{node}.{attribute}{axis}", k=k, cb=cb, l=l)
 
 def set_control_visibility(fk, ik):
@@ -743,7 +761,7 @@ def match_orient(source, target):
     # Create temporary group to keep shapes
     tmp_grp = cmds.group(em=True, n=f"{source}_tmp")
     # Match tmp_grp to target
-    match_transform(tmp_grp, target)
+    match_transform(tmp_grp, target, moc=True)
     # Move shapes to tmp group
     shapes = cmds.listRelatives(source, s=True)
     for shp in shapes:
@@ -752,7 +770,7 @@ def match_orient(source, target):
         transf = cmds.listRelatives(shp, p=True, typ='transform')[0]
         cmds.makeIdentity(transf, apply=1, t=1, r=1, s=1, jo=1)
     # Match source to target
-    match_transform(source, target)
+    match_transform(source, target, moc=True)
     # Move shapes back to source
     for shp in shapes:
         cmds.parent(shp, source, r=True, s=True)
@@ -776,7 +794,7 @@ def reset_joint_rotations(joints):
             if 'transform' in transf:
                 cmds.ungroup(transf)
 
-def reset_fk_joints(rigname, joints, match_type=TYPE_BN):
+def reset_fk_joints(rigname, joints, typ=TYPE_BN):
     '''
     Match FK joints to BN joints.
     Make joint rotations zero.
@@ -784,7 +802,7 @@ def reset_fk_joints(rigname, joints, match_type=TYPE_BN):
     logger.info('Reset FK joints')
     for fk_jnt in joints:
         NN = get_index_from_name(fk_jnt)
-        jnt = fstr(rigname, JOINT, match_type, NN)
+        jnt = fstr(rigname, JOINT, typ, NN)
         logger.debug(f"{fk_jnt} -> {jnt}")
         disconnect_all(fk_jnt, source=True)
         fk_children = cmds.listRelatives(fk_jnt, typ='transform') or []

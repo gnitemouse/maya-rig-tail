@@ -16,6 +16,7 @@ RIGPARTS = ['R_tail3']
 
 # Joints Dict: rigname -> joint list
 JOINTS_FK = dict()
+JOINTS_FK_SCALE = dict()
 JOINTS_IK = dict()
 JOINTS_BN = dict()
 
@@ -51,25 +52,25 @@ COND = '_condition'
 BASECTRL_GRP = '{TYPE}{rigname}_base{TAG}{CTRL}{GRP}'
 BASECTRL = '{TYPE}{rigname}_base{TAG}{CTRL}'
 CTRLROOT_GRP = '{TYPE}{rigname}_root{TAG}{GRP}'
-CTRL_GRP = '{TYPE}{rigname}{TAG}{_NN}{CTRL}{GRP}'
-CONTROL = '{TYPE}{rigname}{TAG}{_NN}{CTRL}'
-GROUP = '{TYPE}{rigname}{TAG}{_NN}{GRP}'
-JOINT = '{TYPE}{rigname}{TAG}{_NN}{JNT}'
-SDK_GRP = '{TYPE}{rigname}{TAG}{_NN}{_nn}{SDK}'
-SDK_CTRL = '{TYPE}{rigname}{TAG}{_NN}{CTRL}{SDK}'
+CTRL_GRP = '{TYPE}{rigname}{_NN}{TAG}{CTRL}{GRP}'
+CONTROL = '{TYPE}{rigname}{_NN}{TAG}{CTRL}'
+GROUP = '{TYPE}{rigname}{_NN}{TAG}{GRP}'
+JOINT = '{TYPE}{rigname}{_NN}{TAG}{JNT}'
+SDK_GRP = '{TYPE}{rigname}{_NN}{TAG}{_nn}{SDK}'
+SDK_CTRL = '{TYPE}{rigname}{_NN}{TAG}{CTRL}{SDK}'
 
 # Naming Template: curve, clusters
 CURVE = '{TYPE}{rigname}{TAG}{CRV}'
 CURVE_SCALE = '{TYPE}{rigname}_scale{TAG}{CRV}'
 CURVEINFO = '{TYPE}{rigname}{TAG}{CRVI}'
-CLUSTER_GRP = '{TYPE}{rigname}{TAG}{_NN}{CSR}{GRP}'
-CLUSTER = '{TYPE}{rigname}{TAG}{_NN}{CSR}'
-CLUSTER_HANDLE = '{TYPE}{rigname}{TAG}{_NN}{CSR}{HDL}'
+CLUSTER_GRP = '{TYPE}{rigname}{_NN}{TAG}{CSR}{GRP}'
+CLUSTER = '{TYPE}{rigname}{_NN}{TAG}{CSR}'
+CLUSTER_HANDLE = '{TYPE}{rigname}{_NN}{TAG}{CSR}{HDL}'
 # Upvec
 UPV_CTRL = '{TYPE}{rigname}_upvec{TAG}{CTRL}'
 UPV_CTRLGRP = '{TYPE}{rigname}_upvec{TAG}{CTRL}{GRP}'
-CLUSTER_UPV = '{TYPE}{rigname}_upvec{TAG}{_NN}{CSR}'
-CLUSTER_UPV_HANDLE = '{TYPE}{rigname}_upvec{TAG}{_NN}{CSR}{HDL}'
+CLUSTER_UPV = '{TYPE}{rigname}_upvec{_NN}{TAG}{CSR}'
+CLUSTER_UPV_HANDLE = '{TYPE}{rigname}_upvec{_NN}{TAG}{CSR}{HDL}'
 
 # Naming Template: spline
 SPLINE_GRP = '{TYPE}{rigname}_spline{TAG}{GRP}'
@@ -77,8 +78,8 @@ SPLINE_HANDLE = '{TYPE}{rigname}_spline{TAG}{HDL}'
 SPLINE_EFFECTOR = '{TYPE}{rigname}_spline{TAG}{EFF}'
 SCALE_GRP = '{TYPE}{rigname}_scale{TAG}{GRP}'
 # Spline Controls
-SPLINE_IK_CTRL = '{TYPE}{rigname}_ik{TAG}{_NN}{CTRL}'
-SPLINE_FLOAT_CTRL = '{TYPE}{rigname}_float{TAG}{_NN}{CTRL}'
+SPLINE_IK_CTRL = '{TYPE}{rigname}_ik{_NN}{TAG}{CTRL}'
+SPLINE_FLOAT_CTRL = '{TYPE}{rigname}_float{_NN}{TAG}{CTRL}'
 SPLINE_BOT = '{TYPE}{rigname}_spline_bot{CTRL}'
 SPLINE_BOT_SML = '{TYPE}{rigname}_spline_bot_sml{CTRL}'
 SPLINE_MID_ROT = '{TYPE}{rigname}_spline_mid_rot{CTRL}'
@@ -99,7 +100,6 @@ RIG_SYSTEMS_GRP = 'rig_systems{TAG}'
 LOCATORS_GRP = 'locators{TAG}'
 IKFK = '{rigname}{TAG}_ikfk'
 IKFK_COND = '{rigname}_ikfk{TAG}_condition'
-SCALE_MULT = '{TYPE}{rigname}_scale{TAG}{_NN}_multiplyDivide'
 
 # Attribute Template: (longName, niceName, enumName, dv)
 # Switch

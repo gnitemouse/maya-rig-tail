@@ -38,15 +38,15 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
 
     if not start_jnt: # Assume type is FK joint if start_jnt not provided
         start_jnt = rt_util.fstr(rigname, JOINT, TYPE_FK, NN=0)
-        jnt_type = TYPE_FK
+        typ = TYPE_FK
         logger.info(f"start_jnt not provided. Assume FK start_jnt is '{start_jnt}'")
     else: # Get TYPE
         if TYPE_FK in start_jnt:
-            jnt_type = TYPE_FK
+            typ = TYPE_FK
         elif TYPE_IK in start_jnt:
-            jnt_type = TYPE_IK
+            typ = TYPE_IK
         elif TYPE_BN in start_jnt:
-            jnt_type = TYPE_BN
+            typ = TYPE_BN
         else:
             logger.error(f"Could not determine TYPE of start_jnt '{start_jnt}'.\n"\
                          "Make sure that Type Labels are set correctly.")
@@ -65,12 +65,6 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
     logger.debug(f"JOINTS_FK[{rigname}] = {cst.JOINTS_FK[rigname]}")
     logger.debug(f"JOINTS_IK[{rigname}] = {cst.JOINTS_IK[rigname]}")
     logger.debug(f"JOINTS_BN[{rigname}] = {cst.JOINTS_BN[rigname]}")
-
-def rename(source, target):
-    if cmds.objExists(source):
-        cmds.rename(source, target)
-    else:
-        logger.warning(f"{source} -> {target}. source '{source}' does not exist.")
 
 def setup_rig_components(fk, ik):
     '''
@@ -132,6 +126,13 @@ def setup_rig_components(fk, ik):
 
 
 # GENERAL ==============================================================
+
+def rename(source, target):
+    if cmds.objExists(source):
+        cmds.rename(source, target)
+        logger.info(f"Renamed '{source}' -> '{target}'")
+    else:
+        logger.warning(f"Could not rename '{source}' -> '{target}'. source '{source}' does not exist.")
 
 def rename_components():
     '''
@@ -264,14 +265,14 @@ def is_control(node):
 
 # JOINTS ===============================================================
 
-def rename_joints(rigname, joints, jnt_type):
-    logger.debug(f"rigname:'{rigname}' joints:'{jnt_type}'")
+def rename_joints(rigname, joints, typ, TAG=''):
+    logger.debug(f"rigname:'{rigname}' joints:'{typ}'")
     jnts = list()
     for jnt in joints:
         NN = rt_util.get_index_from_name(jnt)
-        jnt_name = rt_util.fstr(rigname, JOINT, jnt_type, NN)
-        logger.debug(f"jnt:'{jnt}' jnt_name:'{jnt_name}' jnt_type:'{jnt_type}'")
-        if jnt_type in jnt: # joint has same TYPE
+        jnt_name = rt_util.fstr(rigname, JOINT, typ, NN)
+        logger.debug(f"jnt:'{jnt}' jnt_name:'{jnt_name}' typ:'{typ}'")
+        if typ in jnt: # joint has same TYPE
             if jnt == jnt_name:
                 jnt = cmds.rename(jnt, jnt_name)
         else: # different TYPE
@@ -281,7 +282,6 @@ def rename_joints(rigname, joints, jnt_type):
             rt_util.parent_to(jnt_name, jnts[-1])
         jnts.append(jnt_name)
     return jnts
-
 
 def get_joint_hierarchy(jnt, end_jnt=None):
     '''

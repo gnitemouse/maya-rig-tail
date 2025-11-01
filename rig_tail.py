@@ -15,20 +15,21 @@ rt.main()
 
 By default,
 Assumes the following structure or naming convention:
-    controls                       (CONTROL_GRP)
-      - {rigname}_ctrl_grp         (BASECTRL_GRP)
-      -- {rigname}_base_ctrl       (BASECTRL)
-      --- FK_{rigname}_root_grp    (CTRLROOT_GRP)
-      ---- {rigname}_##_ctrl_grp   (CTRL_GRP)
-      ----- {rigname}_##_ctrl      (CTRL)
+    controls                         (CONTROL_GRP)
+      - {rigname}_ctrl_grp           (BASECTRL_GRP)
+      -- {rigname}_base_ctrl         (BASECTRL)
+      --- FK_{rigname}_root_grp      (CTRLROOT_GRP)
+      ---- {rigname}_##_ctrl_grp     (CTRL_GRP)
+      ----- {rigname}_##_ctrl        (CTRL)
       ---- etc.
-    FK_skeleton                    (fk_SKELETON_GRP)
-      - FK_{rigname}_grp           (fk_GRP)
-      -- FK_{rigname}_##_01_sdk    (first_SDK_GRP)
-      --- FK_{rigname}_##_02_sdk   ( ... SDK_GRP)
-      ---- FK_{rigname}_##_02_sdk  (last_SDK_GRP)
-      ----- FK_{rigname}_##_jnt    (JNT)
-      ------ etc.
+    FK_skeleton                      (fk_SKELETON_GRP)
+      - FK_{rigname}_grp             (fk_GRP)
+      -- FK_{rigname}_##_01_sdk      (first SDK_GRP)
+      --- FK_{rigname}_##_02_sdk     (second SDK_GRP)
+      ---- FK_{rigname}_##_03_sdk    (last SDK_GRP)
+      ----- FK_{rigname}_##_ctrl_sdk (control SDK_GRP)
+      ------ FK_{rigname}_##_jnt     (JNT num ##)
+      ------- etc.
 Naming convention can be changed under Naming Template in rig_tail_constants.
 Rig components {rigname}s can be changed under RIGPARTS in rig_tail_constants.
 
@@ -146,12 +147,12 @@ def rig_tail_ik(rigname, stretchy=True, typ=TYPE_IK):
     '''
     Create IK tail
 
-    Driver curve (driver_curve):
+    Driver curve (curve_ik):
     - Contains all CVs needed for cluster control (NUM_CTRL_IK + 2 upvec CVs)
     - Deformed by clusters attached to spline controls
     - Never used directly by ikHandle
 
-    Solver curve (solver_curve):
+    Solver curve (curve_ik_spline):
     - Minimal CVs for efficient IK calculation (typically 3-4 CVs)
     - Driven by pointOnCurveInfo nodes sampling from driver curve
     - Used by ikHandle for actual joint deformation
@@ -181,22 +182,25 @@ def rig_tail_ik(rigname, stretchy=True, typ=TYPE_IK):
     rt_utl.parent_to(scale_grp, rig_systems_grp)
 
     # Create driver curve with CVs for cluster control
-    driver_curve = rt_crv.create_curve(rigname, jnt_pos, typ) # Curve IK
+    curve_ik = rt_crv.create_curve(rigname, jnt_pos, typ) # Curve IK
 
     # Create solver curve used by ikHandle
-    solver_curve = rt_utl.fstr(rigname, CURVE, typ, TAG='_spline')
-    solver_curve = cmds.duplicate(driver_curve, n=solver_curve, rc=1)[0]
+    curve_ik_spline = rt_utl.fstr(rigname, CURVE, typ, TAG='_spline')
+    if cmds.objExists(curve_ik_spline): # Delete if existing
+        unbind_skincluster(curve_ik_spline, typ='crv')
+        remove(curve_ik_spline)
+    curve_ik_spline = cmds.duplicate(curve_ik, n=curve_ik_spline, rc=1)[0]
 
     # Create clusters on driver curve
-    clusters = rt_crv.create_clusters_on_curve(rigname, driver_curve, typ)
+    clusters = rt_crv.create_clusters_on_curve(rigname, curve_ik, typ)
 
     # Create spline IK handle, rebuilding the solver curve
     # spline_list (list): ikhandle object [ikhandle, effector, curve]
-    spline_list = rt_crv.create_spline_handle(rigname, joints, solver_curve, typ)
+    spline_list = rt_crv.create_spline_handle(rigname, joints, curve_ik_spline, typ)
 
     # Set up driver-to-solver connection using pointOnCurveInfo nodes
     # Allowing the cluster-deformed driver curve to control the solver curve
-    rt_crv.connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ)
+    rt_crv.connect_driver_to_solver_curve(rigname, curve_ik, curve_ik_spline, typ)
 
     # Build controls and control groups
     # ik_controls (dict): control type (ik, float, spline, upvec) -> list of controls
@@ -205,7 +209,7 @@ def rig_tail_ik(rigname, stretchy=True, typ=TYPE_IK):
 
     if stretchy:
         # Spline IK. Squash and Stretch
-        rt_str.build_squash_stretch(rigname, driver_curve, joints, typ)
+        rt_str.build_squash_stretch(rigname, curve_ik, joints, typ)
 
         # Get initial start and end vectors for advanced twist
         srt_vec = cmds.xform(joints[0], q=1, ws=1, m=1) [8:11]
@@ -219,7 +223,7 @@ def rig_tail_ik(rigname, stretchy=True, typ=TYPE_IK):
 # RUN: RIG TAIL ========================================================
 
 def rig_tail_test(rigname, start_jnt=None, end_jnt=None,
-                  root=None, fk=True, ik=True, stretchy=True):
+                  root=None, fk=True, ik=False, stretchy=True):
     '''
     Test rig_tail_fk on single FK joint chain.
     Example

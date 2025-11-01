@@ -16,6 +16,49 @@ logger = logger_setup(__name__)
 
 # CREATE CONTROLS ======================================================
 
+def create_basectrl(rigname, basejnt, up_axis=None):
+    cog_ctrl = fstr('', COG_CTRL)
+    basectrl_grp = fstr(rigname, BASECTRL_GRP)
+    basectrl = fstr(rigname, BASECTRL)
+    basectrl, basectrl_grp = create_control(basectrl, group=basectrl_grp,
+                                            match_to=basejnt, parent=cog_ctrl,
+                                            size=BASE_CTRL_SZ, nr=(1,0,0),
+                                            color='magenta', shape='circle',
+                                            overwrite=False)
+    opm(basectrl_grp)
+    if up_axis:
+        rot_offset = ROT_AXIS_DICT[up_axis]
+        cmds.setAttr(f"{basectrl_grp}.rotate", rot_offset[0], rot_offset[1], rot_offset[2])
+    return basectrl, basectrl_grp
+
+def create_circle_control(name, size, nr=(1,0,0), color='darkgrey'):
+    circle_ctrl = cmds.circle(n=name, nr=nr, r=size)[0]
+    rename_shapes(circle_ctrl, typ='ctrl')
+    set_control_color(circle_ctrl, color=color)
+    return circle_ctrl
+
+def create_sphere_control(name, size=1, color='darkgrey'):
+    sphere_ctrl = cmds.circle(n=name, nr=(1,0,0), r=size)[0]
+    circle_01 = cmds.circle(n=name, nr=(0,1,0), r=size)[0]
+    circle_02 = cmds.circle(n=name, nr=(0,0,1), r=size)[0]
+    shape_01 = cmds.listRelatives(circle_01, s=1)[0]
+    shape_02 = cmds.listRelatives(circle_02, s=1)[0]
+    cmds.parent(shape_01, sphere_ctrl, r=1, s=1)
+    cmds.parent(shape_02, sphere_ctrl, r=1, s=1)
+    cmds.delete(circle_01)
+    cmds.delete(circle_02)
+    rename_shapes(sphere_ctrl, typ='ctrl')
+    set_control_color(sphere_ctrl, color=color)
+    return sphere_ctrl
+
+def create_cube_control(name, size, color='darkgrey'):
+    cube_ctrl = cmds.curve(d=1, p=CUBE_CTRL_PTS, n=name)
+    rename_shapes(cube_ctrl, typ='ctrl')
+    set_control_color(cube_ctrl, color=color)
+    cmds.xform(cube_ctrl, s=(size,size,size))
+    cmds.makeIdentity(cube_ctrl, apply=1, t=1, r=1, s=1, jo=1)
+    return cube_ctrl
+
 def create_control(control, group=None, match_to=None, parent=None,
              size=1, nr=(1,0,0), color='darkcyan', shape=None, overwrite=True):
     logger.debug(f"{control}, {match_to}, {parent}, {size}, {nr}, {color}, {shape}")
@@ -88,49 +131,6 @@ def create_control_match_list(rigname, matchlist, template_ctrl=None, template_g
         controls.append(control)
         groups.append(group)
     return controls, groups
-
-def create_circle_control(name, size, nr=(1,0,0), color='darkgrey'):
-    circle_ctrl = cmds.circle(n=name, nr=nr, r=size)[0]
-    rename_shapes(circle_ctrl, typ='ctrl')
-    set_control_color(circle_ctrl, color=color)
-    return circle_ctrl
-
-def create_sphere_control(name, size=1, color='darkgrey'):
-    sphere_ctrl = cmds.circle(n=name, nr=(1,0,0), r=size)[0]
-    circle_01 = cmds.circle(n=name, nr=(0,1,0), r=size)[0]
-    circle_02 = cmds.circle(n=name, nr=(0,0,1), r=size)[0]
-    shape_01 = cmds.listRelatives(circle_01, s=1)[0]
-    shape_02 = cmds.listRelatives(circle_02, s=1)[0]
-    cmds.parent(shape_01, sphere_ctrl, r=1, s=1)
-    cmds.parent(shape_02, sphere_ctrl, r=1, s=1)
-    cmds.delete(circle_01)
-    cmds.delete(circle_02)
-    rename_shapes(sphere_ctrl, typ='ctrl')
-    set_control_color(sphere_ctrl, color=color)
-    return sphere_ctrl
-
-def create_cube_control(name, size, color='darkgrey'):
-    cube_ctrl = cmds.curve(d=1, p=CUBE_CTRL_PTS, n=name)
-    rename_shapes(cube_ctrl, typ='ctrl')
-    set_control_color(cube_ctrl, color=color)
-    cmds.xform(cube_ctrl, s=(size,size,size))
-    cmds.makeIdentity(cube_ctrl, apply=1, t=1, r=1, s=1, jo=1)
-    return cube_ctrl
-
-def create_basectrl(rigname, basejnt, up_axis=None):
-    cog_ctrl = fstr('', COG_CTRL)
-    basectrl_grp = fstr(rigname, BASECTRL_GRP)
-    basectrl = fstr(rigname, BASECTRL)
-    basectrl, basectrl_grp = create_control(basectrl, group=basectrl_grp,
-                                            match_to=basejnt, parent=cog_ctrl,
-                                            size=BASE_CTRL_SZ, nr=(1,0,0),
-                                            color='magenta', shape='circle',
-                                            overwrite=False)
-    opm(basectrl_grp)
-    if up_axis:
-        rot_offset = ROT_AXIS_DICT[up_axis]
-        cmds.setAttr(f"{basectrl_grp}.rotate", rot_offset[0], rot_offset[1], rot_offset[2])
-    return basectrl, basectrl_grp
 
 def create_controls_fk(rigname, joints, jnt_pos):
     '''

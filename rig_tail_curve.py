@@ -55,50 +55,17 @@ def create_curve(rigname, jnt_pos, typ=''):
     try: # Create curve
         if typ == TYPE_FK:
             # FK: Create curve matching joint positions exactly
-            curve = cmds.curve(p=jnt_pos, d=degree, n=curve)
+            curve = cmds.curve(n=curve, d=degree, p=jnt_pos)
 
         elif typ == TYPE_IK:
             # IK: Create curve with upvec CVs at ends + NUM_CTRL_IK control CVs
 
-            # Sample positions evenly along joint chain
-            indices = list(linspace(0, len(jnt_pos)-1, NUM_CTRL_IK))
-            sampled_pos = [jnt_pos[round(i)] for i in indices]
-
-            # CHANGED: create upvec positions at start/end
-            all_pos = [jnt_pos[0]] + sampled_pos + [jnt_pos[-1]]
-
-            # # Create upvec positions slightly extended beyond joint chain
-            # # This provides clean advanced twist calculation at extremes
-            # first_pos = jnt_pos[0]
-            # last_pos = jnt_pos[-1]
-            #
-            # # Calculate extension vector (2% of total chain length)
-            # chain_vec = [last_pos[i] - first_pos[i] for i in range(3)]
-            # chain_len = sum(v**2 for v in chain_vec) ** 0.5
-            # if chain_len > 0:
-            #     extension_factor = 0.02
-            #     norm_vec = [v / chain_len for v in chain_vec]
-            #     extension = [v * chain_len * extension_factor for v in norm_vec]
-            #     upvec_srt = [first_pos[i] - extension[i] for i in range(3)]
-            #     upvec_end = [last_pos[i] + extension[i] for i in range(3)]
-            # else:
-            #     upvec_srt = first_pos
-            #     upvec_end = last_pos
-            # all_pos = [upvec_srt] + sampled_pos + [upvec_end]
+            # Add upvec positions at start/end
+            all_pos = [jnt_pos[0]] + jnt_pos + [jnt_pos[-1]]
 
             # Create curve with all control points
             degree = min(3, len(all_pos) - 1)
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
-            # cmds.rebuildCurve(curve,
-            #                   ch=0,   # No construction history
-            #                   rpo=1,  # Replace original
-            #                   rt=0,   # Uniform parameterization
-            #                   end=1,  # Keep ends
-            #                   kr=0,   # Keep original range
-            #                   kcp=1,  # Keep control points
-            #                   kep=1,  # Keep end points
-            #                   kt=0,   # Don't keep tangents
-            #                   d=degree)
 
         else: # Default simple curve
             curve = cmds.curve(p=jnt_pos, d=degree, n=curve)
@@ -381,10 +348,10 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
 
     # Create new clusters
     if typ == TYPE_FK: # Clusters at first and last CVs only
-        for NN in [0, num_cv-1]:
-            cluster_node = fstr(rigname, CLUSTER, typ, NN)
-            cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, NN)
-            cluster = create_cluster([cluster_node, cluster_handle], curve, NN)
+        for i in [0, num_cv-1]:
+            cluster_node = fstr(rigname, CLUSTER, typ, i)
+            cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, i)
+            cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
     elif typ == TYPE_IK: # Upvec clusters at ends, control clusters in between
@@ -396,10 +363,18 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
         upv_end = create_cluster([cluster_upv_end, cluster_handle_end], curve, num_cv-1)
         clusters.append(upv_bse)
         clusters.append(upv_end)
-        for NN in range(1, num_cv-1): # Control clusters for interior CVs
-            cluster_node = fstr(rigname, CLUSTER, typ, NN)
-            cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, NN)
-            cluster = create_cluster([cluster_node, cluster_handle], curve, NN)
+        # for NN in range(1, num_cv-1): # Control clusters for interior CVs
+        #     cluster_node = fstr(rigname, CLUSTER, typ, NN)
+        #     cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, NN)
+        #     cluster = create_cluster([cluster_node, cluster_handle], curve, NN)
+        #     clusters.append(cluster)
+        # TODO
+        # Count cluster indices. Sample positions evenly among joints
+        indices = list(round(linspace(0, num_cv-2, NUM_CTRL_IK)))
+        for i, count in enumerate(indices):
+            cluster_node = fstr(rigname, CLUSTER, typ, i+1)
+            cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, i+1)
+            cluster = create_cluster([cluster_node, cluster_handle], curve, count+1)
             clusters.append(cluster)
 
     # Organize under cluster group

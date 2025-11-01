@@ -49,7 +49,7 @@ def set_curveinfo_fk(rigname, curve, controls):
     curveinfo = create_curveinfo(rigname, curve, TYPE_FK) # curveInfo FK
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0] # Curve shape
 
-    for ctrl in controls:
+    for i, ctrl in enumerate(controls):
         ctrlname = ctrl.rsplit(CTRL, 1)[0]
 
         # (pointOnCurveInfo) poci FK
@@ -123,37 +123,17 @@ def falloff_rotation(rigname, n, joints, sdks):
         logger.error('Lists of sdk groups and joints should match in length.')
     ctrlname = control.rsplit(CTRL, 1)[0]
 
-    # Cleanup
+    # Cleanup REMOVE
     mult1 = f"{ctrlname}_multiplyDivide"
     remove(mult1)
     falloff_pos = f"{ctrlname}_falloff_pos_plusMinusAverage"
     falloff_neg = f"{ctrlname}_falloff_neg_plusMinusAverage"
     remove(falloff_pos)
     remove(falloff_neg)
-
-    # (multiplyDivide) minusrot - Remove double rotation from control
     minusrot = f"{ctrlname}_minusrot_multiplyDivide"
-    cmds.createNode('multiplyDivide', n=minusrot, s=1, ss=1)
-    cmds.setAttr(f"{minusrot}.operation", 1) # multiply
-    cmds.setAttr(f"{minusrot}.input2", -0.5,-0.5,-0.5)
-    cmds.connectAttr(f"{control}.rotate", f"{minusrot}.input1", f=1)
-    # Output f"{minusrot}.output"
-    cmds.connectAttr(f"{minusrot}.output", f"{control_grp}.rotate", f=1)
-
-    # (plusMinusAverage) plusrot - Add rotation from controls above
-    if n > 0:
-        plusrot = f"{ctrlname}_plusrot_plusMinusAverage"
-        cmds.createNode('plusMinusAverage', n=plusrot, s=1, ss=1)
-        cmds.setAttr(f"{plusrot}.operation", 1) # Add
-        cmds.connectAttr(f"{minusrot}.output", f"{plusrot}.input3D[0]", f=1)
-        prev_ctrl = fstr(rigname, CONTROL, '', n)
-        if n > 1:
-            prev_ctrlname = prev_ctrl.rsplit(CTRL, 1)[0]
-            prev_plusrot = f"{prev_ctrlname}_plusrot_plusMinusAverage"
-            cmds.connectAttr(f"{prev_plusrot}.output3D", f"{plusrot}.input3D[1]", f=1)
-        else:
-            cmds.connectAttr(f"{prev_ctrl}.rotate", f"{plusrot}.input3D[1]", f=1)
-        cmds.connectAttr(f"{plusrot}.output3D", f"{control_grp}.rotate", f=1)
+    plusrot = f"{ctrlname}_plusrot_plusMinusAverage"
+    remove(minusrot)
+    remove(plusrot)
 
     # (multDoubleLinear) ctrlpos - Scale control position to range(0,1)
     ctrlpos = f"{ctrlname}_control_position_multDoubleLinear"
@@ -184,13 +164,24 @@ def falloff_rotation(rigname, n, joints, sdks):
     # setrange.outValueX -> control
     cmds.connectAttr(f"{setrange}.outValueX", f"{control}.num_joints", f=1)
 
-    # Iterate through joints, connect nodes
-    for idx in range(len(joints)):
+    # Rotation sum of this control and all parents
+    rotsum = f"{ctrlname}_rotsum_plusMinusAverage"
+    cmds.createNode('plusMinusAverage', n=rotsum, s=1, ss=1)
+    cmds.setAttr(f"{rotsum}.operation", 1) # Add
+    cmds.connectAttr(f"{control}.rotate", f"{rotsum}.input3D[0]", f=1)
+    # Add rotations from all parent controls
+    i = 1
+    for parent_n in range(n):
+        parent_ctrl = fstr(rigname, CONTROL, '', parent_n+1)
+        cmds.connectAttr(f"{parent_ctrl}.rotate", f"{rotsum}.input3D[{i}]", f=1)
+        i += 1
+    # Output f"{rotsum}.output3D" contains rotation sum
+
+    for idx, jnt in enumerate(joints):
         sdk = sdks[idx] # sdk group above joint
-        jnt = joints[idx] # each joint
         sdk_name = sdk.lstrip(TYPE_FK).rsplit(SDK, 1)[0]
 
-        # Cleanup
+        # Cleanup REMOVE
         jntfalloff_pos = f"{sdk_name}_jntfalloff_pos_plusMinusAverage"
         jntfalloff_neg = f"{sdk_name}_jntfalloff_neg_plusMinusAverage"
         remove(jntfalloff_pos)
@@ -199,8 +190,6 @@ def falloff_rotation(rigname, n, joints, sdks):
         ctrlfalloff_neg = f"{sdk_name}_ctrlfalloff_neg_plusMinusAverage"
         remove(ctrlfalloff_pos)
         remove(ctrlfalloff_neg)
-        rotmult = f"{sdk_name}_rotation_multiplyDivide"
-        remove(rotmult)
         mult2 = f"{sdk_name}_mult2_multiplyDivide"
         remove(mult2)
         finalcond = f"{sdk_name}_final{COND}"
@@ -311,7 +300,7 @@ def falloff_rotation(rigname, n, joints, sdks):
         rotmult = f"{sdk_name}_rotmult_multiplyDivide"
         cmds.createNode('multiplyDivide', n=rotmult, s=1, ss=1)
         cmds.setAttr(f"{rotmult}.operation", 1) # multiply
-        cmds.connectAttr(f"{control}.rotate", f"{rotmult}.input1", f=1)
+        cmds.connectAttr(f"{rotsum}.output3D", f"{rotmult}.input1", f=1)
         # multiply rotmult to all axes X,Y,Z
         cmds.connectAttr(f"{cond}.outColorR", f"{rotmult}.input2X", f=1)
         cmds.connectAttr(f"{cond}.outColorR", f"{rotmult}.input2Y", f=1)
@@ -360,23 +349,23 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
 
     if cmds.objExists(fkjnt_grp): # If fkjnt_grp exists, match to basectrl
         logger.debug(f"fkjnt_grp exists:'{fkjnt_grp}' basectrl:'{basectrl}'")
-        match_transform(fkjnt_grp, basectrl)
+        match_transform(fkjnt_grp, basectrl, moc=1)
     else:
         # Check if first_sdk_grp has a parent that could be fkjnt_grp
         first_sdk_parent = cmds.listRelatives(first_sdk_grp, p=True, typ='transform')
         if first_sdk_parent:
             logger.debug(f"fkjnt_grp found:'{first_sdk_parent[0]}' basectrl:'{basectrl}'")
             fkjnt_grp = cmds.rename(first_sdk_parent[0], fkjnt_grp)
-            match_transform(fkjnt_grp, basectrl)
+            match_transform(fkjnt_grp, basectrl, moc=1)
         else: # Create new fkjnt_grp
             logger.debug(f"Creating new fkjnt_grp:'{fkjnt_grp}' basectrl:{basectrl}")
             create_group(fkjnt_grp)
-            match_transform(fkjnt_grp, basectrl, moc=False)
+            match_transform(fkjnt_grp, basectrl, moc=0)
     transf = cmds.listRelatives(fkjnt_grp, typ='transform') or []
 
     for jnt in reversed(joints):
         NN = get_index_from_name(jnt)
-        jnt_name = fstr(rigname, JNT, typ, NN)
+        jnt_name = fstr(rigname, JOINT, typ, NN, TAG='_sdk')
         prev_sdk_grp = None # Previous sdk group
         first_sdk_grp = None # First sdk group
         last_sdk_grp = None # Last sdk group
@@ -403,7 +392,7 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
                 # Move current sdk_grp under prev
                 parent_to(sdk_grp, prev_sdk_grp, r=True)
                 # Match sdk_grp to prev_sdk_grp
-                match_transform(sdk_grp, prev_sdk_grp)
+                match_transform(sdk_grp, prev_sdk_grp, moc=1)
             else:
                 first_sdk_grp = sdk_grp # Store first sdk grp
             prev_sdk_grp = sdk_grp # Store sdk group to prev
@@ -463,5 +452,5 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
             cmds.ungroup(transf)
         cmds.delete(tmp_grp)
     else: # no jnt_parent
-        match_transform(first_sdk_grp, jnt, moc=False)
+        match_transform(first_sdk_grp, jnt, moc=0)
         parent_to(jnt, last_sdk_grp, a=1)
