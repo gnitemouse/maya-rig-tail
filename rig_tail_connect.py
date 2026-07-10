@@ -57,12 +57,12 @@ def connect_rig_tail(fk, ik):
     for rigname in rt_cst.RIGPARTS:
         connect_fk(rigname, fk, ik)
         connect_ik(rigname, fk, ik)
-        rt_test.dump_chain()
+        # rt_test.dump_chain()
         build_matrix_offset_network(rigname, fk, ik)
         rt_ani.build_anim_effects(rigname, fk, ik)
         connect_effects(rigname, fk, ik)
         rt_mya.bind_geometry(rigname)
-        rt_test.dump_chain()
+        # rt_test.dump_chain()
 
     logger.info('-----------------------------------------------------')
 
