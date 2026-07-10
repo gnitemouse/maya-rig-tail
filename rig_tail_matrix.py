@@ -1,6 +1,6 @@
 '''
 rig_tail_matrix.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Pure matrix network builders for Rig Tail.
 Drives offsetParentMatrix directly with baseLocal * FX chain.

@@ -1,6 +1,6 @@
 '''
 # rig_tail_constants.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 User Variables and Constants for Rig Tail
 '''

@@ -1,6 +1,6 @@
 '''
 # rig_tail_connect.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Connections and Constraints for Rig Tail
 Uses Local-space matrix-based offset architecture for FX.

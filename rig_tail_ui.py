@@ -1,6 +1,6 @@
 '''
 # rig_tail_ui.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 PySide2 UI for Rig Tail
 Compatible with Maya 2024/2025.

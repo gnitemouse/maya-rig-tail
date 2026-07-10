@@ -1,6 +1,6 @@
 '''
 # rig_tail_curve.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Curve and Cluster methods for Rig Tail
 '''

@@ -1,6 +1,6 @@
 """
 rig_tail_cache.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Cache operations for Rig Tail.
 Centralized cache management using rig_tail_constants for persistent state.

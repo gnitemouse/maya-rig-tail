@@ -1,6 +1,6 @@
 '''
 # rig_tail_setup.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Setup for Rig Tail
 Cleanup previous rig and prepare for build.

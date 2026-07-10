@@ -1,6 +1,6 @@
 """
 rig_tail_maya.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Consolidated Maya wrappers and scene helpers for Rig Tail.
 

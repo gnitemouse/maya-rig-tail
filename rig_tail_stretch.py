@@ -1,6 +1,6 @@
 '''
 # rig_tail_stretch.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Squash and Stretch for Rig Tail
 '''

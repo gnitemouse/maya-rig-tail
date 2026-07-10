@@ -1,6 +1,6 @@
 """
 rig_tail_math.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Math helpers for Rig Tail.
 Vector operations, position calculations, and orientation utilities.

@@ -1,6 +1,6 @@
 '''
 # rig_tail_fk.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Rig Tail FK: Variable FK system with sliding controls
 

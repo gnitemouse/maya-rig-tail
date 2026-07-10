@@ -1,6 +1,6 @@
 '''
 # rig_tail_util.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Helper functions for Rig Tail.
 Focus: Transforms, connections, constraints, attributes, parenting, checking.

@@ -28,23 +28,41 @@ rig_tail.main()
 ## Requirements
 
 - Maya 2020+ (Python 3)
-- Joint chain following naming convention
+- UI was tested in Maya 2024, 2025
+- Joint chain following naming template (customizable)
 
-## Expected Hierarchy
+## Rig Hierarchy
 
 ```
-controls                         (CONTROL_GRP)
-  └─ {rigname}_ctrl_grp          (BASECTRL_GRP)
-     └─ {rigname}_base_ctrl      (BASECTRL)
-        └─ FK_{rigname}_root_grp (CTRLROOT_GRP)
-           └─ {rigname}_##_ctrl_grp (CTRL_GRP)
-              └─ {rigname}_##_ctrl  (CTRL)
+ROOT                                        (ROOT_GRP)
 
-FK_skeleton                      (fk_SKELETON_GRP)
-  └─ FK_{rigname}_grp            (fk_GRP)
-     └─ FK_{rigname}_##_01_sdk   (SDK groups)
-        └─ FK_{rigname}_##_jnt   (Joint)
+- geometry                                  (GEOMETRY_GRP)
+
+- controls                                  (CONTROL_GRP)
+    └─ ROOT_ctrl                            (ROOT_CTRL)
+       └─ cog_ctrl                          (COG_CTRL)
+          └─ {rigname}_base_ctrl_grp        (BASECTRL_GRP)
+             └─ {rigname}_base_ctrl         (BASECTRL)
+                └─ FK_{rigname}_root_grp    (CTRLROOT_GRP)
+                   └─ {rigname}_NN_ctrl_grp (CTRL_GRP)
+                      └─ {rigname}_NN_ctrl  (CTRL)
+
+- skeleton                                  (SKELETON_GRP)
+    └─ BN_{rigname}_NN_jnt                  (JNT)
+
+- FK_skeleton                               (FK_SKELETON_GRP)
+    └─ FK_{rigname}_grp                     (FK_GRP)
+       └─ FK_{rigname}_NN_01_sdk            (SDK_GRP)
+          └─ FK_{rigname}_NN_02_sdk
+             └─ FK_{rigname}_NN_03_sdk
+                └─ FK_{rigname}_NN_jnt_sdk  (SDK_JNT)
+                   └─ FK_{rigname}_NN_jnt   (JNT)
+
+- IK_skeleton                               (IK_SKELETON_GRP)
+    └─ IK_{rigname}_grp                     (IK_GRP)
+       └─ IK_{rigname}_NN_jnt               (IK Joints)
 ```
+Component naming can be changed through UI or in rig_tail_constants.py
 
 ## Module Structure
 
@@ -72,9 +90,9 @@ FK_skeleton                      (fk_SKELETON_GRP)
 Edit `rig_tail_constants.py` to customize:
 - Naming templates
 - Rig component names
-- Effect settings (stretch, wave, dynamics)
+- Effect settings (stretch, wave, curl, noise, loop)
 - Control colors and shapes
 
 ## License
 
-Internal use only. © Daisy Jane @dayzl
+Internal use only. © Daisy Jane @gnitemouse

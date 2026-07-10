@@ -1,6 +1,6 @@
 '''
 # rig_tail_control.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Control methods for Rig Tail
 '''

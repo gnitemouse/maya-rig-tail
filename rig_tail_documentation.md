@@ -1,7 +1,7 @@
 # Rig Tail Documentation
 
 ## Author
-Daisy Jane @dayzl
+Daisy Jane @gnitemouse
 
 Complete API reference for the Maya Tail Rig system.
 

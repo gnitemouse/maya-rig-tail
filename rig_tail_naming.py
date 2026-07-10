@@ -1,6 +1,6 @@
 """
 rig_tail_naming.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Naming templates and helpers for Rig Tail.
 Utilities for node naming, pattern matching, and name extraction.

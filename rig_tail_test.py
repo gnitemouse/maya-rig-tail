@@ -1,6 +1,6 @@
 '''
 # rig_tail_test.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Debug test for matrix-based FX offset architecture.
 Updated for per-FX composeMatrix approach with parentInverseMatrix.

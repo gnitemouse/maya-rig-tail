@@ -1,6 +1,6 @@
 '''
 # rig_tail.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Rig a stretchy tail with IK FK modes.
 Switch modes include SplineIK, IK, Float, and FK.
@@ -15,24 +15,39 @@ il.reload(rig_tail)
 rig_tail.rig_tail_single('tail', root='tail_spline_grp', fk=True, ik=True)
 rig_tail.main()
 
-Assumes the following structure:
-    controls                         (CONTROL_GRP)
-      - {rigname}_ctrl_grp           (BASECTRL_GRP)
-      -- {rigname}_base_ctrl         (BASECTRL)
-      --- FK_{rigname}_root_grp      (CTRLROOT_GRP)
-      ---- {rigname}_##_ctrl_grp     (CTRL_GRP)
-      ----- {rigname}_##_ctrl        (CTRL)
-      ---- etc.
-    FK_skeleton                      (fk_SKELETON_GRP)
-      - FK_{rigname}_grp             (fk_GRP)
-      -- FK_{rigname}_##_01_sdk      (first SDK_GRP)
-      --- FK_{rigname}_##_02_sdk     (second SDK_GRP)
-      ---- FK_{rigname}_##_03_sdk    (last SDK_GRP)
-      ----- FK_{rigname}_##_ctrl_sdk (control SDK_GRP)
-      ------ FK_{rigname}_##_jnt     (JNT num ##)
-      ------- etc.
-Naming can be changed under NAMING TEMPLATE in rig_tail_constants.py
-Rig components {rigname}s can be changed under RIGPARTS in rig_tail_constants.py
+Rig Hierarchy:
+
+ROOT                                        (ROOT_GRP)
+
+- geometry                                  (GEOMETRY_GRP)
+
+- controls                                  (CONTROL_GRP)
+    └─ ROOT_ctrl                            (ROOT_CTRL)
+       └─ cog_ctrl                          (COG_CTRL)
+          └─ {rigname}_base_ctrl_grp        (BASECTRL_GRP)
+             └─ {rigname}_base_ctrl         (BASECTRL)
+                └─ FK_{rigname}_root_grp    (CTRLROOT_GRP)
+                   └─ {rigname}_NN_ctrl_grp (CTRL_GRP)
+                      └─ {rigname}_NN_ctrl  (CTRL)
+
+- skeleton                                  (SKELETON_GRP)
+    └─ BN_{rigname}_NN_jnt                  (JNT)
+
+- FK_skeleton                               (FK_SKELETON_GRP)
+    └─ FK_{rigname}_grp                     (FK_GRP)
+       └─ FK_{rigname}_NN_01_sdk            (SDK_GRP)
+          └─ FK_{rigname}_NN_02_sdk
+             └─ FK_{rigname}_NN_03_sdk
+                └─ FK_{rigname}_NN_jnt_sdk  (SDK_JNT)
+                   └─ FK_{rigname}_NN_jnt   (JNT)
+
+- IK_skeleton                               (IK_SKELETON_GRP)
+    └─ IK_{rigname}_grp                     (IK_GRP)
+       └─ IK_{rigname}_NN_jnt               (IK Joints)
+
+
+Naming template can be changed in rig_tail_constants.py
+Rig component {rigname}s can be changed under RIGPARTS in rig_tail_constants.py
 '''
 
 import maya.cmds as cmds

@@ -1,6 +1,6 @@
 """
 rig_tail_joint.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Joint traversal and joint-specific helpers for Rig Tail.
 Functions for navigating joint hierarchies, comparing joints, and setting attributes.

@@ -1,6 +1,6 @@
 '''
 # rig_tail_anim.py
-author: Daisy Jane @dayzl
+author: Daisy Jane @gnitemouse
 
 Animation Effects for Rig Tail
 Matrix-based offset architecture outputs each FX to its own composeMatrix.
