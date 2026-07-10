@@ -1,138 +1,173 @@
 '''
 # rig_tail_constants.py
-author: Daisy Jane Lee @dayzl
+author: Daisy Jane @dayzl
 
-Constants for Rig Tail
+User Variables and Constants for Rig Tail
 '''
+
+# CACHE ================================================================
+
+# Joint dictionaries: rigname -> joints list
+JOINTS_BN = dict()
+JOINTS_IK = dict()
+JOINTS_FK = dict()
+JOINTS_FX = dict()
+
+LAST_BUILD = {
+    'rigparts': [],
+    'root': '',
+    'joints_hash': {}  # {rigname: hash_of_joint_list}
+}
+
+
 # USER VARIABLES =======================================================
 
-# Rig Components
-# List all parts that will be rigged with a tail
+# Rig Components: List all parts to be rigged
 # RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
 #     'L_sidetail', 'R_sidetail',
 #     'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
 #     'R_tail1', 'R_tail2', 'R_tail3']
-RIGPARTS = ['R_tail3']
+RIGPARTS = ['tail']
 
-# Joints Dict: rigname -> joint list
-JOINTS_FK = dict()
-JOINTS_FK_SCALE = dict()
-JOINTS_IK = dict()
-JOINTS_BN = dict()
+# Root Name
+ROOT = 'tail'
+# Build Group Controls (for multiple tails)
+GROUP_CONTROLS = False
+# Force Rebuild (even if joints are unchanged)
+FORCE_REBUILD = False
 
-ROOT = ''
+
+# ANIMATION EFFECTS ====================================================
+# Features: Build which features
+EFFECTS = {
+    'stretchy': False,
+    'wave': True,
+    'curl': True,
+    'noise': True,
+    'loop': True
+    }
+
+def effects_enabled():
+    ''' Return True if EFFECTS are enabled. '''
+    global EFFECTS
+    if EFFECTS['wave'] or EFFECTS['curl'] or EFFECTS['dynOffset'] or EFFECTS['loop']:
+        return True
+    return False
+
 
 # NAMING TEMPLATE ======================================================
-# Change name templates as necessary.
-# If you change formatting of indices(_NN),
+# Change Naming Convention as necessary.
+# If you change formatting of indices(NN),
 # make sure to update DFORMAT and get_index_from_name()
 
 # Decimal formatting for indices
 DFORMAT = '{:02d}'
 
-# Naming Template: Type Labels
-TYPE_BN = 'BN_'
-TYPE_IK = 'IK_'
-TYPE_FK = 'FK_'
-GRP = '_grp'
-CTRL = '_ctrl'
-JNT = '_jnt'
-SDK = '_sdk'
-CRV = '_crv'
-CSR = '_cluster'
+# Joint Types
+TYPE_BN = 'BN'
+TYPE_IK = 'IK'
+TYPE_FK = 'FK'
+TYPE_FX = 'FX'
+
+# Naming Template: type, labels
+GRP = 'grp'
+CTRL = 'ctrl'
+JNT = 'jnt'
+SDK = 'sdk'
+CRV = 'crv'
+CSR = 'cluster'
 HDL = 'Handle'
-EFF = '_effector'
-VIS = '_visibility'
-CST = '_constraint'
-CRVI = '_curveInfo'
-POCI = '_pointOnCurveInfo'
-COND = '_condition'
+EFF = 'effector'
+VIS = 'visibility'
+COND = 'condition'
+CST = 'constraint'
 
-# Naming Template: tail
-BASECTRL_GRP = '{TYPE}{rigname}_base{TAG}{CTRL}{GRP}'
-BASECTRL = '{TYPE}{rigname}_base{TAG}{CTRL}'
-CTRLROOT_GRP = '{TYPE}{rigname}_root{TAG}{GRP}'
-CTRL_GRP = '{TYPE}{rigname}{_NN}{TAG}{CTRL}{GRP}'
-CONTROL = '{TYPE}{rigname}{_NN}{TAG}{CTRL}'
-GROUP = '{TYPE}{rigname}{_NN}{TAG}{GRP}'
-JOINT = '{TYPE}{rigname}{_NN}{TAG}{JNT}'
-SDK_GRP = '{TYPE}{rigname}{_NN}{TAG}{_nn}{SDK}'
-SDK_CTRL = '{TYPE}{rigname}{_NN}{TAG}{CTRL}{SDK}'
+# Naming Template: groups, controls, joints
+BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
+BASECTRL = '{TYPE}_{rigname}_base_{CTRL}'
+CTRLROOT_GRP = '{TYPE}_{rigname}_root_{GRP}'
+CTRL_GRP = '{TYPE}_{rigname}_{NN}_{CTRL}_{GRP}'
+CONTROL = '{TYPE}_{rigname}_{NN}_{CTRL}'
+GROUP = '{TYPE}_{rigname}_{NN}_{GRP}'
+JOINT = '{TYPE}_{rigname}_{NN}_{JNT}'
+SDK_GRP = '{TYPE}_{rigname}_{NN}_{nn}_{SDK}'
+SDK_JNT = '{TYPE}_{rigname}_{NN}_{JNT}_{SDK}'
 
-# Naming Template: curve, clusters
-CURVE = '{TYPE}{rigname}{TAG}{CRV}'
-CURVE_SCALE = '{TYPE}{rigname}_scale{TAG}{CRV}'
-CURVEINFO = '{TYPE}{rigname}{TAG}{CRVI}'
-CLUSTER_GRP = '{TYPE}{rigname}{_NN}{TAG}{CSR}{GRP}'
-CLUSTER = '{TYPE}{rigname}{_NN}{TAG}{CSR}'
-CLUSTER_HANDLE = '{TYPE}{rigname}{_NN}{TAG}{CSR}{HDL}'
-# Upvec
-UPV_CTRL = '{TYPE}{rigname}_upvec{TAG}{CTRL}'
-UPV_CTRLGRP = '{TYPE}{rigname}_upvec{TAG}{CTRL}{GRP}'
-CLUSTER_UPV = '{TYPE}{rigname}_upvec{_NN}{TAG}{CSR}'
-CLUSTER_UPV_HANDLE = '{TYPE}{rigname}_upvec{_NN}{TAG}{CSR}{HDL}'
+# Naming Template: curves, clusters
+CURVE = '{TYPE}_{rigname}_{TAG}_{CRV}'
+CURVE_SCALE = '{TYPE}_{rigname}_scale_{CRV}'
+CURVEINFO = '{TYPE}_{rigname}_curveInfo'
+CLUSTER_GRP = '{TYPE}_{rigname}_{NN}_{CSR}_{GRP}'
+CLUSTER = '{TYPE}_{rigname}_{NN}_{CSR}'
+CLUSTER_HANDLE = '{TYPE}_{rigname}_{NN}_{CSR}{HDL}'
+UPV_CTRLGRP = '{TYPE}_{rigname}_upvec_{TAG}_{CTRL}_{GRP}'
+UPV_CTRL = '{TYPE}_{rigname}_upvec_{TAG}_{CTRL}'
+CLUSTER_UPV = '{TYPE}_{rigname}_upvec_{TAG}_{CSR}'
+CLUSTER_UPV_HANDLE = '{TYPE}_{rigname}_upvec_{TAG}_{CSR}{HDL}'
 
 # Naming Template: spline
-SPLINE_GRP = '{TYPE}{rigname}_spline{TAG}{GRP}'
-SPLINE_HANDLE = '{TYPE}{rigname}_spline{TAG}{HDL}'
-SPLINE_EFFECTOR = '{TYPE}{rigname}_spline{TAG}{EFF}'
-SCALE_GRP = '{TYPE}{rigname}_scale{TAG}{GRP}'
-# Spline Controls
-SPLINE_IK_CTRL = '{TYPE}{rigname}_ik{_NN}{TAG}{CTRL}'
-SPLINE_FLOAT_CTRL = '{TYPE}{rigname}_float{_NN}{TAG}{CTRL}'
-SPLINE_BOT = '{TYPE}{rigname}_spline_bot{CTRL}'
-SPLINE_BOT_SML = '{TYPE}{rigname}_spline_bot_sml{CTRL}'
-SPLINE_MID_ROT = '{TYPE}{rigname}_spline_mid_rot{CTRL}'
-SPLINE_MID = '{TYPE}{rigname}_spline_mid{CTRL}'
-SPLINE_TOP_SML = '{TYPE}{rigname}_spline_top_sml{CTRL}'
-SPLINE_TOP = '{TYPE}{rigname}_spline_top{CTRL}'
+SPLINE_GRP = '{TYPE}_{rigname}_spline_{GRP}'
+SPLINE_HANDLE = '{TYPE}_{rigname}_spline{HDL}'
+SPLINE_EFFECTOR = '{TYPE}_{rigname}_spline_{EFF}'
+SPLINE_IK_CTRL = '{TYPE}_{rigname}_ik_{NN}_{CTRL}'
+SPLINE_FLOAT_CTRL = '{TYPE}_{rigname}_float_{NN}_{CTRL}'
+SPLINE_BOT = '{TYPE}_{rigname}_spline_bot_{CTRL}'
+SPLINE_BOT_SML = '{TYPE}_{rigname}_spline_bot_sml_{CTRL}'
+SPLINE_MID_ROT = '{TYPE}_{rigname}_spline_mid_rot_{CTRL}'
+SPLINE_MID = '{TYPE}_{rigname}_spline_mid_{CTRL}'
+SPLINE_TOP_SML = '{TYPE}_{rigname}_spline_top_sml_{CTRL}'
+SPLINE_TOP = '{TYPE}_{rigname}_spline_top_{CTRL}'
 SPLINE_CONTROLS = [SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID,
                    SPLINE_TOP_SML, SPLINE_TOP, SPLINE_MID_ROT]
 
-# Naming Template: groups
-ROOT_GRP = '{ROOT}{TAG}{GRP}'
-ROOT_CTRL = '{ROOT}{TAG}{CTRL}'
-COG_CTRL = 'cog{TAG}{CTRL}'
-GEOMETRY_GRP = 'geometry{TAG}'
-CONTROL_GRP = '{TYPE}controls{TAG}'
-SKELETON_GRP = '{TYPE}skeleton{TAG}'
-RIG_SYSTEMS_GRP = 'rig_systems{TAG}'
-LOCATORS_GRP = 'locators{TAG}'
-IKFK = '{rigname}{TAG}_ikfk'
-IKFK_COND = '{rigname}_ikfk{TAG}_condition'
+# Naming Template: structure
+ROOT_GRP = '{ROOT}'
+ROOT_CTRL = '{ROOT}_{CTRL}'
+COG_CTRL = 'cog_{CTRL}'
+GEOMETRY_GRP = 'geometry'
+CONTROL_GRP = '{TYPE}_controls'
+SKELETON_GRP = '{TYPE}_skeleton'
+RIG_SYSTEMS_GRP = 'rig_systems'
+CLUSTERS_GRP = 'clusters'
+SCALE_GRP = '{TYPE}_{rigname}_scale_{GRP}'
 
+# Naming Template: ikfk, switch, divider
+IKFK = '{rigname}_ikfk'
 # Attribute Template: (longName, niceName, enumName, dv)
-# Switch
-HIER_SWITCH = ('hierarchySwitch', 'Hierarchy Switch', 'spine:fk:float:revFk', 0)
-IKFK_SWITCH = ('ikfk_switch', 'IKFK Switch', 'SplineIK:IK:Float:FK', 0)
-# Divider
+IKFK_MODES = ['SplineIK', 'IK', 'Float', 'FK']
+IKFK_SWITCH = ('ikfk_switch', 'IKFK Switch', ':'.join(IKFK_MODES), 0)
 IKFK_DIVIDER = ('ikfk_divider', '----------', 'IKFK')
 STRETCH_DIVIDER = ('stretch_divider', '----------', 'STRETCH')
-TWIST_DIVIDER = ('twist_divider', '----------', 'TWIST')
+ANIM_DIVIDER = ('anim_divider', '----------', 'ANIMATION')
+TWIST_DIVIDER = ('twist_divider', '----------', 'IK TWIST')
 SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
+
 
 # CONSTANTS ============================================================
 
-# Number of controls
+# Constants: number of controls
 NUM_CTRL_FK = 3
 NUM_CTRL_IK = 5
 
-# Control Size
-ROOT_CTRL_SZ = 30
-COG_CTRL_SZ = 20
-BASE_CTRL_SZ = 2
-VARFK_CTRL_SZ = 1.2
+# Constants: control size
+ROOT_CTRL_SZ = 35
+COG_CTRL_SZ = 30
+BASE_CTRL_SZ = 2.4
+VARFK_CTRL_SZ = 1.4
 FK_CTRL_SZ = 0.4
-IK_CTRL_SZ = 1.0
-SPLINE_UPV_SZ = 0.4
-SPLINE_BOT_SZ = 1.4
-SPLINE_BOT_SML_SZ = 0.8
-SPLINE_MID_ROT_SZ = 1
-SPLINE_MID_SZ = 1
-SPLINE_TOP_SML_SZ = 0.6
-SPLINE_TOP_SZ = 1
+IK_CTRL_SZ = 1.4
+SPLINE_UPV_SZ = 0.2
+SPLINE_BOT_SZ = 1.8
+SPLINE_BOT_SML_SZ = 1
+SPLINE_MID_ROT_SZ = 1.6
+SPLINE_MID_SZ = 1.8
+SPLINE_TOP_SML_SZ = 1
+SPLINE_TOP_SZ = 1.6
 SPLINE_CONTROLS_SZ = [SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_SZ,
                       SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ, SPLINE_MID_ROT_SZ]
+
+
+# OTHER ================================================================
 
 ROT_AXIS_DICT = {
     '+x': (0, -90, 90),
@@ -149,6 +184,7 @@ CUBE_CTRL_PTS = [\
     [0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5],
     [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5],
     [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]]
+
 # Color override index for controls
 COLOR_OVERRIDE = {\
     'black':1, 'darkgrey':2, 'lightgrey':3, 'darkred':4, 'darkblue':5,
@@ -158,3 +194,241 @@ COLOR_OVERRIDE = {\
     'lightorange':21, 'neonyellow':22, 'green':23, 'orange':24, 'yellow':25,
     'yellowgreen':26, 'lightgreen':27, 'cyan':28, 'darkcyan':29, 'purple':30,
     'pink':31 }
+
+
+# JSON CONFIG ==========================================================
+import json
+import os
+
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'rig_tail_config.json')
+
+def get_user_editable_config():
+    '''
+    Get dictionary of user-editable variables and constants.
+    These are the values that can be modified in the UI.
+    '''
+    return {
+        # Rig Components
+        'RIGPARTS': RIGPARTS,
+        # User Variables
+        'ROOT': ROOT,
+        'EFFECTS': EFFECTS,
+        'GROUP_CONTROLS': GROUP_CONTROLS,
+        'FORCE_REBUILD': FORCE_REBUILD,
+
+        # Naming Template: type labels
+        'TYPE_BN': TYPE_BN,
+        'TYPE_IK': TYPE_IK,
+        'TYPE_FK': TYPE_FK,
+        'GRP': GRP,
+        'CTRL': CTRL,
+        'JNT': JNT,
+        'SDK': SDK,
+        'CRV': CRV,
+        'CSR': CSR,
+        'HDL': HDL,
+        'EFF': EFF,
+        'VIS': VIS,
+        'COND': COND,
+        'CST': CST,
+
+        # Naming Template: groups, controls, joints
+        'BASECTRL_GRP': BASECTRL_GRP,
+        'BASECTRL': BASECTRL,
+        'CTRLROOT_GRP': CTRLROOT_GRP,
+        'CTRL_GRP': CTRL_GRP,
+        'CONTROL': CONTROL,
+        'GROUP': GROUP,
+        'JOINT': JOINT,
+        'SDK_GRP': SDK_GRP,
+        'SDK_JNT': SDK_JNT,
+
+        # Naming Template: curves, clusters
+        'CURVE': CURVE,
+        'CURVE_SCALE': CURVE_SCALE,
+        'CURVEINFO': CURVEINFO,
+        'CLUSTER_GRP': CLUSTER_GRP,
+        'CLUSTER': CLUSTER,
+        'CLUSTER_HANDLE': CLUSTER_HANDLE,
+        'UPV_CTRLGRP': UPV_CTRLGRP,
+        'UPV_CTRL': UPV_CTRL,
+        'CLUSTER_UPV': CLUSTER_UPV,
+        'CLUSTER_UPV_HANDLE': CLUSTER_UPV_HANDLE,
+
+        # Naming Template: spline
+        'SPLINE_GRP': SPLINE_GRP,
+        'SPLINE_HANDLE': SPLINE_HANDLE,
+        'SPLINE_EFFECTOR': SPLINE_EFFECTOR,
+        'SPLINE_IK_CTRL': SPLINE_IK_CTRL,
+        'SPLINE_FLOAT_CTRL': SPLINE_FLOAT_CTRL,
+        'SPLINE_BOT': SPLINE_BOT,
+        'SPLINE_BOT_SML': SPLINE_BOT_SML,
+        'SPLINE_MID_ROT': SPLINE_MID_ROT,
+        'SPLINE_MID': SPLINE_MID,
+        'SPLINE_TOP_SML': SPLINE_TOP_SML,
+        'SPLINE_TOP': SPLINE_TOP,
+
+        # Naming Template: structure
+        'ROOT_GRP': ROOT_GRP,
+        'ROOT_CTRL': ROOT_CTRL,
+        'COG_CTRL': COG_CTRL,
+        'GEOMETRY_GRP': GEOMETRY_GRP,
+        'CONTROL_GRP': CONTROL_GRP,
+        'SKELETON_GRP': SKELETON_GRP,
+        'RIG_SYSTEMS_GRP': RIG_SYSTEMS_GRP,
+        'CLUSTERS_GRP': CLUSTERS_GRP,
+        'SCALE_GRP': SCALE_GRP,
+
+        # Naming Template: ikfk
+        'IKFK': IKFK,
+
+        # Constants: number of controls
+        'NUM_CTRL_FK': NUM_CTRL_FK,
+        'NUM_CTRL_IK': NUM_CTRL_IK,
+
+        # Constants: control size
+        'ROOT_CTRL_SZ': ROOT_CTRL_SZ,
+        'COG_CTRL_SZ': COG_CTRL_SZ,
+        'BASE_CTRL_SZ': BASE_CTRL_SZ,
+        'VARFK_CTRL_SZ': VARFK_CTRL_SZ,
+        'FK_CTRL_SZ': FK_CTRL_SZ,
+        'IK_CTRL_SZ': IK_CTRL_SZ,
+        'SPLINE_UPV_SZ': SPLINE_UPV_SZ,
+        'SPLINE_BOT_SZ': SPLINE_BOT_SZ,
+        'SPLINE_BOT_SML_SZ': SPLINE_BOT_SML_SZ,
+        'SPLINE_MID_ROT_SZ': SPLINE_MID_ROT_SZ,
+        'SPLINE_MID_SZ': SPLINE_MID_SZ,
+        'SPLINE_TOP_SML_SZ': SPLINE_TOP_SML_SZ,
+        'SPLINE_TOP_SZ': SPLINE_TOP_SZ,
+    }
+
+def save_config():
+    '''Save user variables and constants to JSON file.'''
+    config = get_user_editable_config()
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f'Failed to save config: {e}')
+        return False
+
+def load_config():
+    '''Load user variables and constants from JSON file.'''
+    global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD
+    global TYPE_BN, TYPE_IK, TYPE_FK, GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
+    global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
+    global CURVE, CURVE_SCALE, CURVEINFO, CLUSTER_GRP, CLUSTER, CLUSTER_HANDLE
+    global UPV_CTRLGRP, UPV_CTRL, CLUSTER_UPV, CLUSTER_UPV_HANDLE
+    global SPLINE_GRP, SPLINE_HANDLE, SPLINE_EFFECTOR, SPLINE_IK_CTRL, SPLINE_FLOAT_CTRL
+    global SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID_ROT, SPLINE_MID, SPLINE_TOP_SML, SPLINE_TOP
+    global ROOT_GRP, ROOT_CTRL, COG_CTRL, GEOMETRY_GRP, CONTROL_GRP, SKELETON_GRP
+    global RIG_SYSTEMS_GRP, CLUSTERS_GRP, SCALE_GRP, IKFK
+    global NUM_CTRL_FK, NUM_CTRL_IK
+    global ROOT_CTRL_SZ, COG_CTRL_SZ, BASE_CTRL_SZ, VARFK_CTRL_SZ, FK_CTRL_SZ, IK_CTRL_SZ
+    global SPLINE_UPV_SZ, SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_ROT_SZ
+    global SPLINE_MID_SZ, SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ
+
+    if not os.path.exists(CONFIG_FILE):
+        return False
+
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+
+        # Update globals from config
+        RIGPARTS = config.get('RIGPARTS', RIGPARTS)
+        ROOT = config.get('ROOT', ROOT)
+        EFFECTS = config.get('EFFECTS', EFFECTS)
+        GROUP_CONTROLS = config.get('GROUP_CONTROLS', GROUP_CONTROLS)
+        FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
+
+        # Type labels
+        TYPE_BN = config.get('TYPE_BN', TYPE_BN)
+        TYPE_IK = config.get('TYPE_IK', TYPE_IK)
+        TYPE_FK = config.get('TYPE_FK', TYPE_FK)
+        GRP = config.get('GRP', GRP)
+        CTRL = config.get('CTRL', CTRL)
+        JNT = config.get('JNT', JNT)
+        SDK = config.get('SDK', SDK)
+        CRV = config.get('CRV', CRV)
+        CSR = config.get('CSR', CSR)
+        HDL = config.get('HDL', HDL)
+        EFF = config.get('EFF', EFF)
+        VIS = config.get('VIS', VIS)
+        COND = config.get('COND', COND)
+        CST = config.get('CST', CST)
+
+        # Groups, controls, joints
+        BASECTRL_GRP = config.get('BASECTRL_GRP', BASECTRL_GRP)
+        BASECTRL = config.get('BASECTRL', BASECTRL)
+        CTRLROOT_GRP = config.get('CTRLROOT_GRP', CTRLROOT_GRP)
+        CTRL_GRP = config.get('CTRL_GRP', CTRL_GRP)
+        CONTROL = config.get('CONTROL', CONTROL)
+        GROUP = config.get('GROUP', GROUP)
+        JOINT = config.get('JOINT', JOINT)
+        SDK_GRP = config.get('SDK_GRP', SDK_GRP)
+        SDK_JNT = config.get('SDK_JNT', SDK_JNT)
+
+        # Curves, clusters
+        CURVE = config.get('CURVE', CURVE)
+        CURVE_SCALE = config.get('CURVE_SCALE', CURVE_SCALE)
+        CURVEINFO = config.get('CURVEINFO', CURVEINFO)
+        CLUSTER_GRP = config.get('CLUSTER_GRP', CLUSTER_GRP)
+        CLUSTER = config.get('CLUSTER', CLUSTER)
+        CLUSTER_HANDLE = config.get('CLUSTER_HANDLE', CLUSTER_HANDLE)
+        UPV_CTRLGRP = config.get('UPV_CTRLGRP', UPV_CTRLGRP)
+        UPV_CTRL = config.get('UPV_CTRL', UPV_CTRL)
+        CLUSTER_UPV = config.get('CLUSTER_UPV', CLUSTER_UPV)
+        CLUSTER_UPV_HANDLE = config.get('CLUSTER_UPV_HANDLE', CLUSTER_UPV_HANDLE)
+
+        # Spline
+        SPLINE_GRP = config.get('SPLINE_GRP', SPLINE_GRP)
+        SPLINE_HANDLE = config.get('SPLINE_HANDLE', SPLINE_HANDLE)
+        SPLINE_EFFECTOR = config.get('SPLINE_EFFECTOR', SPLINE_EFFECTOR)
+        SPLINE_IK_CTRL = config.get('SPLINE_IK_CTRL', SPLINE_IK_CTRL)
+        SPLINE_FLOAT_CTRL = config.get('SPLINE_FLOAT_CTRL', SPLINE_FLOAT_CTRL)
+        SPLINE_BOT = config.get('SPLINE_BOT', SPLINE_BOT)
+        SPLINE_BOT_SML = config.get('SPLINE_BOT_SML', SPLINE_BOT_SML)
+        SPLINE_MID_ROT = config.get('SPLINE_MID_ROT', SPLINE_MID_ROT)
+        SPLINE_MID = config.get('SPLINE_MID', SPLINE_MID)
+        SPLINE_TOP_SML = config.get('SPLINE_TOP_SML', SPLINE_TOP_SML)
+        SPLINE_TOP = config.get('SPLINE_TOP', SPLINE_TOP)
+
+        # Structure
+        ROOT_GRP = config.get('ROOT_GRP', ROOT_GRP)
+        ROOT_CTRL = config.get('ROOT_CTRL', ROOT_CTRL)
+        COG_CTRL = config.get('COG_CTRL', COG_CTRL)
+        GEOMETRY_GRP = config.get('GEOMETRY_GRP', GEOMETRY_GRP)
+        CONTROL_GRP = config.get('CONTROL_GRP', CONTROL_GRP)
+        SKELETON_GRP = config.get('SKELETON_GRP', SKELETON_GRP)
+        RIG_SYSTEMS_GRP = config.get('RIG_SYSTEMS_GRP', RIG_SYSTEMS_GRP)
+        CLUSTERS_GRP = config.get('CLUSTERS_GRP', CLUSTERS_GRP)
+        SCALE_GRP = config.get('SCALE_GRP', SCALE_GRP)
+        IKFK = config.get('IKFK', IKFK)
+
+        # Constants
+        NUM_CTRL_FK = config.get('NUM_CTRL_FK', NUM_CTRL_FK)
+        NUM_CTRL_IK = config.get('NUM_CTRL_IK', NUM_CTRL_IK)
+
+        ROOT_CTRL_SZ = config.get('ROOT_CTRL_SZ', ROOT_CTRL_SZ)
+        COG_CTRL_SZ = config.get('COG_CTRL_SZ', COG_CTRL_SZ)
+        BASE_CTRL_SZ = config.get('BASE_CTRL_SZ', BASE_CTRL_SZ)
+        VARFK_CTRL_SZ = config.get('VARFK_CTRL_SZ', VARFK_CTRL_SZ)
+        FK_CTRL_SZ = config.get('FK_CTRL_SZ', FK_CTRL_SZ)
+        IK_CTRL_SZ = config.get('IK_CTRL_SZ', IK_CTRL_SZ)
+        SPLINE_UPV_SZ = config.get('SPLINE_UPV_SZ', SPLINE_UPV_SZ)
+        SPLINE_BOT_SZ = config.get('SPLINE_BOT_SZ', SPLINE_BOT_SZ)
+        SPLINE_BOT_SML_SZ = config.get('SPLINE_BOT_SML_SZ', SPLINE_BOT_SML_SZ)
+        SPLINE_MID_ROT_SZ = config.get('SPLINE_MID_ROT_SZ', SPLINE_MID_ROT_SZ)
+        SPLINE_MID_SZ = config.get('SPLINE_MID_SZ', SPLINE_MID_SZ)
+        SPLINE_TOP_SML_SZ = config.get('SPLINE_TOP_SML_SZ', SPLINE_TOP_SML_SZ)
+        SPLINE_TOP_SZ = config.get('SPLINE_TOP_SZ', SPLINE_TOP_SZ)
+
+        return True
+    except Exception as e:
+        print(f'Failed to load config: {e}')
+        return False
+
+# Auto-load config on module import
+load_config()

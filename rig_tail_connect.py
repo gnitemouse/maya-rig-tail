@@ -1,562 +1,442 @@
 '''
 # rig_tail_connect.py
-author: Daisy Jane Lee @dayzl
+author: Daisy Jane @dayzl
 
 Connections and Constraints for Rig Tail
+Uses Local-space matrix-based offset architecture for FX.
 '''
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 from logger_config import logger_setup
-import rig_tail_constants as cst
+import importlib as il
+
 from rig_tail_constants import *
-from rig_tail_util import *
+import rig_tail_constants as rt_cst
 from rig_tail_control import get_controls_ik
 from rig_tail_curve import get_spline_handle
+import rig_tail_naming as rt_nam
+import rig_tail_maya as rt_mya
+import rig_tail_cache as rt_cache
+import rig_tail_joint as rt_jnt
+from rig_tail_matrix import build_matrix_offset_network
+import rig_tail_stretch as rt_str
+import rig_tail_anim as rt_ani
+import rig_tail_util as rt_utl
+import rig_tail_test as rt_test
 import re
 
+il.reload(rt_test)
 logger = logger_setup(__name__)
+
+
+# CONTROL CACHE ========================================================
+
+_CONTROL_CACHE = {}
+
+def cache_controls_ik(rigname):
+    if rigname not in _CONTROL_CACHE:
+        _CONTROL_CACHE[rigname] = get_controls_ik(rigname)
+    return _CONTROL_CACHE[rigname]
+
+def clear_control_cache():
+    _CONTROL_CACHE.clear()
+
+def get_cached_controls_ik(rigname):
+    return cache_controls_ik(rigname)
 
 
 # CONNECTIONS ==========================================================
 
-def connect_rig_tail(fk, ik, stretchy):
-    '''
-    Connect FK tail rig.
-    Original IKFK Switch attributes are created on Cog control.
-    Proxy IKFK Switch attributes are created on Base,IK,FK controls.
-    RIGPARTS (list): List of all rig components
-
-    Arguments
-        fk (bool): connect FK components
-        ik (bool): connect IK components
-    '''
+def connect_rig_tail(fk, ik):
     logger.info('-----------------------------------------------------')
-    logger.info('START connecting rig components..')
-    connect_root(fk, ik) # Root
-    connect_cog(fk, ik) # Cog
-    for rigname in cst.RIGPARTS:
-        connect_basectrl(rigname, fk, ik, stretchy) # Basectrl
-        set_control_visibility(fk, ik)
-        connect_fk(rigname, fk, ik, stretchy) # FK
-        connect_ik(rigname, fk, ik, stretchy) # IK
-        constrain_skeleton(rigname, fk, ik)
-        bind_geometry(rigname)
-    logger.info('DONE connecting rig components..')
+    logger.info('Connect Rig Components')
+
+    clear_control_cache()
+
+    for rigname in rt_cst.RIGPARTS:
+        connect_fk(rigname, fk, ik)
+        connect_ik(rigname, fk, ik)
+        rt_test.dump_chain()
+        build_matrix_offset_network(rigname, fk, ik)
+        rt_ani.build_anim_effects(rigname, fk, ik)
+        connect_effects(rigname, fk, ik)
+        rt_mya.bind_geometry(rigname)
+        rt_test.dump_chain()
+
+    logger.info('-----------------------------------------------------')
 
 def connect_root(fk, ik):
-    '''
-    Create attributes on root control.
-    Warning: Uses hardcoded names, check naming.
-    '''
-    logger.info(f"Connect root")
-    root_ctrl = fstr('', ROOT_CTRL)
-    geometry_grp = fstr('', GEOMETRY_GRP)
-    control_grp = fstr('', CONTROL_GRP)
-    rig_systems_grp = fstr('', RIG_SYSTEMS_GRP)
-    skeleton_grp = fstr('', SKELETON_GRP)
-    locators_grp = fstr('', LOCATORS_GRP)
-    # Attribute Template: (longName, niceName, enumName, dv)
-    if (fk and not ik) or (ik and not fk):
+    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
+    geometry_grp = rt_nam.fstr('', GEOMETRY_GRP)
+    control_grp = rt_nam.fstr('', CONTROL_GRP)
+    rig_systems_grp = rt_nam.fstr('', RIG_SYSTEMS_GRP)
+    skeleton_grp = rt_nam.fstr('', SKELETON_GRP)
+    clusters_grp = rt_nam.fstr('', CLUSTERS_GRP)
+    logger.info(f'Connect root \'{root_ctrl}\'')
+    rt_utl.parent_to(root_ctrl, control_grp)
+
+    if fk and ik:
+        ik_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_IK)
+        fk_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_FK)
         rootctrl_attrs = [
             ('divider', 'visibilityDivider', 'VISIBILITY', 0),
             (geometry_grp, 'geo', 'Geometry', 1),
             (control_grp, 'controls', 'Controls', 1),
-            (rig_systems_grp, 'rig_systems', 'Rig Systems', 1),
-            (skeleton_grp, 'skeleton', 'Skeleton', 0),
-            (locators_grp, 'locators', 'Locators', 0),
+            (rig_systems_grp, 'rig_systems', 'Rig Systems', 0),
+            (skeleton_grp, 'skeleton', 'Skeleton', 1),
+            (ik_skeleton_grp, 'ik_skeleton', 'IK Skeleton', 1),
+            (fk_skeleton_grp, 'fk_skeleton', 'FK Skeleton', 1),
+            (clusters_grp, 'clusters', 'Clusters', 0),
             ('divider', 'dispDivider', 'DISPLAY', 0)
         ]
     else:
-        ik_skeleton_grp = fstr('', SKELETON_GRP, TYPE_IK)
-        fk_skeleton_grp = fstr('', SKELETON_GRP, TYPE_FK)
         rootctrl_attrs = [
             ('divider', 'visibilityDivider', 'VISIBILITY', 0),
             (geometry_grp, 'geo', 'Geometry', 1),
             (control_grp, 'controls', 'Controls', 1),
-            (rig_systems_grp, 'rig_systems', 'Rig Systems', 1),
+            (rig_systems_grp, 'rig_systems', 'Rig Systems', 0),
             (skeleton_grp, 'skeleton', 'Skeleton', 0),
-            (ik_skeleton_grp, 'ik_skeleton', 'IK Skeleton', 1),
-            (fk_skeleton_grp, 'fk_skeleton', 'FK Skeleton', 1),
-            (locators_grp, 'locators', 'Locators', 0),
+            (clusters_grp, 'clusters', 'Clusters', 0),
             ('divider', 'dispDivider', 'DISPLAY', 0)
         ]
 
-    # Add rootctrl attributes
     for group, ln_attr, nn_attr, dv in rootctrl_attrs:
-        add_attribute_enum(root_ctrl, ln_attr, nn_attr, dv=dv)
+        rt_utl.add_attribute_enum(root_ctrl, ln_attr, nn_attr, dv=dv)
         if group != 'divider':
-            cmds.connectAttr(f"{root_ctrl}.{ln_attr}", f"{group}.visibility", f=1)
-    # Add Export Geometry attribute
-    add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
-                       en='Unlocked:Wireframe:Locked', dv=0)
-    cmds.setAttr(f"{geometry_grp}.overrideEnabled", 1)
-    cmds.connectAttr(f"{root_ctrl}.export_geo",
-                     f"{geometry_grp}.overrideDisplayType", f=1)
-    cmds.setAttr(f"{root_ctrl}.export_geo", 2) # Locked geo
+            if cmds.objExists(group):
+                cmds.connectAttr(f'{root_ctrl}.{ln_attr}', f'{group}.visibility', f=1)
+            else:
+                logger.warning(f'Group \'{group}\' does not exist, skipping visibility connection.')
+
+    if cmds.objExists(geometry_grp):
+        rt_utl.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
+                           en='Unlocked:Wireframe:Locked', dv=0)
+        cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
+        cmds.connectAttr(f'{root_ctrl}.export_geo',
+                         f'{geometry_grp}.overrideDisplayType', f=1)
+        cmds.setAttr(f'{root_ctrl}.export_geo', 2)
 
 def connect_cog(fk, ik):
-    '''
-    Create attributes on cog control
-    '''
-    logger.info(f"Connect cog")
-    cog_ctrl = fstr('', COG_CTRL)
+    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
+    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+    logger.info(f'Connect cog \'{cog_ctrl}\'')
+    rt_utl.parent_to(cog_ctrl, root_ctrl)
 
     if ik:
-        add_attribute_enum(cog_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-        for rigname in cst.RIGPARTS:
-            ln_ikfk = fstr(rigname, IKFK)
-            nn_ikfk = re.sub(r'[-_\s]+', ' ', ln_ikfk).title()
-            # IKFK Switch attribute
-            add_attribute_enum(cog_ctrl, ln_ikfk, nn_ikfk, IKFK_SWITCH[2], IKFK_SWITCH[3])
+        add_attributes_ikfk_switch(cog_ctrl, fk, ik)
 
-def connect_basectrl(rigname, fk, ik, stretchy):
-    '''
-    Connect attributes on base control
-    '''
-    logger.info(f"Connect basectrl")
-    cog_ctrl = fstr('', COG_CTRL)
-    basectrl_grp = fstr(rigname, BASECTRL_GRP)
-    basectrl = fstr(rigname, BASECTRL)
+def connect_basectrl(rigname, fk, ik):
+    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+    basectrl_grp = rt_nam.fstr(rigname, BASECTRL_GRP)
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    logger.info(f'{rigname}: Connect basectrl \'{basectrl}\'')
 
-    # Move basectrl under cog_ctrl
-    parent_to(basectrl_grp, cog_ctrl)
+    rt_utl.parent_to(basectrl_grp, cog_ctrl)
 
-    basectrl = fstr(rigname, BASECTRL)
-    if ik: # Add Twist, Offset, Roll attributes
-        add_attribute_basectrl_ik(rigname, basectrl)
-    if stretchy: # Add Scale attributes
-        if fk:
-            add_attribute_basectrl_scale(rigname, basectrl, TYPE_FK)
-        if ik:
-            add_attribute_basectrl_scale(rigname, basectrl, TYPE_IK)
-
-    # Cleanup visibility condition
-    basectrl_name = basectrl.rsplit(CTRL, 1)[0]
-    remove(f"{basectrl_name}{VIS}{COND}") # REMOVE
+    if ik:
+        add_ik_attributes_to_basectrl(rigname, basectrl)
+    rt_str.add_stretch_attributes_to_basectrl(rigname, basectrl)
+    rt_ani.add_anim_attributes_to_basectrl(rigname, basectrl)
 
 
 # CONNECT FK ===========================================================
 
-def connect_fk(rigname, fk, ik, stretchy):
-    '''
-    Connect FK components
-    '''
+def connect_fk(rigname, fk, ik):
     if not fk:
         return
-    logger.info(f"Connect FK '{rigname}'")
+    logger.info(f'{rigname}: Connect FK')
 
-    cog_ctrl = fstr('', COG_CTRL)
-    basectrl = fstr(rigname, BASECTRL)
-    fkroot_grp = fstr(rigname, CTRLROOT_GRP, TYPE_FK)
-    fkjnt_grp = fstr(rigname, GROUP, TYPE_FK)
-    rig_systems_grp = fstr('', RIG_SYSTEMS_GRP)
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    fkroot_grp = rt_nam.fstr(rigname, CTRLROOT_GRP, TYPE_FK)
+    fkjnt_grp = rt_nam.fstr(rigname, GROUP, TYPE_FK)
 
-    # FK joint group constraint
     cmds.parentConstraint(basectrl, fkjnt_grp, mo=1)
-    # Organize FK spline group
     connect_spline_fk(rigname)
 
-    # FK control constraint
-    for num, jnt in enumerate(cst.JOINTS_FK[rigname]):
-        fk_ctrl = fstr(rigname, CONTROL, TYPE_FK, num)
-        fk_ctrl_grp = fstr(rigname, CTRL_GRP, TYPE_FK, num)
-        last_sdk = fstr(rigname, SDK_GRP, TYPE_FK, num, NUM_CTRL_FK)
-        ctrl_sdk = fstr(rigname, SDK_CTRL, TYPE_FK, num)
-        sdk_constr = f"{fk_ctrl_grp}_parentConstraint1"
-        jnt_constr = f"{jnt}_parentConstraint1"
-        if not cmds.objExists(sdk_constr):
+    for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
+        fk_ctrl = rt_nam.fstr(rigname, CONTROL, TYPE_FK, i)
+        fk_ctrl_grp = rt_nam.fstr(rigname, CTRL_GRP, TYPE_FK, i)
+        last_sdk = rt_nam.fstr(rigname, SDK_GRP, TYPE_FK, i, NUM_CTRL_FK)
+        sdk_grp = rt_nam.fstr(rigname, SDK_JNT, TYPE_FK, i)
+
+        if not cmds.objExists(f'{fk_ctrl_grp}_parentConstraint1'):
             cmds.parentConstraint(last_sdk, fk_ctrl_grp)
-        cmds.connectAttr(f"{fk_ctrl}.rotate", f"{ctrl_sdk}.rotate", f=1)
 
-    if fk and not ik:
-        skeleton_grp = fstr('', SKELETON_GRP)
-        parent_to(fkjnt_grp, skeleton_grp)
+        cmds.connectAttr(f'{fk_ctrl}.rotate', f'{sdk_grp}.rotate', f=1)
+
+    if ik:
+        fk_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_FK)
+        rt_utl.parent_to(fkjnt_grp, fk_skeleton_grp)
+
+        for i in range(NUM_CTRL_FK):
+            fk_ctrl = rt_nam.fstr(rigname, CONTROL, '', i+1)
+            add_proxy_attributes_to_controls(rigname, fk_ctrl, TYPE_FK)
+
+        setup_switch_fk(rigname, fkroot_grp, fkjnt_grp)
     else:
-        fk_skeleton_grp = fstr('', SKELETON_GRP, TYPE_FK)
-        parent_to(fkjnt_grp, fk_skeleton_grp)
-
-        # IKFK Switch
-        ikfk_switch = fstr(rigname, IKFK)
-        for num in range(NUM_CTRL_FK):
-            NN = num + 1
-            fk_ctrl = fstr(rigname, CONTROL, '', NN)
-            # IKFK Divider
-            add_attribute_enum(fk_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-            # Proxy IKFK Switch attribute from Cog
-            add_attribute_enum(fk_ctrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
-                               pxy=f"{cog_ctrl}.{ikfk_switch}")
-
-        # IKFK Condition
-        ikfk_cond = fstr(rigname, IKFK_COND)
-        if not cmds.objExists(ikfk_cond):
-            create_condition(ikfk_cond, secondTerm=3)
-            cmds.connectAttr(f"{cog_ctrl}.{ikfk_switch}", f"{ikfk_cond}.firstTerm", f=1)
-        # FK Group Visibility
-        cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{fkroot_grp}.visibility", f=1)
-        cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{fkjnt_grp}.visibility", f=1)
-
-    if ik and stretchy: # Add Squash, Stretch, Twist, Offset, Roll attributes
-        add_attribute_control_proxy(rigname, TYPE_FK)
-
-    logger.info(f"DONE connecting FK '{rigname}'")
+        skeleton_grp = rt_nam.fstr('', SKELETON_GRP)
+        rt_utl.parent_to(fkjnt_grp, skeleton_grp)
 
 def connect_spline_fk(rigname):
-    '''
-    Clean up FK Spline structure.
-    '''
-    curve_fk = fstr(rigname, CURVE, TYPE_FK) # Curve FK
-    spline_grp_fk = fstr(rigname, SPLINE_GRP, TYPE_FK)
-    parent_to(curve_fk, spline_grp_fk)
+    curve_fk = rt_nam.fstr(rigname, CURVE, TYPE_FK)
+    spline_grp_fk = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_FK)
+    rt_utl.parent_to(curve_fk, spline_grp_fk)
 
 
 # CONNECT IK ===========================================================
 
-def connect_ik(rigname, fk, ik, stretchy):
-    '''
-    Connect IK components
-    Warning: Uses hardcoded names, check naming.
-    '''
+def connect_ik(rigname, fk, ik):
     if not ik:
         return
-    logger.info(f"Connect IK '{rigname}'")
+    logger.info(f'{rigname}: Connect IK')
 
-    cog_ctrl = fstr('', COG_CTRL)
-    rig_systems_grp = fstr('', RIG_SYSTEMS_GRP)
-    ik_skeleton_grp = fstr('', SKELETON_GRP, TYPE_IK)
-    ikjnt_grp = fstr(rigname, GROUP, TYPE_IK)
+    ik_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_IK)
+    ikjnt_grp = rt_nam.fstr(rigname, GROUP, TYPE_IK)
 
-    # Organize groups
-    # Move IK joint group under IK skeleton group
     if not cmds.objExists(ikjnt_grp):
         ikjnt_grp = cmds.group(em=True, n=ikjnt_grp)
-        parent_to(ikjnt_grp, ik_skeleton_grp)
-    parent_to(cst.JOINTS_IK[rigname][0], ikjnt_grp)
-    parent_to(ikjnt_grp, ik_skeleton_grp)
+        rt_utl.parent_to(ikjnt_grp, ik_skeleton_grp)
+    rt_utl.parent_to(rt_cst.JOINTS_IK[rigname][0], ikjnt_grp)
+    rt_utl.parent_to(ikjnt_grp, ik_skeleton_grp)
 
-    # Get IK controls
-    # ik_controls = {'ik':[], 'float':[], 'spline': [], 'upvec':[]}
-    ik_controls, ik_ctrlgrps = get_controls_ik(rigname)
+    spline_constraints = constrain_spline_controls(rigname)
+    setup_switch_ik(rigname, ikjnt_grp, spline_constraints)
+    setup_switch_upvec(rigname)
+    connect_spline_ik(rigname)
 
-    # Constrain spline controls
-    driveattr, switch_cond, spline_constraints =\
-        constrain_spline_controls(rigname, switch=IKFK_SWITCH)
-    # Organize IK spline group
-    connect_spline_ik(rigname, ik_controls, ik_ctrlgrps)
-    logger.debug(f"driveattr:'{driveattr}'\n" +\
-            f"switch cond:{switch_cond}\n" +\
-            f"spline_constraints {spline_constraints}")
-
-    if stretchy: # Add Squash, Stretch, Twist, Offset, Roll attributes
-        add_attribute_control_proxy(rigname, TYPE_IK)
-
-    # IKFK Switch
-    ikfk_switch = fstr(rigname, IKFK)
-    # IK control types: ik, float, spline
-    for num in range(NUM_CTRL_IK):
-        # Proxy IKFK Switch attribute from Cog
-        ik_ctrl = ik_controls['ik'][num]
-        add_attribute_enum(ik_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-        add_attribute_enum(ik_ctrl, ln=IKFK_SWITCH[0], nn=IKFK_SWITCH[1],
-                           pxy=f"{cog_ctrl}.{ikfk_switch}")
-        float_ctrl = ik_controls['float'][num]
-        add_attribute_enum(float_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-        add_attribute_enum(float_ctrl, ln=IKFK_SWITCH[0], nn=IKFK_SWITCH[1],
-                           pxy=f"{cog_ctrl}.{ikfk_switch}")
+    ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
+    for i in range(NUM_CTRL_IK):
+        add_proxy_attributes_to_controls(rigname, ik_controls['ik'][i], TYPE_IK)
+        add_proxy_attributes_to_controls(rigname, ik_controls['float'][i], TYPE_IK)
     for spline_ctrl in ik_controls['spline']:
-        add_attribute_enum(spline_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-        add_attribute_enum(spline_ctrl, ln=IKFK_SWITCH[0], nn=IKFK_SWITCH[1],
-                           pxy=f"{cog_ctrl}.{ikfk_switch}")
+        add_proxy_attributes_to_controls(rigname, spline_ctrl, TYPE_IK)
 
-    # IKFK Condition
-    ikfk_cond = fstr(rigname, IKFK_COND)
-    if not cmds.objExists(ikfk_cond):
-        create_condition(ikfk_cond, secondTerm=3)
-        cmds.connectAttr(f"{cog_ctrl}.{ikfk_switch}", f"{ikfk_cond}.firstTerm", f=1)
-    # IK Group Visibility
-    cmds.connectAttr(f"{ikfk_cond}.outColorG", f"{ikjnt_grp}.visibility", f=1)
+def connect_spline_ik(rigname):
+    ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
+    logger.debug(f'ik_controls {ik_controls} ik_ctrlgrps {ik_ctrlgrps}')
 
-    logger.info(f"DONE connecting IK '{rigname}'")
-
-def connect_spline_ik(rigname, ik_controls, ik_ctrlgrps):
-    '''
-    Clean up IK Spline structure with proper curve organization.
-    '''
-    logger.debug(f"ik_controls {ik_controls} ik_ctrlgrps {ik_ctrlgrps}")
-
-    # Make sure ik handle and curves are under spline group
-    spline_grp_ik = fstr(rigname, SPLINE_GRP, TYPE_IK) # Spline group IK
-    driver_curve = fstr(rigname, CURVE, TYPE_IK)
+    spline_grp_ik = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_IK)
+    driver_curve = rt_nam.fstr(rigname, CURVE, TYPE_IK)
     ikhandle, effector, solver_curve = get_spline_handle(rigname)
-    parent_to(ikhandle, spline_grp_ik)
-    parent_to(solver_curve, spline_grp_ik)
-    parent_to(driver_curve, spline_grp_ik)
+    rt_utl.parent_to(ikhandle, spline_grp_ik)
+    rt_utl.parent_to(solver_curve, spline_grp_ik)
+    rt_utl.parent_to(driver_curve, spline_grp_ik)
 
-    # Move controls under basectrl
-    basectrl = fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
     contents = list()
     contents.append(ik_ctrlgrps['ik'][0])
     contents.extend(ik_ctrlgrps['float'])
-    contents.extend([ik_ctrlgrps['spline'][0], ik_ctrlgrps['spline'][4],
-                    ik_ctrlgrps['spline'][-1]]) # top, bot, mid_rot
+    contents.extend([ik_ctrlgrps['spline'][0], ik_ctrlgrps['spline'][-1]])
     for obj in contents:
-        parent_to(obj, basectrl)
+        rt_utl.parent_to(obj, basectrl)
 
-    cmds.select(clear=True) # Deselect all
+    spline_handle = rt_nam.fstr(rigname, SPLINE_HANDLE, TYPE_IK)
+    if cmds.objExists(spline_handle):
+        for attr in ['twist', 'roll', 'offset']:
+            cmds.connectAttr(f'{basectrl}.{attr}', f'{spline_handle}.{attr}', f=1)
 
 
-# ADD ATTRIBUTES =======================================================
+# CONNECT EFFECTS =====================================================
 
-def add_attribute_basectrl_ik(rigname, control):
-    '''
-    Add twist, offset, roll, IKFK attributes
-    '''
-    spline_handle = fstr(rigname, SPLINE_HANDLE, TYPE_IK)
-    if not cmds.objExists(spline_handle):
-        logger.error(f"Could not find spline handle {spline_handle}")
-    add_attribute_enum(control, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
-    if not cmds.attributeQuery('twist', n=control, ex=1):
-        cmds.addAttr(control, ln='twist', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('roll', n=control, ex=1):
-        cmds.addAttr(control, ln='roll', at='float', k=1, dv=0)
-    if not cmds.attributeQuery('offset', n=control, ex=1):
-        cmds.addAttr(control, ln='offset', at='float', k=1, dv=0)
-    cmds.connectAttr(f"{control}.twist", f"{spline_handle}.twist", f=1)
-    cmds.connectAttr(f"{control}.roll", f"{spline_handle}.roll", f=1)
-    cmds.connectAttr(f"{control}.offset", f"{spline_handle}.offset", f=1)
+def connect_effects(rigname, fk, ik):
+    logger.info(f'{rigname}: Connect animation effects')
 
-    # IKFK Switch
-    cog_ctrl = fstr(rigname, COG_CTRL)
-    ikfk_switch = fstr(rigname, IKFK)
-    add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-    # Proxy IKFK Switch attribute from Cog
-    add_attribute_enum(control, IKFK_SWITCH[0], IKFK_SWITCH[1],
-                       pxy=f"{cog_ctrl}.{ikfk_switch}")
+    if rt_cst.EFFECTS['stretchy']:
+        connect_stretch(rigname, fk, ik)
 
-def add_attribute_basectrl_scale(rigname, control, typ):
-    '''
-    Add jntScaleY and jntScaleZ attributes
-    Connect to squash scale nodes created by setup_joint_squash()
-    '''
-    # Add Scale attributes
-    add_attribute_enum(control, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
-    if typ == TYPE_FK:
-        joints = cst.JOINTS_FK[rigname]
-    elif typ == TYPE_IK:
-        joints = cst.JOINTS_IK[rigname]
-    else:
-        logger.error(f"Invalid type '{typ}'. Choose TYPE_FK or TYPE_IK.")
+def connect_stretch(rigname, fk, ik):
+    logger.info(f'{rigname}: Connect stretch')
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
 
-    for i in range(len(joints)):
-        # Joint scale node from setup_joint_squash()
-        jnt_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
-        if not cmds.objExists(jnt_mult):
-            logger.warning(f"'{jnt_mult}' does not exist, skipping joint {i}")
-            continue
+    stretch_remap = f'{rigname}_stretch_remap_multiplyDivide'
+    squash_remap = f'{rigname}_squash_remap_multiplyDivide'
 
-        # Add scale attributes to control
-        if not cmds.attributeQuery(f'jntScaleY{i:02}', n=control, ex=1):
-            cmds.addAttr(control, ln=f'jntScaleY{i:02}', at='float', k=1, dv=1, min=0.1, max=10)
-        if not cmds.attributeQuery(f'jntScaleZ{i:02}', n=control, ex=1):
-            cmds.addAttr(control, ln=f'jntScaleZ{i:02}', at='float', k=1, dv=1, min=0.1, max=10)
+    if not cmds.objExists(stretch_remap):
+        logger.warning(f'Stretch remap node not found: {stretch_remap}')
+        return
+    if not cmds.objExists(squash_remap):
+        logger.warning(f'Squash remap node not found: {squash_remap}')
+        return
 
-        # Replace static input2Y/Z values with scale value
-        # The jnt_mult node structure is:
-        # input1Y/Z <- squash_blend.output (dynamic squash effect)
-        # input2Y/Z <- original scale values (static) <- Replace with custom scale
-        # outputY/Z -> joint/SDK scale
-        cmds.connectAttr(f'{control}.jntScaleY{i:02}', f'{jnt_mult}.input2Y', f=1)
-        cmds.connectAttr(f'{control}.jntScaleZ{i:02}', f'{jnt_mult}.input2Z', f=1)
+    if cmds.attributeQuery('stretch', n=basectrl, ex=1):
+        cmds.connectAttr(f'{basectrl}.stretch', f'{stretch_remap}.input1X', f=1)
+    if cmds.attributeQuery('squash', n=basectrl, ex=1):
+        cmds.connectAttr(f'{basectrl}.squash', f'{squash_remap}.input1X', f=1)
 
-def add_attribute_control_proxy(rigname, typ):
-    '''
-    Add proxy attributes from basectrl to controls.
-    '''
-    basectrl = fstr(rigname, BASECTRL)
-    if typ == TYPE_FK:
-        controls = get_controls_all(fk=True, ik=False, bn=False, include_cog=False)
-    elif typ == TYPE_IK:
-        controls = get_controls_all(fk=False, ik=True, bn=False, include_cog=False)
-    else:
-        logger.error(f"Invalid type '{typ}'. Choose TYPE_FK or TYPE_IK.")
-    # Add proxy attributes to IK controls
-    for ctrl in controls:
-        add_attribute_enum(ctrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
-        for atr in ['squash', 'stretch']: # Squash and Stretch
-            add_attribute_enum(ctrl, ln=atr, nn=titlecase(atr), pxy=f"{basectrl}.{atr}")
-        add_attribute_enum(ctrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
-        for atr in ['twist', 'roll', 'offset']: # Twist, Roll, Offset
-            add_attribute_enum(ctrl, ln=atr, nn=titlecase(atr), pxy=f"{basectrl}.{atr}")
+    rt_str.connect_stretch_to_joints(rigname, basectrl, fk, ik)
+
+
+# ATTRIBUTES ===========================================================
+
+def add_ik_attributes_to_basectrl(rigname, basectrl):
+    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+    ikfk_switch = rt_nam.fstr(rigname, IKFK)
+    rt_utl.add_attribute_enum(basectrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    rt_utl.add_attribute_enum(basectrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
+                       pxy=f'{cog_ctrl}.{ikfk_switch}')
+
+    rt_utl.add_attribute_enum(basectrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
+
+    for attr in ['twist', 'roll', 'offset']:
+        if not cmds.attributeQuery(attr, n=basectrl, ex=1):
+            cmds.addAttr(basectrl, ln=attr, at='float', k=1, dv=0)
+
+def add_attributes_ikfk_switch(control, fk, ik):
+    rt_utl.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+
+    for rigname in rt_cst.RIGPARTS:
+        ln_ikfk = rt_nam.fstr(rigname, IKFK)
+        nn_ikfk = re.sub(r'[-_\s]+', ' ', ln_ikfk).title()
+        rt_utl.add_attribute_enum(control, ln_ikfk, nn_ikfk, IKFK_SWITCH[2], IKFK_SWITCH[3])
+
+def add_proxy_attributes_to_controls(rigname, control, typ):
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+
+    ikfk_switch = rt_nam.fstr(rigname, IKFK)
+    rt_utl.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    rt_utl.add_attribute_enum(control, IKFK_SWITCH[0], IKFK_SWITCH[1],
+                       pxy=f'{cog_ctrl}.{ikfk_switch}')
+
+    if rt_cst.EFFECTS['stretchy']:
+        rt_utl.add_attribute_enum(control, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
+        for atr in ['stretch', 'squash']:
+            rt_utl.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
+
+    if rt_cst.EFFECTS['stretchy'] and typ == TYPE_IK:
+        rt_utl.add_attribute_enum(control, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
+        for atr in ['twist', 'roll', 'offset']:
+            rt_utl.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
 
 
 # CONSTRAINTS ==========================================================
 
-def constrain_skeleton(rigname, fk, ik):
-    '''
-    Constrain FK IK skeleton to BN skeleton
-    '''
-    logger.info('Setting up Skeleton Constraints..')
-    # Cleanup old constraints
-    for bn_jnt in cst.JOINTS_BN[rigname]:
-        constraints = cmds.listConnections(bn_jnt, type='constraint') or []
-        for constr in constraints:
-            cmds.delete(constr) # Delete constraint
+def constrain_spline_controls(rigname, typ=TYPE_IK):
+    logger.debug(f"{rigname}: Constrain clusters to spline controls")
+    ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
 
-    if fk and not ik:
-        for n in range(len(cst.JOINTS_FK[rigname])):
-            fk_jnt = cst.JOINTS_FK[rigname][n]
-            bn_jnt = cst.JOINTS_BN[rigname][n]
-            # Constrain skeleton - FK skeleton, BN skeleton
-            cmds.parentConstraint(fk_jnt, bn_jnt, mo=True)
-            cmds.scaleConstraint(fk_jnt, bn_jnt)
-
-    elif ik and not fk:
-        for n in range(len(cst.JOINTS_IK[rigname])):
-            ik_jnt = cst.JOINTS_IK[rigname][n]
-            bn_jnt = cst.JOINTS_BN[rigname][n]
-            # Constrain skeleton - IK skeleton, BN skeleton
-            cmds.parentConstraint(ik_jnt, bn_jnt, mo=True)
-            cmds.scaleConstraint(ik_jnt, bn_jnt)
-
-    else:
-        for n in range(len(cst.JOINTS_FK[rigname])):
-            fk_jnt = cst.JOINTS_FK[rigname][n]
-            ik_jnt = cst.JOINTS_IK[rigname][n]
-            bn_jnt = cst.JOINTS_BN[rigname][n]
-            # Constrain skeleton - FK, IK, BN skeleton
-            bn_constr = cmds.parentConstraint(fk_jnt, ik_jnt, bn_jnt, mo=True)[0]
-            sc_constr = cmds.scaleConstraint(fk_jnt, ik_jnt, bn_jnt)[0]
-            # Set influence on BN constraint
-            ikfk_cond = fstr(rigname, IKFK_COND) # IKFK Condition
-            cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{bn_constr}.{fk_jnt}W0", f=1)
-            cmds.connectAttr(f"{ikfk_cond}.outColorG", f"{bn_constr}.{ik_jnt}W1", f=1)
-            cmds.connectAttr(f"{ikfk_cond}.outColorR", f"{sc_constr}.{fk_jnt}W0", f=1)
-            cmds.connectAttr(f"{ikfk_cond}.outColorG", f"{sc_constr}.{ik_jnt}W1", f=1)
-
-def disconnect_skeleton(rigname, fk, ik):
-    '''
-    Disconnect skeleton and joint scale
-    '''
-    if fk:
-        fk_jnts = cst.JOINTS_FK[rigname]
-        for fk_jnt in fk_jnts:
-            disconnect_all(fk_jnt, source=True)
-    if ik:
-        ik_jnts = cst.JOINTS_IK[rigname]
-        for ik_jnt in ik_jnts:
-            disconnect_all(ik_jnt, source=True)
-
-def constrain_spline_controls(rigname, typ=TYPE_IK, switch=IKFK_SWITCH):
-    '''
-    Create constraints for spline controls.
-    Create condition nodes for switching modes between Spline, IK, Float modes.
-    Handle constraint of cluster handles, which are used to deform the spline curve
-driving the joint chain.
-
-    Arguments
-        rigname (str): name of rig part
-        switch (tuple): switch type (longName, niceName, enumName, dv)
-
-    Return
-        driveattr (str): switch attribute plug on cog ctrl
-        switch_cond (str list): condition nodes for switching
-        spline_constraints (str list): constraints created on spline clusters
-    '''
-    # Control Types
-    CTRLTYP = ['spline', 'ik', 'float']
-
-    cog_ctrl = fstr('', COG_CTRL)
-    driveattr = '' # Switch attribute plug
-    switch_cond = list() # Condition nodes for switching
-    spline_constraints = list() # Constraints on spline clusters
-
-    # Get relevant controls
-    ik_controls, ik_ctrlgrps = get_controls_ik(rigname)
-    upvec_bsectrl = ik_controls['upvec'][0] # upvec_base_ctrl
-    upvec_endctrl = ik_controls['upvec'][1] # upvec_end_ctrl
-    upvec_bsegrp = ik_ctrlgrps['upvec'][0] # upvec_base_ctrl_grp
-    upvec_endgrp = ik_ctrlgrps['upvec'][1] # upvec_end_ctrl_grp
-
-    # Constrain IK Spline mid-controls and upvecs
-    # Build 2 constraints, the first between top, bot, mid controls,
-    # and the second between mid_rot and top controls.
-    spline_controls = [fstr(rigname, template, typ) for template in SPLINE_CONTROLS]
-    spline_ctrlgrps = [f"{ctrl}{GRP}" for ctrl in spline_controls]
-    # Constrain ikspline - bot_ctrl, top_ctrl, mid_grp
-    cmds.parentConstraint(spline_controls[0], spline_controls[4], spline_ctrlgrps[2], mo=1)[0]
-    # Constrain ikspline - mid_rot, top_grp
-    cmds.parentConstraint(spline_controls[5], upvec_endgrp, mo=1)[0]
-    # cmds.parentConstraint(spline_controls[5], spline_ctrlgrps[4], mo=1)[0]
-
-    # Get cluster handles
     cluster_handles = list()
     for NN in range(1, NUM_CTRL_IK+1):
-        cluster_handle = fstr(rigname, CLUSTER_HANDLE, typ, NN)
+        cluster_handle = rt_nam.fstr(rigname, CLUSTER_HANDLE, typ, NN)
         cluster_handles.append(cluster_handle)
-    logger.info(f"Get Cluster Handles for Spline Constraint:\n{cluster_handles}")
+    logger.debug(f'Get cluster handles for spline constraint:\n{cluster_handles}')
 
-    # (constrainToControls) Add IKFK Switch attribute to Cog ctrl
-    # e.g. ----------| TAIL IKFK
-    #      L Fintail | SplineIK / IK / Float / Fk
-    #      R Fintail | SplineIK / IK / Float / Fk
-    if not cmds.attributeQuery(IKFK_DIVIDER[0], n=cog_ctrl, ex=1):
-        add_attribute_enum(cog_ctrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-    # IKFK Switch attribute
-    cog_ln_ikfk = fstr(rigname, IKFK) # e.g. L_fintail_ikfk
-    cog_nn_ikfk = re.sub(r'[-_\s]+', ' ', rigname).title() # e.g. L Fintail
-    driveattr = f"{cog_ctrl}.{cog_ln_ikfk}" # e.g. cog_ctrl.L_fintail_ikfk
-    # Create Switch attribute as Enum list
-    if not cmds.attributeQuery(cog_ln_ikfk, n=cog_ctrl, ex=1):
-        add_attribute_enum(cog_ctrl, ln_ikfk, nn_ikfk, switch[2])
-    logger.info(f"driveattr: {driveattr}")
-
-    # (constrainControls) Constrain clusters to controls. Set up switching later
-    # Each cluster handle is constrained to 3 different controls (spline, ik, float).
-    # This allows for control blending based on the selected Switch mode.
-    # Resulting constraints are stored for use in condition node setup.
+    spline_constraints = list()
     for i, clstr in enumerate(cluster_handles):
-        constrain_objs = list() # List of 5 objects, 4 controls and last cluster
-        for ctrltyp in CTRLTYP:
-            constrain_objs.append(ik_controls[ctrltyp][i]) # Get existing controls
-        constrain_objs.append(clstr) # Append target object, cluster handle
-        # Constrain cluster to controls
-        cluster_constr = cmds.parentConstraint(constrain_objs, mo=1)[0]
+        constrain_objs = list()
+        for ctrltyp in ['spline', 'ik', 'float']:
+            constrain_objs.append(ik_controls[ctrltyp][i])
+        constrain_objs.append(clstr)
+
+        cluster_constr = cmds.parentConstraint(constrain_objs)[0]
         spline_constraints.append(cluster_constr)
-    logger.info(f"constraints {spline_constraints}")
+    logger.debug(f'constraints {spline_constraints}')
 
-    # (setupConditionNodesConstraints) Set up switching condition for constraints and vis
-    # Condition nodes drive constraint weights and visiblity of controls.
-    # Active control type (based on Switch enum) gets a weight of 1 and visiblity ON
-    for i, ctrltyp in enumerate(CTRLTYP):
-        drivenattrs = list()
-        for j in range(NUM_CTRL_IK): # Iterate through IK controls
-            ik_control = ik_controls[ctrltyp][j]
-            ik_ctrlgrp = f"{ik_control}{GRP}"
-            drivenattrs.append(f"{spline_constraints[j]}.{ik_control}W{i}")
-            drivenattrs.append(f"{ik_ctrlgrp}.visibility")
+    cmds.parentConstraint(ik_controls['spline'][0], ik_controls['spline'][4], ik_ctrlgrps['spline'][2], mo=1)
+
+    return spline_constraints
+
+
+# IKFK MODE SWITCH =====================================================
+
+def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
+    ikfk_attr = f"{rt_nam.fstr('', COG_CTRL)}.{rt_nam.fstr(rigname, IKFK)}"
+
+    for mode in range(len(IKFK_MODES)):
+        if mode == len(IKFK_MODES)-1:
+            rt_utl.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=1)
+            rt_utl.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=1)
+        else:
+            rt_utl.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=0)
+            rt_utl.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=0)
+
+def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
+    ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
+    ikfk_attr = f"{rt_nam.fstr('', COG_CTRL)}.{rt_nam.fstr(rigname, IKFK)}"
+
+    for i, ctrltyp in enumerate(['spline', 'ik', 'float']):
+
+        for j in range(NUM_CTRL_IK):
+            ctrl = ik_controls[ctrltyp][j]
+            ctrl_grp = ik_ctrlgrps[ctrltyp][j]
+            constraint = spline_constraints[j]
+
+            for mode in range(len(IKFK_MODES)):
+                if mode == i:
+                    rt_utl.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=1)
+                else:
+                    rt_utl.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=0)
+
+            for mode in range(len(IKFK_MODES)):
+                if mode == len(IKFK_MODES)-1:
+                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
+                elif mode == i:
+                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=1)
+                else:
+                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
+
         if ctrltyp == 'spline':
-            mid_rot_ctrl = fstr(rigname, SPLINE_MID_ROT, typ)
-            drivenattrs.append(f"{mid_rot_ctrl}.visibility")
-        # IK Switch Condition
-        ik_switch_cond = f"{typ}{rigname}_switch_{ctrltyp}{COND}"
-        logger.info(f"ik_switch_cond {ik_switch_cond}\ndrivenattrs {drivenattrs}")
-        # Create condition node connecting driveattr to drivenattrs
-        switch_cond.append(create_condition_multi(
-            driveattr, drivenattrs, ik_switch_cond, i))
-        # Cleanup unnecessary Visibility Conditions
-        remove(f"{rigname}_switch_{ctrltyp}{VIS}{COND}")
-        remove(f"{TYPE_IK}{rigname}_switch_{ctrltyp}{VIS}{COND}")
+            mid_rot_ctrl = rt_nam.fstr(rigname, SPLINE_MID_ROT, TYPE_IK)
+            mid_rot_grp = f'{mid_rot_ctrl}_{GRP}'
+            for mode in range(len(IKFK_MODES)):
+                if mode == 0:
+                    rt_utl.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=1)
+                else:
+                    rt_utl.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=0)
 
-    cluster_handle_bse = fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='_base')
-    cluster_handle_end = fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='_end')
-    # Match upvec control groups to base/end cluster handles
-    match_transform(upvec_bsegrp, cluster_handle_bse, pos=1, rot=1, scl=0, moc=0)
-    match_transform(upvec_endgrp, cluster_handle_end, pos=1, rot=1, scl=0, moc=0)
-    # base/end cluster handles are constrained to upvec controls
-    # These help drive twist and orientation for the spline IK
-    cmds.parentConstraint(upvec_bsectrl, cluster_handle_bse, mo=1)
-    cmds.parentConstraint(upvec_endctrl, cluster_handle_end, mo=1)
-    cmds.parentConstraint(upvec_bsectrl, spline_ctrlgrps[0], mo=1) # upv_base, bot_ctrl
-    cmds.parentConstraint(upvec_endctrl, spline_ctrlgrps[4], mo=1) # upv_end, top_ctrl
+    ikfk_attr = f"{rt_nam.fstr('', COG_CTRL)}.{rt_nam.fstr(rigname, IKFK)}"
+    for mode in range(len(IKFK_MODES)):
+        if mode == len(IKFK_MODES)-1:
+            rt_utl.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=0)
+        else:
+            rt_utl.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=1)
 
-    return driveattr, switch_cond, spline_constraints
+def setup_switch_upvec(rigname, typ=TYPE_IK):
+    logger.debug(f"{rigname}: Space switching for upvec")
+    ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
+    ikfk_attr = f"{rt_nam.fstr('', COG_CTRL)}.{rt_nam.fstr(rigname, IKFK)}"
+
+    upvec_bsectrl = ik_controls['upvec'][0]
+    upvec_endctrl = ik_controls['upvec'][1]
+    upvec_bsegrp = ik_ctrlgrps['upvec'][0]
+    upvec_endgrp = ik_ctrlgrps['upvec'][1]
+
+    base_parents = [
+        ik_controls['spline'][0],
+        ik_controls['ik'][0],
+        ik_controls['float'][0]
+    ]
+    end_parents = [
+        ik_controls['spline'][4],
+        ik_controls['ik'][4],
+        ik_controls['float'][4]
+    ]
+
+    base_constr = cmds.parentConstraint(base_parents, upvec_bsegrp, mo=1)[0]
+    end_constr = cmds.parentConstraint(end_parents, upvec_endgrp, mo=1)[0]
+    upvec_SDKs = {
+        base_constr: base_parents,
+        end_constr: end_parents
+    }
+
+    for constr, parents in upvec_SDKs.items():
+        for i, parent in enumerate(parents):
+            for mode in range(len(IKFK_MODES)):
+                if mode == len(IKFK_MODES)-1 or mode != i:
+                    rt_utl.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=0)
+                else:
+                    rt_utl.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=1)
+
+    for grp in (upvec_bsegrp, upvec_endgrp):
+        for mode in range(len(IKFK_MODES)):
+            if mode == len(IKFK_MODES)-1:
+                rt_utl.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=0)
+            else:
+                rt_utl.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=1)
+
+    cluster_handle_bse = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='base')
+    cluster_handle_end = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='end')
+
+    cmds.parentConstraint(upvec_bsectrl, cluster_handle_bse)
+    cmds.parentConstraint(upvec_endctrl, cluster_handle_end)

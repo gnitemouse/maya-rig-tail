@@ -1,27 +1,35 @@
 '''
-# rig_tail_stretchy.py
-author: Daisy Jane Lee @dayzl
+# rig_tail_stretch.py
+author: Daisy Jane @dayzl
 
 Squash and Stretch for Rig Tail
 '''
 
 import maya.cmds as cmds
-import maya.api.OpenMaya as om
 from logger_config import logger_setup
-import rig_tail_constants as cst
 from rig_tail_constants import *
-from rig_tail_util import *
+import rig_tail_constants as rt_cst
+import rig_tail_naming as rt_nam
+import rig_tail_maya as rt_mya
+import rig_tail_util as rt_utl
 
 logger = logger_setup(__name__)
 
 
-# SQUASH AND STRETCH ===================================================
+# BUILD STRETCH NODES (Called from rig_tail) ===========================
 
-def build_squash_stretch(rigname, curve, joints, typ):
+def build_stretch(rigname, curve, joints, typ):
     '''
-    Squash and stretch setup.
-    Creates independent stretch (length) and squash (thickness) controls.
-    Volume preservation will enable squash during stretch.
+    Build stretch/squash node network WITHOUT creating attributes.
+    Attributes are created later in rig_tail_connect.add_basectrl_attributes().
+
+    This function only creates:
+    - curveInfo nodes for measurement
+    - Remap nodes (stretch_remap, squash_remap) waiting for connections
+    - Stretch calculation nodes (ratio, pma, clamp)
+    - Squash calculation nodes (volume, blend)
+    - World scale nodes (scale_world, squash_world)
+    - Joint multiply nodes (stretch_mult, squash_mult)
 
     Arguments
         rigname (str): Name of rig component
@@ -29,370 +37,499 @@ def build_squash_stretch(rigname, curve, joints, typ):
         joints (str list): List of joint names
         typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
     '''
-    logger.info(f"Build squash and stretch on '{typ}{rigname}'")
-    basectrl = fstr(rigname, BASECTRL)
+    logger.info(f"{typ}_{rigname}: Build Stretch")
 
+    # Create curveInfo for measurement
     curvelen = set_curveinfo_stretch(rigname, curve, typ)
     if not curvelen:
         logger.error('Failed to create scale curveInfo')
+        return
 
-    # Create and connect attributes
-    stretch_attr, squash_attr = add_attribute_squash_stretch(
-            rigname, basectrl, curvelen, typ)
+    # Create remap nodes (will be connected in connect phase)
+    stretch_remap, squash_remap = remap_stretch_attr(rigname)
 
-    # Setup stretch (scaleX)
-    stretch_ratio, stretch_mult_nodes = setup_joint_stretch(
-            rigname, joints, curvelen, stretch_attr, typ)
+    # Create stretch calculation nodes
+    stretch_ratio = create_stretch(rigname, joints, curvelen, stretch_remap, typ)
 
-    # Setup squash (scaleY,scaleZ)
-    squash_pma, squash_mult_nodes = setup_joint_squash(
-            rigname, basectrl, joints, curvelen, squash_attr, stretch_ratio, typ)
+    # Create squash calculation nodes
+    squash_blend, squash_pma = create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ)
 
-    # Connect control to world scale
-    scale_grp, scale_mult, scale_mult_fk = stretchy_world_scale_mod(
-            rigname, basectrl, squash_pma, squash_mult_nodes, typ)
+    # Create world scale nodes
+    scale_world, squash_world = create_world_scale(rigname, squash_pma)
 
-def setup_joint_stretch(rigname, joints, curvelen, stretch_attr, typ):
+    # Create joint multiply nodes (prepare for connection)
+    stretch_jnt_mult, squash_jnt_mult = create_joint_mult(rigname, joints, typ)
+
+
+# CONNECT STRETCH (Called from rig_tail_connect) =======================
+
+def connect_stretch_to_joints(rigname, basectrl, fk, ik):
     '''
-    Set up stretch for joints.
-    Create stretch calculation and application network.
-    Apply proportional scaling to maintain joint spacing during stretch.
+    Connect stretch system to joints.
+    Called from rig_tail_connect.connect_stretch() after attributes are created.
 
-    Blend between original joint length and stretched length based on stretch attribute.
-    Calculate stretch ratio and apply transform to translateX.
-    For IK, stretch_mult = stretch_attr / current_len
-            stretch_ratio = stretch_mult * 2 (0-2 range)
-    For FK, stretch_ratio = stretch_attr.attributesBlender * 2 (0-2 range)
+    This connects:
+    - Basectrl preserveVolume -> squash blend
+    - World scale nodes -> scale_grp
+    - Squash nodes -> joint multiply nodes
+    - Joint multiply nodes -> joint scaleY/Z
 
     Arguments
         rigname (str): Name of rig component
-        joints (str list): List of joint names to apply stretch to
-        curvelen (str): CurveInfo or remapValue node providing curve length
-        stretch_attr (str): Stretch length according to stretch attribute
-        typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
-
-    Return (tuple)
-        stretch_ratio (str): multiplyDivide node for stretch ratio calculation
-        stretch_mult_nodes (str list): multiplyDivide nodes for individual joints (if needed)
+        basectrl (str): Base control with squash/stretch attr
+        fk (bool): Connect FK stretch
+        ik (bool): Connect IK stretch
     '''
-    if cmds.nodeType(curvelen) == 'curveInfo':
-        crvlen = f"{curvelen}.arcLength"
-        # Get initial length from custom attribute
-        initial_len = cmds.getAttr(f"{curvelen}.initial_length")
-    elif cmds.nodeType(curvelen) == 'remapValue':
-        crvlen = f"{curvelen}.outValue"
-        initial_len = cmds.getAttr(f"{curvelen}.outputMax")
-    else:
-        logger.error(f"Unrecognized curvelen '{curvelen}'")
-    logger.debug(f"curvelen '{curvelen}' initial_len {initial_len:.3f}")
+    logger.debug(f'{rigname}: Connect stretch to joints')
 
-    if typ == TYPE_IK: # IK: Reactive stretch based on current curve length
-        # (multiplyDivide) stretch_mult = stretch_attr / current_len
-        stretch_mult = f"{typ}{rigname}_stretch_mult_multiplyDivide"
-        cmds.createNode('multiplyDivide', n=stretch_mult, s=1, ss=1)
-        cmds.setAttr(f"{stretch_mult}.operation", 2) # divide
-        cmds.connectAttr(f"{stretch_attr}.output", f"{stretch_mult}.input1X", f=1)
-        cmds.connectAttr(crvlen, f"{stretch_mult}.input2X", f=1) # current_len
+    # Connect preserveVolume attribute to squash blend
+    squash_blend = f'{rigname}_squash_volume_blendTwoAttr'
+    connect_preserve_volume(rigname, basectrl, squash_blend)
 
-        # (multiplyDivide) stretch_ratio - Multiply by 2 to get 0-2 range
-        stretch_ratio = f"{typ}{rigname}_stretch_ratio_multiplyDivide"
-        cmds.createNode('multiplyDivide', n=stretch_ratio, s=1, ss=1)
-        cmds.setAttr(f"{stretch_ratio}.operation", 1) # multiply
-        cmds.setAttr(f"{stretch_ratio}.input2X", 2)
-        cmds.connectAttr(f"{stretch_mult}.outputX", f"{stretch_ratio}.input1X", f=1)
+    # Connect world scale
+    scale_world = f'{rigname}_scale_world_multiplyDivide'
+    connect_world_scale(rigname, basectrl, scale_world)
 
-    elif typ == TYPE_FK: # FK: Direct multiplier from stretch attribute
-        # (multiplyDivide) stretch_ratio = stretch_attr.attributesBlender * 2
-        stretch_ratio = f"{typ}{rigname}_stretch_ratio_multiplyDivide"
-        cmds.createNode('multiplyDivide', n=stretch_ratio, s=1, ss=1)
-        cmds.setAttr(f"{stretch_ratio}.operation", 1) # multiply
-        cmds.connectAttr(f"{stretch_attr}.attributesBlender", f"{stretch_ratio}.input1X", f=1)
-        cmds.setAttr(f"{stretch_ratio}.input2X", 2)
-
-    else:
-        logger.error('Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+    # Connect joint squash
+    squash_world = f'{rigname}_squash_world_multiplyDivide'
+    connect_joint_squash(rigname, basectrl, squash_world)
 
     # Apply stretch to joints
-    stretch_mult_nodes = list()
-    if typ == TYPE_FK:
-        for i, jnt in enumerate(joints[1:], 1): # Skip first joint
-            first_sdk = fstr(rigname, SDK_GRP, typ, i, 1)
-            # Create individual joint stretch multiplier
-            jnt_mult = f'{typ}{rigname}_stretch_{i:02d}_multiplyDivide'
-            cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
-            cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
-            cmds.setAttr(f'{jnt_mult}.input1X', cmds.getAttr(f'{first_sdk}.translateX'))
-            cmds.connectAttr(f'{stretch_ratio}.outputX', f'{jnt_mult}.input2X', f=1)
-            cmds.setAttr(f'{first_sdk}.translateX', 0)
+    if ik:
+        stretch_ratio = f'{TYPE_IK}_{rigname}_stretch_ratio'
+        connect_ik_stretch_to_joints(rigname, rt_cst.JOINTS_IK[rigname], stretch_ratio, TYPE_IK)
+    if fk:
+        stretch_ratio = f'{TYPE_FK}_{rigname}_stretch_ratio'
+        connect_fk_stretch_to_joints(rigname, rt_cst.JOINTS_FK[rigname], stretch_ratio, TYPE_FK)
 
-            # Connect scaling to ctrl_sdk
-            ctrl_sdk = fstr(rigname, SDK_CTRL, typ, i)
-            if cmds.objExists(ctrl_sdk):
-                cmds.connectAttr(f'{jnt_mult}.outputX', f'{ctrl_sdk}.translateX', f=1)
-            else: # Fallback to joint if ctrl_sdk not found
-                cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.translateX', f=1)
-                logger.error(f"SDK control '{ctrl_sdk}' not found for FK stretch")
-            stretch_mult_nodes.append(jnt_mult)
+def add_stretch_attributes_to_basectrl(rigname, basectrl):
+    if not rt_cst.EFFECTS['stretchy']:
+        return
+    rt_utl.add_attribute_enum(basectrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
 
-    elif typ == TYPE_IK:
-        for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
-            jnt_mult = f'{typ}{rigname}_stretch_{i:02d}_multiplyDivide'
-            cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
-            cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
-            cmds.setAttr(f'{jnt_mult}.input1X', 1)
-            cmds.connectAttr(f'{stretch_ratio}.outputX', f'{jnt_mult}.input2X', f=1)
-            # Connect scaling to jnt
-            cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.scaleX', f=1)
-            stretch_mult_nodes.append(jnt_mult)
+    if not cmds.attributeQuery('stretch', n=basectrl, ex=1):
+        cmds.addAttr(basectrl, ln='stretch', at='float', k=1, dv=0, min=-10, max=10)
+    if not cmds.attributeQuery('squash', n=basectrl, ex=1):
+        cmds.addAttr(basectrl, ln='squash', at='float', k=1, dv=0, min=-10, max=10)
+    if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
+        cmds.addAttr(basectrl, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
 
-    return stretch_ratio, stretch_mult_nodes
+    rt_utl.add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
 
-def setup_joint_squash(rigname, control, joints, curvelen, squash_attr, stretch_ratio, typ):
+    for i, bn_jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
+        if not cmds.attributeQuery(f'jntScaleYZ{i:02}', n=basectrl, ex=1):
+            cmds.addAttr(basectrl, ln=f'jntScaleYZ{i:02}', at='float', k=1, dv=1, min=0.5, max=10)
+
+
+# CREATE NODES =========================================================
+
+def remap_stretch_attr(rigname):
     '''
-    Set up squash for joints.
-    Create squash (thickness) control with volume preservation.
-    Includes volume-preserving squash (automatic thinning during stretch) and
-    user-controlled squash (manual adjustment). Only affects scaleY/scaleZ.
-
-    Create two separate squash calculations:
-    1. Volume-preserving squash (based on stretch)
-       Gets thinner as the joint chain stretches longer.
-       scale_Y_Z = sqrt(1/stretch_ratio)^0.5
-    2. User-controlled squash (based on squash attribute)
+    Create remap nodes for stretch and squash.
+    These will be connected to basectrl attributes in connect phase.
 
     Arguments
         rigname (str): Name of rig component
-        control (str): Name of basectrl
-        joints (list): List of joint names to apply squash to
-        curvelen (str): CurveInfo or remapValue node providing curve length data
-        squash_attr (str): Remapped squash attribute
-        stretch_ratio (str): Stretch multiplier node for volume preservation
-        typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
-
-    Return (tuple)
-        squash_pma (str): user squash control node, plusMinusAverage
-        squash_mult_nodes (str list): List of scale multiplyDivide nodes
-    '''
-    if cmds.nodeType(curvelen) == 'curveInfo':
-        crvlen = f"{curvelen}.arcLength"
-    elif cmds.nodeType(curvelen) == 'remapValue':
-        crvlen = f"{curvelen}.outValue"
-    else:
-        logger.error(f"Unrecognized curvelen '{curvelen}'")
-
-    # (multiplyDivide) squash_mult - Inverse sqrt for volume preservation
-    # Automatically thin when stretching
-    squash_mult = f'{typ}{rigname}_squash_volume_multiplyDivide'
-    cmds.createNode('multiplyDivide', n=squash_mult, s=1, ss=1)
-    cmds.setAttr(f'{squash_mult}.operation', 3)  # power
-    cmds.connectAttr(f'{stretch_ratio}.outputX', f'{squash_mult}.input1X', f=1)
-    cmds.setAttr(f'{squash_mult}.input2X', -0.5) # sqrt(1/stretch_ratio)
-
-    # (blendTwoAttr) squash_vol - Blend volume preservation on/off
-    # Allows disabling automatic volume preservation
-    squash_vol = f'{typ}{rigname}_squash_volume_blendTwoAttr'
-    cmds.createNode('blendTwoAttr', n=squash_vol, s=1, ss=1)
-    cmds.setAttr(f'{squash_vol}.input[0]', 1.0)  # no volume preservation
-    cmds.connectAttr(f'{squash_mult}.outputX', f'{squash_vol}.input[1]', f=1)
-    cmds.setAttr(f'{squash_vol}.attributesBlender', 1) # Default On
-    # Connect volume preservation toggle
-    cmds.connectAttr(f'{control}.preserveVolume', f'{squash_vol}.attributesBlender', f=1)
-
-    # (plusMinusAverage) squash_pma - Add user squash control
-    # Combines volume preservation with manual squash control
-    squash_pma = f'{typ}{rigname}_squash_plusMinusAverage'
-    cmds.createNode('plusMinusAverage', n=squash_pma, s=1, ss=1)
-    cmds.setAttr(f'{squash_pma}.operation', 1)  # sum
-    cmds.connectAttr(f'{squash_vol}.output', f'{squash_pma}.input1D[0]', f=1)
-    # Connect user squash attribute
-    cmds.connectAttr(f'{squash_attr}.outputX', f'{squash_pma}.input1D[1]', f=1)
-
-    # Apply squash to joint scale, Only scaleY scaleZ
-    squash_mult_nodes = list()
-    if typ == TYPE_FK:
-        for i, jnt in enumerate(joints):
-            jnt_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
-            cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
-            cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
-            cmds.setAttr(f'{jnt_mult}.input1Y', 1)
-            cmds.setAttr(f'{jnt_mult}.input1Z', 1)
-            # cmds.connectAttr(f'{squash_blend}.output', f'{jnt_mult}.input1Y', f=1)
-            # cmds.connectAttr(f'{squash_blend}.output', f'{jnt_mult}.input1Z', f=1)
-            # Input1Y/Z will be connected from squash_world in stretchy_world_scale_mod
-            cmds.setAttr(f'{jnt_mult}.input2Y', 1)
-            cmds.setAttr(f'{jnt_mult}.input2Z', 1)
-
-            if i > 0:
-                jnt_div = f'{typ}{rigname}_squash_div_{i:02d}_multiplyDivide'
-                cmds.createNode('multiplyDivide', n=jnt_div, s=1, ss=1)
-                cmds.setAttr(f'{jnt_div}.operation', 2)  # divide
-                cmds.connectAttr(f'{jnt_mult}.outputY', f'{jnt_div}.input1Y', f=1)
-                cmds.connectAttr(f'{jnt_mult}.outputZ', f'{jnt_div}.input1Z', f=1)
-                cmds.connectAttr(f'{prev_mult}.outputY', f'{jnt_div}.input2Y', f=1)
-                cmds.connectAttr(f'{prev_mult}.outputZ', f'{jnt_div}.input2Z', f=1)
-                squash_out = jnt_div
-            else:
-                squash_out = jnt_mult
-            squash_mult_nodes.append(jnt_mult)
-
-            # Connect scaling to ctrl_sdk
-            ctrl_sdk = fstr(rigname, SDK_CTRL, typ, i)
-            if cmds.objExists(ctrl_sdk): # Connect to SDK
-                cmds.connectAttr(f'{squash_out}.outputY', f'{ctrl_sdk}.scaleY', f=1)
-                cmds.connectAttr(f'{squash_out}.outputZ', f'{ctrl_sdk}.scaleZ', f=1)
-            else: # Fallback to joint if SDK not found
-                logger.warning(f"SDK '{ctrl_sdk}' not found for FK squash")
-                cmds.connectAttr(f'{squash_out}.outputY', f'{jnt}.scaleY', f=1)
-                cmds.connectAttr(f'{squash_out}.outputZ', f'{jnt}.scaleZ', f=1)
-            prev_mult = jnt_mult
-
-    elif typ == TYPE_IK:
-        for i, jnt in enumerate(joints):
-            jnt_mult = f'{typ}{rigname}_squash_{i:02d}_multiplyDivide'
-            cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
-            cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
-            cmds.setAttr(f'{jnt_mult}.input1Y', 1)
-            cmds.setAttr(f'{jnt_mult}.input1Z', 1)
-            # Input1Y/Z will be connected from squash_world in stretchy_world_scale_mod
-            cmds.setAttr(f'{jnt_mult}.input2Y', 1)
-            cmds.setAttr(f'{jnt_mult}.input2Z', 1)
-            # cmds.connectAttr(f'{squash_blend}.output', f'{jnt_mult}.input1Y', f=1)
-            # cmds.connectAttr(f'{squash_blend}.output', f'{jnt_mult}.input1Z', f=1)
-            # Connect scaling to joint
-            cmds.connectAttr(f'{jnt_mult}.outputY', f'{jnt}.scaleY', f=1)
-            cmds.connectAttr(f'{jnt_mult}.outputZ', f'{jnt}.scaleZ', f=1)
-            squash_mult_nodes.append(jnt_mult)
-
-    return squash_pma, squash_mult_nodes
-
-def add_attribute_squash_stretch(rigname, control, curvelen, typ):
-    '''
-    Create user-facing attributes and remap their values.
-    Add attributes to basectrl:
-        - stretch (-10 to 10, default 0)
-        - squash (-10 to 10, default 0)
-        - preserveVolume (0 to 1, default 1)
-    Maps user-friendly ranges to 0-1 blend values for intuitive control.
 
     Return
-    stretch_blend (str): Stretch blend node
-    squash_remap (str): Squash remap node
+        stretch_remap (str): Stretch remap node (-0.5 to 0.5)
+        squash_remap (str): Squash remap node (-0.5 to 0.5)
     '''
-    if cmds.nodeType(curvelen) == 'curveInfo':
-        crvlen = f"{curvelen}.arcLength"
-        # Get initial length from custom attribute
-        initial_len = cmds.getAttr(f"{curvelen}.initial_length")
-    elif cmds.nodeType(curvelen) == 'remapValue':
-        crvlen = f"{curvelen}.outValue"
-        initial_len = cmds.getAttr(f"{curvelen}.outputMax")
-    else:
-        logger.error(f"Unrecognized curvelen '{curvelen}'")
-    logger.debug(f"curvelen '{curvelen}' initial_len {initial_len:.3f}")
+    # Stretch remap: -10 to 10 -> -0.5 to 0.5
+    stretch_remap = f'{rigname}_stretch_remap_multiplyDivide'
+    if not cmds.objExists(stretch_remap):
+        cmds.createNode('multiplyDivide', n=stretch_remap, s=1, ss=1)
+        cmds.setAttr(f'{stretch_remap}.operation', 1)  # multiply
+        cmds.setAttr(f'{stretch_remap}.input2X', 0.05)
 
-    add_attribute_enum(control, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
-    # Add stretch attribute (0 = no stretch, 10 = full stretch)
-    if not cmds.attributeQuery('stretch', n=control, ex=1):
-        cmds.addAttr(control, ln='stretch', at='float', k=1, dv=0, min=-10, max=10)
-    # Add squash attribute (-10 to 10, 0 = no change, negative = contract, positive = expand)
-    if not cmds.attributeQuery('squash', n=control, ex=1):
-        cmds.addAttr(control, ln='squash', at='float', k=1, dv=0, min=-10, max=10)
-    # Add volume preservation attribute (0 = disabled, 1 = squash during stretch)
-    if not cmds.attributeQuery('preserveVolume', n=control, ex=1):
-            cmds.addAttr(control, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
+    # Squash remap: -10 to 10 -> -0.5 to 0.5
+    squash_remap = f'{rigname}_squash_remap_multiplyDivide'
+    if not cmds.objExists(squash_remap):
+        cmds.createNode('multiplyDivide', n=squash_remap, s=1, ss=1)
+        cmds.setAttr(f'{squash_remap}.operation', 1)  # multiply
+        cmds.setAttr(f'{squash_remap}.input2X', 0.05)
 
-    # (multiplyDivide) Stretch remapping -10 to 10 -> -0.5 to 0.5
-    stretch_remap = f'{typ}{rigname}_stretch_remap_multiplyDivide'
-    cmds.createNode('multiplyDivide', n=stretch_remap, s=1, ss=1)
-    cmds.setAttr(f'{stretch_remap}.operation', 1) # multiply
-    cmds.setAttr(f'{stretch_remap}.input2X', 0.05)
-    cmds.connectAttr(f'{control}.stretch', f'{stretch_remap}.input1X', f=1)
+    logger.debug(f"Created remap nodes '{stretch_remap}' '{squash_remap}'")
+    return stretch_remap, squash_remap
 
-    # (plusMinusAverage) Add 0.5 offset -> 0 to 1 range (0 stretch = 0.5 blend)
-    stretch_offset = f'{typ}{rigname}_stretch_offset_plusMinusAverage'
-    cmds.createNode('plusMinusAverage', n=stretch_offset, s=1, ss=1)
-    cmds.setAttr(f'{stretch_offset}.operation', 1) # sum
-    cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_offset}.input1D[0]', f=1)
-    cmds.setAttr(f'{stretch_offset}.input1D[1]', 0.5)
-
-    # (blendTwoAttr) stretch_blend - Blend between no stretch and full stretch
-    stretch_blend = f"{typ}{rigname}_stretch_blendTwoAttr"
-    cmds.createNode('blendTwoAttr', n=stretch_blend, s=1, ss=1)
-    cmds.setAttr(f"{stretch_blend}.input[0]", 0) # no stretch
-    cmds.setAttr(f"{stretch_blend}.input[1]", initial_len) # full stretch
-    cmds.connectAttr(f'{stretch_offset}.output1D', f'{stretch_blend}.attributesBlender', f=1)
-
-    # (multiplyDivide) Squash remapping -10 to 10 -> -0.5 to 0.5
-    squash_remap = f'{typ}{rigname}_squash_remap_multiplyDivide'
-    cmds.createNode('multiplyDivide', n=squash_remap, s=1, ss=1)
-    cmds.setAttr(f'{squash_remap}.operation', 1) # multiply
-    cmds.setAttr(f'{squash_remap}.input2X', 0.05) # squash factor
-    cmds.connectAttr(f'{control}.squash', f'{squash_remap}.input1X', f=1)
-
-    return stretch_blend, squash_remap
-
-def stretchy_world_scale_mod(rigname, control, squash_pma, squash_mult_nodes, typ):
+def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
     '''
-    Compensate for rig scaling to maintain proportions.
-    Create scale_grp constrained to basectrl
-    Divide squash by world_scale^2 and connect to all joint multiply nodes.
-    This prevents squash from being affected by overall rig scaling.
+    Create stretch calculation node network.
+
+    IK: Reactive stretch (curve length / initial length) + user stretch
+    FK: User stretch only (0 to 2 range)
 
     Arguments
         rigname (str): Name of rig component
-        control (str): Name of control object to constrain scale group to
-        squash_pma (str): User squash plusMinusAverage node
-        squash_mult_nodes (list): List of joint squash multiplyDivide nodes
-        typ (str): Rig type identifier (TYPE_FK, TYPE_IK)
+        joints (str list): list of joints
+        curvelen (str): Curve length node
+        typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
 
-    Return (tuple)
-        scale_grp (str): scale group
-        scale_mult (str): world scale multiplyDivide node
-        scale_constraint (str): scaleConstraint on scale group
+    Return
+        stretch_ratio (str): Stretch ratio multiplier
     '''
-    # Cleanup old scale group
-    remove(f'{rigname}_measure_scale{GRP}')
+    if cmds.nodeType(curvelen) == 'curveInfo':
+        crvlen = f'{curvelen}.arcLength'
+        initial_len = cmds.getAttr(f'{curvelen}.initial_length')
+    elif cmds.nodeType(curvelen) == 'remapValue':
+        crvlen = f'{curvelen}.outValue'
+        initial_len = cmds.getAttr(f'{curvelen}.outputMax')
+    else:
+        logger.error(f'Unrecognized curvelen {curvelen}')
+        return
+    logger.debug(f'curvelen {curvelen} initial_len {initial_len:.3f}')
 
-    scale_grp = fstr(rigname, SCALE_GRP)
-    # Set scale visibilty for scale group
+    if typ == TYPE_IK:
+        # IK: Reactive stretch based on current curve length
+
+        # (multiplyDivide) reactive stretch ratio (current_len / initial_len)
+        stretch_reactive = f'{typ}_{rigname}_stretch_reactive_multiplyDivide'
+        cmds.createNode('multiplyDivide', n=stretch_reactive, s=1, ss=1)
+        cmds.setAttr(f'{stretch_reactive}.operation', 2)  # divide
+        cmds.connectAttr(crvlen, f'{stretch_reactive}.input1X', f=1)
+        cmds.setAttr(f'{stretch_reactive}.input2X', initial_len)
+
+        # (blendTwoAttr) Blend reactive stretch on/off with preserveVolume
+        stretch_preservevol = f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr'
+        cmds.createNode('blendTwoAttr', n=stretch_preservevol, s=1, ss=1)
+        cmds.setAttr(f'{stretch_preservevol}.input[0]', 1.0)  # No reactive
+        cmds.connectAttr(f'{stretch_reactive}.outputX', f'{stretch_preservevol}.input[1]', f=1)
+        # preserveVolume connection made later in connect phase
+
+        # (plusMinusAverage) user stretch + reactive stretch
+        stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
+        cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
+        cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
+        cmds.connectAttr(f'{stretch_preservevol}.output', f'{stretch_pma}.input1D[0]', f=1)
+        cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_pma}.input1D[1]', f=1)
+
+        # (clamp) stretch_ratio - 0.1 to 2.0
+        stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
+        cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
+        cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
+        cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
+        cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
+
+    elif typ == TYPE_FK:
+        # FK: Direct multiplier from stretch attribute
+
+        # (multiplyDivide) double user stretch
+        stretch_mult = f'{typ}_{rigname}_stretch_double_multiplyDivide'
+        cmds.createNode('multiplyDivide', n=stretch_mult, s=1, ss=1)
+        cmds.setAttr(f'{stretch_mult}.operation', 1)  # multiply
+        cmds.setAttr(f'{stretch_mult}.input1X', 2)
+        cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_mult}.input2X', f=1)
+
+        # (plusMinusAverage) user stretch range - 0 to 2
+        stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
+        cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
+        cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
+        cmds.setAttr(f'{stretch_pma}.input1D[0]', 1)  # Base ratio = 1
+        cmds.connectAttr(f'{stretch_mult}.outputX', f'{stretch_pma}.input1D[1]', f=1)
+
+        # (clamp) stretch_ratio
+        stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
+        cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
+        cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
+        cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
+        cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
+
+    else:
+        logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+
+    return stretch_ratio
+
+def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
+    '''
+    Create squash calculation node network.
+    Volume-preserving squash based on stretch ratio.
+
+    Arguments
+        rigname (str): Name of rig component
+        curvelen (str): Curve length node
+        squash_remap (str): Squash remap node (-0.5 to 0.5)
+        stretch_ratio (str): Stretch ratio multiplier
+        typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
+
+    Return
+        squash_blend (str): Volume preservation blend (reactive squash)
+        squash_pma (str): Reactive squash + user squash
+    '''
+    if cmds.nodeType(curvelen) == 'curveInfo':
+        crvlen = f'{curvelen}.arcLength'
+    elif cmds.nodeType(curvelen) == 'remapValue':
+        crvlen = f'{curvelen}.outValue'
+    else:
+        logger.error(f'Unrecognized curvelen {curvelen}')
+
+    # (multiplyDivide) squash_vol - Inverse sqrt for volume preservation
+    squash_vol = f'{rigname}_squash_volume_multiplyDivide'
+    if not cmds.objExists(squash_vol):
+        cmds.createNode('multiplyDivide', n=squash_vol, s=1, ss=1)
+        cmds.setAttr(f'{squash_vol}.operation', 3)  # power
+        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{squash_vol}.input1X', f=1)
+        cmds.setAttr(f'{squash_vol}.input2X', -0.5)
+
+    # (blendTwoAttr) squash_blend - Blend volume preservation on/off
+    squash_blend = f'{rigname}_squash_volume_blendTwoAttr'
+    if not cmds.objExists(squash_blend):
+        cmds.createNode('blendTwoAttr', n=squash_blend, s=1, ss=1)
+        cmds.setAttr(f'{squash_blend}.input[0]', 1.0)
+        cmds.connectAttr(f'{squash_vol}.outputX', f'{squash_blend}.input[1]', f=1)
+        # preserveVolume connection made later in connect phase
+
+    # (plusMinusAverage) squash_pma - Add user squash control
+    squash_pma = f'{rigname}_squash_user_plusMinusAverage'
+    if not cmds.objExists(squash_pma):
+        cmds.createNode('plusMinusAverage', n=squash_pma, s=1, ss=1)
+        cmds.setAttr(f'{squash_pma}.operation', 1)  # sum
+        cmds.connectAttr(f'{squash_blend}.output', f'{squash_pma}.input1D[0]', f=1)
+        cmds.connectAttr(f'{squash_remap}.outputX', f'{squash_pma}.input1D[1]', f=1)
+
+    logger.debug(f"Created squash nodes '{squash_vol}' '{squash_blend}' '{squash_pma}'")
+    return squash_blend, squash_pma
+
+def create_world_scale(rigname, squash_pma):
+    '''
+    Create world scale compensation nodes.
+    Prevents squash from being affected by overall rig scaling.
+
+    Arguments
+        rigname (str): Name of rig component
+        squash_pma (str): Reactive squash + user squash
+
+    Return
+        scale_world (str): World scale volume based on scale_grp
+        squash_world (str): World scale compensation node
+    '''
+    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+
+    # Set scale visibility for scale group
     for axis in 'XYZ':
-        if cmds.attributeQuery(f"scale{axis}", n=scale_grp, ex=1):
-            cmds.setAttr(f"{scale_grp}.scale{axis}", k=0, cb=1, l=0) # Show CB
+        if cmds.attributeQuery(f'scale{axis}', n=scale_grp, ex=1):
+            cmds.setAttr(f'{scale_grp}.scale{axis}', k=0, cb=1, l=0)
 
-    # Constrain scale group to basectrl
-    constr_scale_grp = get_constraint(scale_grp, typ='scaleConstraint')
-    if not constr_scale_grp:
-        constr_scale_grp = cmds.scaleConstraint(control, scale_grp, mo=1)[0]
+    # (multiplyDivide) scale_world - Square scale value for volume compensation
+    scale_world = f'{rigname}_scale_world_multiplyDivide'
+    if not cmds.objExists(scale_world):
+        cmds.createNode('multiplyDivide', n=scale_world, s=1, ss=1)
+        cmds.setAttr(f'{scale_world}.operation', 1)  # multiply
+        # Connections made later in connect phase
 
-    # Use scale group for world scale calculation (avoids feedback)
-    scale_mult = f'{typ}{rigname}_world_scale_multiplyDivide'
-    if not cmds.objExists(scale_mult):
-        cmds.createNode('multiplyDivide', n=scale_mult, s=1, ss=1)
-        cmds.setAttr(f'{scale_mult}.operation', 1)  # multiply
-        # Square scale value for volume compensation
-        cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_mult}.input1X', f=1)
-        cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_mult}.input2X', f=1)
-
-    # Divide squash by world scale squared
-    squash_world = f'{typ}{rigname}_squash_world_multiplyDivide'
+    # (multiplyDivide) squash_world - Divide squash by scale world squared
+    squash_world = f'{rigname}_squash_world_multiplyDivide'
     if not cmds.objExists(squash_world):
         cmds.createNode('multiplyDivide', n=squash_world, s=1, ss=1)
         cmds.setAttr(f'{squash_world}.operation', 2)  # divide
         cmds.connectAttr(f'{squash_pma}.output1D', f'{squash_world}.input1X', f=1)
-        cmds.connectAttr(f'{scale_mult}.outputX', f'{squash_world}.input2X', f=1)
+        cmds.connectAttr(f'{scale_world}.outputX', f'{squash_world}.input2X', f=1)
 
-    for jnt_mult in squash_mult_nodes:
+    logger.debug(f"Created world scale nodes '{scale_world}' '{squash_world}'")
+    return scale_world, squash_world
+
+def create_joint_mult(rigname, joints, typ):
+    '''
+    Create multiply nodes for each joint.
+    These will be connected in connect phase.
+
+    For stretch: multiply joint translateX by stretch_ratio
+    For squash: multiply base squash by per-joint scale attribute
+
+    Arguments
+        rigname (str): Name of rig component
+        joints (str list): List of joint names to apply stretch to
+        typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
+
+    Return
+        stretch_jnt_mult (str list): Stretch joint multiplier nodes
+        squash_jnt_mult (str list): Squash joint multiplier nodes
+    '''
+    logger.debug(f"{rigname}: Create joint multiply nodes")
+    # Stretch multiply nodes
+    stretch_jnt_mult = list()
+    if typ == TYPE_IK:
+        for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
+            jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
+            if not cmds.objExists(jnt_mult):
+                cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
+                cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
+            cmds.setAttr(f'{jnt_mult}.input1X', cmds.getAttr(f'{jnt}.translateX'))
+            stretch_jnt_mult.append(jnt_mult)
+
+    elif typ == TYPE_FK:
+        for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
+            jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
+            first_sdk = rt_nam.fstr(rigname, SDK_GRP, typ, i, 1)
+            if not cmds.objExists(jnt_mult):
+                cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
+                cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
+            if cmds.objExists(first_sdk):
+                cmds.setAttr(f'{jnt_mult}.input1X', cmds.getAttr(f'{first_sdk}.translateX'))
+            else:
+                logger.warning(f'SDK group {first_sdk} does not exist')
+            stretch_jnt_mult.append(jnt_mult)
+
+    # Squash multiply nodes
+    squash_jnt_mult = list()
+    for i, jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
+        jnt_mult = f'{rigname}_squash_{i:02d}_multiplyDivide'
+        if not cmds.objExists(jnt_mult):
+            cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
+            cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
+        squash_jnt_mult.append(jnt_mult)
+
+    return stretch_jnt_mult, squash_jnt_mult
+
+
+# CONNECT NODES ========================================================
+
+def connect_preserve_volume(rigname, basectrl, squash_blend):
+    '''
+    Connect preserveVolume attribute to blend nodes.
+
+    Arguments
+        rigname (str): Name of rig component
+        basectrl (str): Name of basectrl
+        squash_blend (str): Volume preservation blend (reactive squash)
+    '''
+    logger.debug(f"{rigname}: Connect preserveVolume to blend")
+    if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
+        logger.warning(f'preserveVolume attribute not found on {basectrl}')
+        return
+
+    # Check if IK nodes exist
+    stretch_preservevol = f'{TYPE_IK}_{rigname}_stretch_preservevol_blendTwoAttr'
+    if cmds.objExists(stretch_preservevol):
+        cmds.connectAttr(f'{basectrl}.preserveVolume',
+                         f'{stretch_preservevol}.attributesBlender', f=1)
+
+    # Connect to squash blend
+    if cmds.objExists(squash_blend):
+        cmds.connectAttr(f'{basectrl}.preserveVolume',
+                         f'{squash_blend}.attributesBlender', f=1)
+
+def connect_world_scale(rigname, basectrl, scale_world):
+    '''
+    Connect world scale compensation.
+    Constrains scale_grp to basectrl and connects scale nodes.
+
+    Arguments
+        rigname (str): Name of rig component
+        basectrl (str): Name of basectrl
+        scale_world (str): World scale volume based on scale_grp
+    '''
+    logger.debug(f"{rigname}: Connect world scale")
+    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    if not cmds.objExists(scale_grp):
+        logger.error(f'Scale group not found: {scale_grp}')
+
+    # Constrain scale group to basectrl
+    scale_constr = rt_mya.get_constraint(scale_grp, typ='scaleConstraint')
+    if not scale_constr:
+        scale_constr = cmds.scaleConstraint(basectrl, scale_grp, mo=1)[0]
+
+    # Connect scale_grp to scale_world node
+    if cmds.objExists(scale_world):
+        cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_world}.input1X', f=1)
+        cmds.connectAttr(f'{scale_grp}.scaleX', f'{scale_world}.input2X', f=1)
+
+def connect_joint_squash(rigname, basectrl, squash_world):
+    '''
+    Connect squash to BN joints.
+    Routes squash through multiply nodes to avoid nested scaling issues.
+
+    Arguments
+        rigname (str): Name of rig component
+        basectrl (str): Name of basectrl
+        squash_world (str): World scale compensation node
+    '''
+    logger.debug(f"{rigname}: Connect joint squash")
+    if not cmds.objExists(squash_world):
+        logger.error(f'Missing squash world node: {squash_world}')
+
+    for i, jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
+        jnt_mult = f'{rigname}_squash_{i:02d}_multiplyDivide'
+        if not cmds.objExists(jnt_mult):
+            logger.warning(f'Joint multiply node not found: {jnt_mult}')
+            continue
+
+        # Check if jntScaleYZ attribute exists
+        jnt_scale_attr = f'jntScaleYZ{i:02}'
+        if not cmds.attributeQuery(jnt_scale_attr, n=basectrl, ex=1):
+            logger.warning(f'Attribute {jnt_scale_attr} not found on {basectrl}')
+            continue
+
+        # Connect squash network to joint
         cmds.connectAttr(f'{squash_world}.outputX', f'{jnt_mult}.input1Y', f=1)
         cmds.connectAttr(f'{squash_world}.outputX', f'{jnt_mult}.input1Z', f=1)
+        cmds.connectAttr(f'{basectrl}.{jnt_scale_attr}', f'{jnt_mult}.input2Y', f=1)
+        cmds.connectAttr(f'{basectrl}.{jnt_scale_attr}', f'{jnt_mult}.input2Z', f=1)
 
-    return scale_grp, scale_mult, constr_scale_grp
+        # Apply to joint
+        cmds.connectAttr(f'{jnt_mult}.outputY', f'{jnt}.scaleY', f=1)
+        cmds.connectAttr(f'{jnt_mult}.outputZ', f'{jnt}.scaleZ', f=1)
+
+def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
+    '''
+    Connect IK stretch to joints.
+
+    Arguments
+        rigname (str): Name of rig component
+        joints (list): List of joint names to apply squash to
+        stretch_ratio (str): Stretch ratio multiplier
+        typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
+    '''
+    logger.debug(f"{rigname}: Connect IK stretch to joints")
+    if not cmds.objExists(stretch_ratio):
+        logger.error(f'Stretch ratio node not found: {stretch_ratio}')
+
+    for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
+        jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
+        if not cmds.objExists(jnt_mult):
+            logger.warning(f'Joint multiply node not found: {jnt_mult}')
+            continue
+
+        # Connect stretch ratio to multiply node
+        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{jnt_mult}.input2X', f=1)
+        # Connect to joint translateX
+        cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.translateX', f=1)
+
+def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
+    '''
+    Connect FK stretch to SDK groups.
+
+    Arguments
+        rigname (str): Name of rig component
+        joints (list): List of joint names to apply squash to
+        stretch_ratio (str): Stretch ratio multiplier
+        typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
+    '''
+    logger.debug(f"{rigname}: Connect FK stretch to SDK groups")
+
+    if not cmds.objExists(stretch_ratio):
+        logger.error(f'Stretch ratio node not found: {stretch_ratio}')
+
+    for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
+        jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
+        first_sdk = rt_nam.fstr(rigname, SDK_GRP, typ, i, 1)
+        if not cmds.objExists(jnt_mult):
+            logger.warning(f'Joint multiply node not found: {jnt_mult}')
+            continue
+        if not cmds.objExists(first_sdk):
+            logger.warning(f'SDK group not found: {first_sdk}')
+            continue
+
+        # Connect stretch ratio to multiply node
+        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{jnt_mult}.input2X', f=1)
+        # Connect to SDK group translateX
+        cmds.connectAttr(f'{jnt_mult}.outputX', f'{first_sdk}.translateX', f=1)
 
 
-# MEASURE SCALE CURVE ==================================================
+# MEASURE CURVE LENGTH =================================================
 
 def set_curveinfo_stretch(rigname, curve, typ=''):
     '''
-    Set up squash and stretch curve measurement system.
-    Measure curve length for reactive stretching.
+    Set up curve measurement system for stretch.
 
     - FK: Measure the skinned curve
     - IK: Measure the solver curve (used by ikHandle)
@@ -400,48 +537,57 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     Arguments
         curve (str): Name of curve
         rigname (str): Name of rig part
-        typ (str): TYPE (FK,IK,BN)
+        typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
 
-    Return (tuple)
+    Return
         scale_curveinfo (str): Scaling curveInfo node
     '''
-    if not cmds.objExists(curve): # Ensure curve exists
-        logger.error(f"Curve '{curve}' does not exist")
+    if not cmds.objExists(curve):
+        logger.error(f'Curve {curve} does not exist')
 
-    # Create curveInfo on curve for stretchy measurement
-    scale_crvinfo = f"{typ}{rigname}_scale_curveInfo"
+    # Create curveInfo on curve
+    scale_crvinfo = f'{typ}_{rigname}_scale_curveInfo'
     cmds.createNode('curveInfo', n=scale_crvinfo, s=1, ss=1)
 
-    # Connect curve's worldSpace to curveInfo to measure its length
+    # Connect curve's worldSpace to curveInfo
     curve_shape = cmds.listRelatives(curve, s=1, ni=1)[0]
-    cmds.connectAttr(f"{curve_shape}.worldSpace[0]", f"{scale_crvinfo}.inputCurve", f=1)
+    cmds.connectAttr(f'{curve_shape}.worldSpace[0]', f'{scale_crvinfo}.inputCurve', f=1)
 
     # Get initial_len and store as custom attribute
     cmds.dgeval(f'{scale_crvinfo}.arcLength')
     initial_len = cmds.getAttr(f'{scale_crvinfo}.arcLength')
     cmds.addAttr(scale_crvinfo, ln='initial_length', at='float', dv=initial_len)
+
     if initial_len <= 0:
-        logger.warning(f"Initial length of curve '{curve}' is invalid {initial_len:.3f}")
+        logger.warning(f"Curve '{curve}' - initial_len is invalid {initial_len:.3f}")
     else:
-        logger.info(f"Measuring curve '{curve}' with initial length {initial_len:.3f}")
+        logger.debug(f"Curve '{curve}' - initial_len {initial_len:.3f}")
+
     return scale_crvinfo
 
 def fallback_curve_length(rigname, typ):
     '''
     Fallback method using joint positions when curve method fails.
+
+    Arguments
+        rigname (str): Name of rig component
+        typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
+
+    Return
+        fallback_crvlen (str): fallback curve length remapValue node
     '''
-    logger.info(f'Using fallback joint distance calculation for {typ}{rigname}')
+    logger.warning(f"{typ}_{rigname}: Using fallback joint distance calculation")
 
-    # Get joints for calculation
     if typ == TYPE_FK:
-        joints = cst.JOINTS_FK[rigname]
+        joints = rt_cst.JOINTS_FK[rigname]
     elif typ == TYPE_IK:
-        joints = cst.JOINTS_IK[rigname]
+        joints = rt_cst.JOINTS_IK[rigname]
     else:
-        logger.error('Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+        logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+        return None
 
-    # Create a simple remapValue node that outputs total joint chain length
-    fallback_crvlen = f'{typ}{rigname}_fallback_length'
+    # Create remapValue node that outputs total joint chain length
+    fallback_crvlen = f'{typ}_{rigname}_fallback_length'
     cmds.createNode('remapValue', n=fallback_crvlen, s=1, ss=1)
 
     # Calculate total distance between joints
@@ -457,7 +603,7 @@ def fallback_curve_length(rigname, typ):
     cmds.setAttr(f'{fallback_crvlen}.inputMax', 1)
     cmds.setAttr(f'{fallback_crvlen}.outputMin', 0)
     cmds.setAttr(f'{fallback_crvlen}.outputMax', total_distance)
-    cmds.setAttr(f'{fallback_crvlen}.inputValue', 1)  # Always output max
+    cmds.setAttr(f'{fallback_crvlen}.inputValue', 1)
 
     return fallback_crvlen
 
@@ -466,26 +612,28 @@ def fallback_curve_length(rigname, typ):
 
 def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec):
     '''
-    Build Spline IK advanced twist
+    Build Spline IK advanced twist.
 
     Arguments
         ikhandle (str): spline ik handle
-        start_obj (str): First obj (cluster transform) for twist. clusters[0][1]
-        end_obj (str): Last obj (cluster transform) for twist. clusters[-1][1]
+        start_obj (str): First obj (cluster transform) for twist
+        end_obj (str): Last obj (cluster transform) for twist
         start_vec (tuple): Start up vector
         end_vec (tuple): End up vector
     '''
     # advancedSplineIkTwist
-    cmds.setAttr(f"{ikhandle}.dTwistControlEnable", 1) # Enable advanced twist
-    cmds.setAttr(f"{ikhandle}.dWorldUpType", 4) # Rot up start/end
-    cmds.setAttr(f"{ikhandle}.dWorldUpAxis", 3) # Up Axis to pos z
+    cmds.setAttr(f'{ikhandle}.dTwistControlEnable', 1)
+    cmds.setAttr(f'{ikhandle}.dWorldUpType', 4)  # Rot up start/end
+    cmds.setAttr(f'{ikhandle}.dWorldUpAxis', 3)  # Up Axis to pos z
+
     # Start / end obj
-    cmds.connectAttr(f"{start_obj}.xformMatrix", f"{ikhandle}.dWorldUpMatrix", f=1)
-    cmds.connectAttr(f"{end_obj}.xformMatrix", f"{ikhandle}.dWorldUpMatrixEnd", f=1)
+    cmds.connectAttr(f'{start_obj}.xformMatrix', f'{ikhandle}.dWorldUpMatrix', f=1)
+    cmds.connectAttr(f'{end_obj}.xformMatrix', f'{ikhandle}.dWorldUpMatrixEnd', f=1)
+
     # Start / end vec
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorX", start_vec[0])
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorY", start_vec[1])
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorZ", start_vec[2])
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorEndX", end_vec[0])
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorEndY", end_vec[1])
-    cmds.setAttr(f"{ikhandle}.dWorldUpVectorEndZ", end_vec[2])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorX', start_vec[0])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorY', start_vec[1])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorZ', start_vec[2])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorEndX', end_vec[0])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorEndY', end_vec[1])
+    cmds.setAttr(f'{ikhandle}.dWorldUpVectorEndZ', end_vec[2])
