@@ -3,6 +3,17 @@
 author: Daisy Jane @gnitemouse
 
 User Variables and Constants for Rig Tail
+
+All user-editable values live in this module: rig parts, build options,
+naming templates (type labels, controls/joints, groups, curves/clusters,
+spline, ikfk attributes) and control constants. The UI (rig_tail_ui.py)
+edits these globals in place, and save_config()/load_config() round-trip
+them through a JSON config file so setups can be exported and shared.
+
+Some values are derived from others (e.g. IKFK_SWITCH embeds the enum
+string joined from IKFK_MODES). After editing globals directly, call
+rebuild_derived() to keep those in sync; load_config() does this
+automatically.
 '''
 
 # CACHE ================================================================
@@ -75,7 +86,7 @@ TYPE_IK = 'IK'
 TYPE_FK = 'FK'
 TYPE_FX = 'FX'
 
-# Naming Template: type, labels
+# Naming Template: type labels
 GRP = 'grp'
 CTRL = 'ctrl'
 JNT = 'jnt'
@@ -88,16 +99,13 @@ VIS = 'visibility'
 COND = 'condition'
 CST = 'constraint'
 
-# Naming Template: groups, controls, joints
-BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
+# Naming Template: controls, joints
+ROOT_CTRL = '{ROOT}_{CTRL}'
+COG_CTRL = 'cog_{CTRL}'
 BASECTRL = '{TYPE}_{rigname}_base_{CTRL}'
-CTRLROOT_GRP = '{TYPE}_{rigname}_root_{GRP}'
-CTRL_GRP = '{TYPE}_{rigname}_{NN}_{CTRL}_{GRP}'
 CONTROL = '{TYPE}_{rigname}_{NN}_{CTRL}'
-GROUP = '{TYPE}_{rigname}_{NN}_{GRP}'
-JOINT = '{TYPE}_{rigname}_{NN}_{JNT}'
-SDK_GRP = '{TYPE}_{rigname}_{NN}_{nn}_{SDK}'
 SDK_JNT = '{TYPE}_{rigname}_{NN}_{JNT}_{SDK}'
+JOINT = '{TYPE}_{rigname}_{NN}_{JNT}'
 
 # Naming Template: curves, clusters
 CURVE = '{TYPE}_{rigname}_{TAG}_{CRV}'
@@ -126,20 +134,25 @@ SPLINE_TOP = '{TYPE}_{rigname}_spline_top_{CTRL}'
 SPLINE_CONTROLS = [SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID,
                    SPLINE_TOP_SML, SPLINE_TOP, SPLINE_MID_ROT]
 
-# Naming Template: structure
+# Naming Template: groups
 ROOT_GRP = '{ROOT}'
-ROOT_CTRL = '{ROOT}_{CTRL}'
-COG_CTRL = 'cog_{CTRL}'
 GEOMETRY_GRP = 'geometry'
 CONTROL_GRP = '{TYPE}_controls'
 SKELETON_GRP = '{TYPE}_skeleton'
 RIG_SYSTEMS_GRP = 'rig_systems'
 CLUSTERS_GRP = 'clusters'
 SCALE_GRP = '{TYPE}_{rigname}_scale_{GRP}'
+BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
+CTRLROOT_GRP = '{TYPE}_{rigname}_root_{GRP}'
+CTRL_GRP = '{TYPE}_{rigname}_{NN}_{CTRL}_{GRP}'
+SDK_GRP = '{TYPE}_{rigname}_{NN}_{nn}_{SDK}'
+GROUP = '{TYPE}_{rigname}_{NN}_{GRP}'
 
 # Naming Template: ikfk, switch, divider
 IKFK = '{rigname}_ikfk'
 # Attribute Template: (longName, niceName, enumName, dv)
+# IKFK_SWITCH's enumName is derived from IKFK_MODES; if IKFK_MODES
+# changes, call rebuild_derived() to regenerate it.
 IKFK_MODES = ['SplineIK', 'IK', 'Float', 'FK']
 IKFK_SWITCH = ('ikfk_switch', 'IKFK Switch', ':'.join(IKFK_MODES), 0)
 IKFK_DIVIDER = ('ikfk_divider', '----------', 'IKFK')
@@ -206,7 +219,26 @@ COLOR_OVERRIDE = {\
 import json
 import os
 
+# Default config path; the UI can pass any other path to
+# save_config()/load_config() for per-user or per-show configs.
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'rig_tail_config.json')
+
+def rebuild_derived():
+    '''
+    Rebuild values that are derived from other user variables.
+
+    IKFK_SWITCH embeds ':'.join(IKFK_MODES) as its enum string, and
+    SPLINE_CONTROLS / SPLINE_CONTROLS_SZ are ordered collections of
+    other templates and sizes. Call after editing globals in the UI or
+    loading a config so the derived values stay in sync.
+    '''
+    global IKFK_SWITCH, SPLINE_CONTROLS, SPLINE_CONTROLS_SZ
+    IKFK_SWITCH = (IKFK_SWITCH[0], IKFK_SWITCH[1],
+                   ':'.join(IKFK_MODES), IKFK_SWITCH[3])
+    SPLINE_CONTROLS = [SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID,
+                       SPLINE_TOP_SML, SPLINE_TOP, SPLINE_MID_ROT]
+    SPLINE_CONTROLS_SZ = [SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_SZ,
+                          SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ, SPLINE_MID_ROT_SZ]
 
 def get_user_editable_config():
     '''
@@ -227,6 +259,7 @@ def get_user_editable_config():
         'TYPE_BN': TYPE_BN,
         'TYPE_IK': TYPE_IK,
         'TYPE_FK': TYPE_FK,
+        'TYPE_FX': TYPE_FX,
         'GRP': GRP,
         'CTRL': CTRL,
         'JNT': JNT,
@@ -286,8 +319,15 @@ def get_user_editable_config():
         'CLUSTERS_GRP': CLUSTERS_GRP,
         'SCALE_GRP': SCALE_GRP,
 
-        # Naming Template: ikfk
+        # Naming Template: ikfk, switch, divider
         'IKFK': IKFK,
+        'IKFK_MODES': IKFK_MODES,
+        'IKFK_SWITCH': IKFK_SWITCH,
+        'IKFK_DIVIDER': IKFK_DIVIDER,
+        'STRETCH_DIVIDER': STRETCH_DIVIDER,
+        'ANIM_DIVIDER': ANIM_DIVIDER,
+        'TWIST_DIVIDER': TWIST_DIVIDER,
+        'SCALE_DIVIDER': SCALE_DIVIDER,
 
         # Constants: number of controls
         'NUM_CTRL_FK': NUM_CTRL_FK,
@@ -309,38 +349,56 @@ def get_user_editable_config():
         'SPLINE_TOP_SZ': SPLINE_TOP_SZ,
     }
 
-def save_config():
-    '''Save user variables and constants to JSON file.'''
+def save_config(filepath=None):
+    '''
+    Save user variables and constants to a JSON config file.
+
+    filepath: path to write to; defaults to CONFIG_FILE.
+    Returns True on success, False on failure.
+    '''
+    filepath = filepath or CONFIG_FILE
     config = get_user_editable_config()
     try:
-        with open(CONFIG_FILE, 'w') as f:
+        with open(filepath, 'w') as f:
             json.dump(config, f, indent=2)
         return True
     except Exception as e:
         print(f'Failed to save config: {e}')
         return False
 
-def load_config():
-    '''Load user variables and constants from JSON file.'''
+def load_config(filepath=None):
+    '''
+    Load user variables and constants from a JSON config file.
+
+    filepath: path to read from; defaults to CONFIG_FILE.
+    Missing keys keep their current values. Attribute templates saved as
+    JSON lists are restored to tuples, and derived values (IKFK_SWITCH
+    enum, SPLINE_CONTROLS) are rebuilt afterwards.
+    Returns True on success, False if the file is missing or unreadable.
+    '''
     global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD, JOINT_POS_TOLERANCE
-    global TYPE_BN, TYPE_IK, TYPE_FK, GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
+    global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
+    global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
     global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
     global CURVE, CURVE_SCALE, CURVEINFO, CLUSTER_GRP, CLUSTER, CLUSTER_HANDLE
     global UPV_CTRLGRP, UPV_CTRL, CLUSTER_UPV, CLUSTER_UPV_HANDLE
     global SPLINE_GRP, SPLINE_HANDLE, SPLINE_EFFECTOR, SPLINE_IK_CTRL, SPLINE_FLOAT_CTRL
     global SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID_ROT, SPLINE_MID, SPLINE_TOP_SML, SPLINE_TOP
     global ROOT_GRP, ROOT_CTRL, COG_CTRL, GEOMETRY_GRP, CONTROL_GRP, SKELETON_GRP
-    global RIG_SYSTEMS_GRP, CLUSTERS_GRP, SCALE_GRP, IKFK
+    global RIG_SYSTEMS_GRP, CLUSTERS_GRP, SCALE_GRP
+    global IKFK, IKFK_MODES, IKFK_SWITCH, IKFK_DIVIDER
+    global STRETCH_DIVIDER, ANIM_DIVIDER, TWIST_DIVIDER, SCALE_DIVIDER
     global NUM_CTRL_FK, NUM_CTRL_IK
     global ROOT_CTRL_SZ, COG_CTRL_SZ, BASE_CTRL_SZ, VARFK_CTRL_SZ, FK_CTRL_SZ, IK_CTRL_SZ
     global SPLINE_UPV_SZ, SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_ROT_SZ
     global SPLINE_MID_SZ, SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ
 
-    if not os.path.exists(CONFIG_FILE):
+    filepath = filepath or CONFIG_FILE
+    if not os.path.exists(filepath):
         return False
 
     try:
-        with open(CONFIG_FILE, 'r') as f:
+        with open(filepath, 'r') as f:
             config = json.load(f)
 
         # Update globals from config
@@ -355,6 +413,7 @@ def load_config():
         TYPE_BN = config.get('TYPE_BN', TYPE_BN)
         TYPE_IK = config.get('TYPE_IK', TYPE_IK)
         TYPE_FK = config.get('TYPE_FK', TYPE_FK)
+        TYPE_FX = config.get('TYPE_FX', TYPE_FX)
         GRP = config.get('GRP', GRP)
         CTRL = config.get('CTRL', CTRL)
         JNT = config.get('JNT', JNT)
@@ -413,7 +472,16 @@ def load_config():
         RIG_SYSTEMS_GRP = config.get('RIG_SYSTEMS_GRP', RIG_SYSTEMS_GRP)
         CLUSTERS_GRP = config.get('CLUSTERS_GRP', CLUSTERS_GRP)
         SCALE_GRP = config.get('SCALE_GRP', SCALE_GRP)
+
+        # IKFK, switch, divider (JSON stores tuples as lists)
         IKFK = config.get('IKFK', IKFK)
+        IKFK_MODES = list(config.get('IKFK_MODES', IKFK_MODES))
+        IKFK_SWITCH = tuple(config.get('IKFK_SWITCH', IKFK_SWITCH))
+        IKFK_DIVIDER = tuple(config.get('IKFK_DIVIDER', IKFK_DIVIDER))
+        STRETCH_DIVIDER = tuple(config.get('STRETCH_DIVIDER', STRETCH_DIVIDER))
+        ANIM_DIVIDER = tuple(config.get('ANIM_DIVIDER', ANIM_DIVIDER))
+        TWIST_DIVIDER = tuple(config.get('TWIST_DIVIDER', TWIST_DIVIDER))
+        SCALE_DIVIDER = tuple(config.get('SCALE_DIVIDER', SCALE_DIVIDER))
 
         # Constants
         NUM_CTRL_FK = config.get('NUM_CTRL_FK', NUM_CTRL_FK)
@@ -433,6 +501,7 @@ def load_config():
         SPLINE_TOP_SML_SZ = config.get('SPLINE_TOP_SML_SZ', SPLINE_TOP_SML_SZ)
         SPLINE_TOP_SZ = config.get('SPLINE_TOP_SZ', SPLINE_TOP_SZ)
 
+        rebuild_derived()
         return True
     except Exception as e:
         print(f'Failed to load config: {e}')

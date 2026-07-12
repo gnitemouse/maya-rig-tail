@@ -5,7 +5,20 @@ author: Daisy Jane @gnitemouse
 PySide2 UI for Rig Tail
 Compatible with Maya 2024/2025.
 Maya 2024/2025 ships with Qt5, not Qt6.
+
+Main window (RigTailUI) shows the current configuration, the build
+options, and buttons that open pop-up editors:
+  - RigPartsEditor: edit RIGPARTS or fill it from selected joints
+  - NamingTemplateEditor: edit naming templates per section
+    (type labels, controls/joints, groups, curves/clusters, spline,
+    ikfk attributes)
+  - ConstantsEditor: edit numeric constants (control counts and sizes)
+
+All edited values live in rig_tail_constants and can be imported or
+exported through a user-chosen JSON config file (Load/Save Config).
 '''
+
+import os
 
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
@@ -15,6 +28,8 @@ import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 
 class RigTailUI(QtWidgets.QDialog):
+    '''Main Tail Rig Builder window.'''
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Rig Tail')
@@ -24,6 +39,7 @@ class RigTailUI(QtWidgets.QDialog):
         self.load_current_values()
 
     def setup_ui(self):
+        '''Build the main window layout.'''
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(15, 10, 15, 10)
@@ -33,7 +49,7 @@ class RigTailUI(QtWidgets.QDialog):
         title.setAlignment(QtCore.Qt.AlignCenter)
         main_layout.addWidget(title)
 
-        author = QtWidgets.QLabel('author @dayzl Daisy Jane')
+        author = QtWidgets.QLabel('author Daisy Jane @gnitemouse')
         author.setStyleSheet('font-size: 10px; font-weight: normal; color: #4A90E2;')
         author.setAlignment(QtCore.Qt.AlignRight)
         main_layout.addWidget(author)
@@ -159,10 +175,11 @@ class RigTailUI(QtWidgets.QDialog):
 
         editor_buttons = [
             ('Edit Rig Parts', lambda: self.open_rigparts_editor()),
-            ('Edit Naming: Groups, Controls, Joints', lambda: self.open_naming_editor('groups')),
+            ('Edit Naming: Type Labels', lambda: self.open_naming_editor('types')),
+            ('Edit Naming: Controls, Joints', lambda: self.open_naming_editor('controls')),
+            ('Edit Naming: Groups', lambda: self.open_naming_editor('groups')),
             ('Edit Naming: Curves, Clusters', lambda: self.open_naming_editor('curves')),
             ('Edit Naming: Spline', lambda: self.open_naming_editor('spline')),
-            ('Edit Naming: Structure', lambda: self.open_naming_editor('structure')),
             ('Edit Naming: IKFK, Switch, Divider', lambda: self.open_naming_editor('ikfk')),
             ('Edit Constants: Number of Controls', lambda: self.open_constants_editor('num')),
             ('Edit Constants: Control Size', lambda: self.open_constants_editor('size')),
@@ -178,11 +195,6 @@ class RigTailUI(QtWidgets.QDialog):
         main_layout.addWidget(editors_group)
 
         self.add_separator(main_layout)
-
-        self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
-        self.btn_get_rigparts.clicked.connect(self.get_rigparts_from_selection)
-        self.style_button(self.btn_get_rigparts, 2)
-        main_layout.addWidget(self.btn_get_rigparts)
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
@@ -307,10 +319,12 @@ class RigTailUI(QtWidgets.QDialog):
         ''')
 
     def load_current_values(self):
+        '''Refresh UI fields from the current rig_tail_constants values.'''
         self.txt_root.setText(rt_cst.ROOT)
         self.update_display()
 
     def update_display(self):
+        '''Refresh the read-only configuration summary text.'''
         display_text = f'''
             ROOT = '{rt_cst.ROOT}'
             RIGPARTS = {rt_cst.RIGPARTS}
@@ -327,61 +341,52 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_group_control.setEnabled(len(rt_cst.RIGPARTS) > 1)
 
     def load_config(self):
-        if rt_cst.load_config():
+        '''Import configuration from a user-chosen JSON config file.'''
+        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Load Config', rt_cst.CONFIG_FILE, 'JSON Files (*.json);;All Files (*)')
+        if not filepath:
+            return
+        if rt_cst.load_config(filepath):
             self.load_current_values()
-            QtWidgets.QMessageBox.information(self, 'Success', 'Configuration loaded successfully!')
+            QtWidgets.QMessageBox.information(
+                self, 'Success', f'Configuration loaded from:\n{filepath}')
         else:
-            QtWidgets.QMessageBox.warning(self, 'Warning', 'No saved configuration found or load failed.')
+            QtWidgets.QMessageBox.warning(
+                self, 'Warning', f'Failed to load configuration from:\n{filepath}')
 
     def save_config(self):
-        if rt_cst.save_config():
-            QtWidgets.QMessageBox.information(self, 'Success', 'Configuration saved successfully!')
+        '''Export configuration to a user-chosen JSON config file.'''
+        filepath, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, 'Save Config', rt_cst.CONFIG_FILE, 'JSON Files (*.json);;All Files (*)')
+        if not filepath:
+            return
+        if rt_cst.save_config(filepath):
+            QtWidgets.QMessageBox.information(
+                self, 'Success', f'Configuration saved to:\n{filepath}')
         else:
-            QtWidgets.QMessageBox.critical(self, 'Error', 'Failed to save configuration.')
+            QtWidgets.QMessageBox.critical(
+                self, 'Error', f'Failed to save configuration to:\n{filepath}')
 
     def open_rigparts_editor(self):
+        '''Open the RIGPARTS pop-up editor.'''
         dialog = RigPartsEditor(self)
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 
     def open_naming_editor(self, section):
+        '''Open the naming template pop-up editor for the given section.'''
         dialog = NamingTemplateEditor(section, self)
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 
     def open_constants_editor(self, section):
+        '''Open the numeric constants pop-up editor for the given section.'''
         dialog = ConstantsEditor(section, self)
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 
-    def get_rigparts_from_selection(self):
-        selected = cmds.ls(selection=True, type='joint')
-        if not selected:
-            QtWidgets.QMessageBox.warning(self, 'Warning', 'No joints selected.')
-            return
-
-        rignames = list()
-        for jnt in selected:
-            rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
-            if rigname:
-                rignames.append(rigname)
-            else:
-                rignames.append(jnt)
-
-        if rignames:
-            rt_cst.RIGPARTS = sorted(rignames)
-            self.update_display()
-            QtWidgets.QMessageBox.information(
-                self, 'Success',
-                f'Found {len(rignames)} rig part(s):\n{", ".join(rt_cst.RIGPARTS)}'
-            )
-        else:
-            QtWidgets.QMessageBox.warning(
-                self, 'Warning',
-                'Could not extract rig names from selected joints.\nEnsure joints follow naming conventions.'
-            )
-
     def build_rig(self):
+        '''Apply the UI options to rig_tail_constants and build the rig.'''
         import rig_tail as rt
 
         root = self.txt_root.text() or None
@@ -416,6 +421,13 @@ class RigTailUI(QtWidgets.QDialog):
 
 
 class RigPartsEditor(QtWidgets.QDialog):
+    '''
+    Pop-up editor for RIGPARTS.
+
+    Rig parts can be added/edited/removed manually, or filled from the
+    current joint selection via 'Get RIGPARTS from Selected Joints'.
+    '''
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Edit Rig Parts')
@@ -423,6 +435,7 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.setup_ui()
 
     def setup_ui(self):
+        '''Build the dialog layout.'''
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
 
@@ -458,6 +471,10 @@ class RigPartsEditor(QtWidgets.QDialog):
         btn_layout.addWidget(self.btn_edit)
         btn_layout.addWidget(self.btn_remove)
 
+        self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
+        self.btn_get_rigparts.clicked.connect(self.get_rigparts_from_selection)
+        self.parent().style_button(self.btn_get_rigparts, 2)
+
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
@@ -467,14 +484,35 @@ class RigPartsEditor(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel('Rig Parts:'))
         layout.addWidget(self.list_widget)
         layout.addLayout(btn_layout)
+        layout.addWidget(self.btn_get_rigparts)
         layout.addWidget(button_box)
 
+    def get_rigparts_from_selection(self):
+        '''Replace the list with rig names extracted from selected joints.'''
+        selected = cmds.ls(selection=True, type='joint')
+        if not selected:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'No joints selected.')
+            return
+
+        rignames = list()
+        for jnt in selected:
+            rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
+            if rigname:
+                rignames.append(rigname)
+            else:
+                rignames.append(jnt)
+
+        self.list_widget.clear()
+        self.list_widget.addItems(sorted(rignames))
+
     def add_item(self):
+        '''Prompt for a new rig part name and append it to the list.'''
         text, ok = QtWidgets.QInputDialog.getText(self, 'Add Rig Part', 'Enter rig part name:')
         if ok and text:
             self.list_widget.addItem(text)
 
     def edit_item(self):
+        '''Rename the selected rig part.'''
         current = self.list_widget.currentRow()
         if current >= 0:
             current_item = self.list_widget.item(current)
@@ -490,28 +528,74 @@ class RigPartsEditor(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, 'Warning', 'No rig part selected.')
 
     def remove_item(self):
+        '''Delete the selected rig part from the list.'''
         current = self.list_widget.currentRow()
         if current >= 0:
             self.list_widget.takeItem(current)
 
     def accept(self):
+        '''Commit the list contents to rt_cst.RIGPARTS.'''
         rt_cst.RIGPARTS = [self.list_widget.item(i).text()
                            for i in range(self.list_widget.count())]
         super().accept()
 
 
 class NamingTemplateEditor(QtWidgets.QDialog):
+    '''
+    Pop-up editor for one section of the naming templates.
+
+    Most fields are plain string templates set directly on
+    rig_tail_constants. The 'ikfk' section also edits list/tuple
+    attribute templates: those are shown as comma-separated values and
+    parsed back on OK. IKFK_SWITCH's enum string is derived from
+    IKFK_MODES, so it is not edited directly; it is rebuilt via
+    rt_cst.rebuild_derived() whenever the dialog is accepted.
+    '''
+
+    # Human-readable titles per section key
+    SECTION_TITLES = {
+        'types': 'Type Labels',
+        'controls': 'Controls, Joints',
+        'groups': 'Groups',
+        'curves': 'Curves, Clusters',
+        'spline': 'Spline',
+        'ikfk': 'IKFK, Switch, Divider',
+    }
+
+    # Attrs edited as comma-separated values: name -> expected item count
+    # (None = any number of items)
+    LIST_FIELDS = {'IKFK_MODES': None}
+    TUPLE_FIELDS = {
+        'IKFK_SWITCH': 3,  # (longName, niceName, dv); enum from IKFK_MODES
+        'IKFK_DIVIDER': 3,
+        'STRETCH_DIVIDER': 3,
+        'ANIM_DIVIDER': 3,
+        'TWIST_DIVIDER': 3,
+        'SCALE_DIVIDER': 3,
+    }
+
     def __init__(self, section, parent=None):
         super().__init__(parent)
         self.section = section
-        self.setWindowTitle(f'Edit Naming: {section.title()}')
+        title = self.SECTION_TITLES.get(section, section.title())
+        self.setWindowTitle(f'Edit Naming: {title}')
         self.setMinimumSize(500, 500)
         self.fields = {}
         self.setup_ui()
 
     def setup_ui(self):
+        '''Build one line edit per template in this section.'''
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
+
+        if self.section == 'ikfk':
+            note = QtWidgets.QLabel(
+                'List/tuple values are comma-separated.\n'
+                'IKFK_SWITCH is (longName, niceName, default index); its enum\n'
+                'string is generated from IKFK_MODES automatically.\n'
+                'Dividers are (longName, niceName, enumLabel).')
+            note.setStyleSheet('color: #999999; font-size: 10px;')
+            layout.addWidget(note)
 
         form_layout = QtWidgets.QFormLayout()
         form_layout.setSpacing(8)
@@ -548,27 +632,57 @@ class NamingTemplateEditor(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
     def get_templates_for_section(self):
-        if self.section == 'groups':
+        '''Return {attr name: display string} for this section.'''
+        if self.section == 'types':
             return {
-                'BASECTRL_GRP': rt_cst.BASECTRL_GRP,
+                'GRP': rt_cst.GRP,
+                'CTRL': rt_cst.CTRL,
+                'JNT': rt_cst.JNT,
+                'SDK': rt_cst.SDK,
+                'CRV': rt_cst.CRV,
+                'CSR': rt_cst.CSR,
+                'HDL': rt_cst.HDL,
+                'EFF': rt_cst.EFF,
+                'VIS': rt_cst.VIS,
+                'COND': rt_cst.COND,
+                'CST': rt_cst.CST,
+            }
+        elif self.section == 'controls':
+            return {
+                'ROOT_CTRL': rt_cst.ROOT_CTRL,
+                'COG_CTRL': rt_cst.COG_CTRL,
                 'BASECTRL': rt_cst.BASECTRL,
+                'CONTROL': rt_cst.CONTROL,
+                'SDK_JNT': rt_cst.SDK_JNT,
+                'JOINT': rt_cst.JOINT,
+            }
+        elif self.section == 'groups':
+            return {
+                'ROOT_GRP': rt_cst.ROOT_GRP,
+                'GEOMETRY_GRP': rt_cst.GEOMETRY_GRP,
+                'CONTROL_GRP': rt_cst.CONTROL_GRP,
+                'SKELETON_GRP': rt_cst.SKELETON_GRP,
+                'RIG_SYSTEMS_GRP': rt_cst.RIG_SYSTEMS_GRP,
+                'CLUSTERS_GRP': rt_cst.CLUSTERS_GRP,
+                'SCALE_GRP': rt_cst.SCALE_GRP,
+                'BASECTRL_GRP': rt_cst.BASECTRL_GRP,
                 'CTRLROOT_GRP': rt_cst.CTRLROOT_GRP,
                 'CTRL_GRP': rt_cst.CTRL_GRP,
-                'CONTROL': rt_cst.CONTROL,
-                'GROUP': rt_cst.GROUP,
-                'JOINT': rt_cst.JOINT,
                 'SDK_GRP': rt_cst.SDK_GRP,
-                'SDK_CTRL': rt_cst.SDK_CTRL,
+                'GROUP': rt_cst.GROUP,
             }
         elif self.section == 'curves':
             return {
                 'CURVE': rt_cst.CURVE,
+                'CURVE_SCALE': rt_cst.CURVE_SCALE,
                 'CURVEINFO': rt_cst.CURVEINFO,
                 'CLUSTER_GRP': rt_cst.CLUSTER_GRP,
                 'CLUSTER': rt_cst.CLUSTER,
                 'CLUSTER_HANDLE': rt_cst.CLUSTER_HANDLE,
                 'UPV_CTRLGRP': rt_cst.UPV_CTRLGRP,
                 'UPV_CTRL': rt_cst.UPV_CTRL,
+                'CLUSTER_UPV': rt_cst.CLUSTER_UPV,
+                'CLUSTER_UPV_HANDLE': rt_cst.CLUSTER_UPV_HANDLE,
             }
         elif self.section == 'spline':
             return {
@@ -578,33 +692,71 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                 'SPLINE_IK_CTRL': rt_cst.SPLINE_IK_CTRL,
                 'SPLINE_FLOAT_CTRL': rt_cst.SPLINE_FLOAT_CTRL,
                 'SPLINE_BOT': rt_cst.SPLINE_BOT,
+                'SPLINE_BOT_SML': rt_cst.SPLINE_BOT_SML,
+                'SPLINE_MID_ROT': rt_cst.SPLINE_MID_ROT,
                 'SPLINE_MID': rt_cst.SPLINE_MID,
+                'SPLINE_TOP_SML': rt_cst.SPLINE_TOP_SML,
                 'SPLINE_TOP': rt_cst.SPLINE_TOP,
-            }
-        elif self.section == 'structure':
-            return {
-                'ROOT_GRP': rt_cst.ROOT_GRP,
-                'ROOT_CTRL': rt_cst.ROOT_CTRL,
-                'COG_CTRL': rt_cst.COG_CTRL,
-                'GEOMETRY_GRP': rt_cst.GEOMETRY_GRP,
-                'CONTROL_GRP': rt_cst.CONTROL_GRP,
-                'SKELETON_GRP': rt_cst.SKELETON_GRP,
-                'RIG_SYSTEMS_GRP': rt_cst.RIG_SYSTEMS_GRP,
-                'SCALE_GRP': rt_cst.SCALE_GRP,
             }
         elif self.section == 'ikfk':
             return {
                 'IKFK': rt_cst.IKFK,
+                'IKFK_MODES': ', '.join(rt_cst.IKFK_MODES),
+                # Show (longName, niceName, dv); enum derives from IKFK_MODES
+                'IKFK_SWITCH': ', '.join([rt_cst.IKFK_SWITCH[0],
+                                          rt_cst.IKFK_SWITCH[1],
+                                          str(rt_cst.IKFK_SWITCH[3])]),
+                'IKFK_DIVIDER': ', '.join(rt_cst.IKFK_DIVIDER),
+                'STRETCH_DIVIDER': ', '.join(rt_cst.STRETCH_DIVIDER),
+                'ANIM_DIVIDER': ', '.join(rt_cst.ANIM_DIVIDER),
+                'TWIST_DIVIDER': ', '.join(rt_cst.TWIST_DIVIDER),
+                'SCALE_DIVIDER': ', '.join(rt_cst.SCALE_DIVIDER),
             }
         return {}
 
     def accept(self):
+        '''Validate and commit all fields to rig_tail_constants.'''
+        parsed = {}
         for name, line_edit in self.fields.items():
-            setattr(rt_cst, name, line_edit.text())
+            text = line_edit.text()
+            if name in self.LIST_FIELDS or name in self.TUPLE_FIELDS:
+                items = [s.strip() for s in text.split(',') if s.strip()]
+                count = self.TUPLE_FIELDS.get(name)
+                if count is not None and len(items) != count:
+                    QtWidgets.QMessageBox.warning(
+                        self, 'Warning',
+                        f'{name} needs {count} comma-separated values.')
+                    return
+                if name == 'IKFK_SWITCH':
+                    try:
+                        dv = int(items[2])
+                    except ValueError:
+                        QtWidgets.QMessageBox.warning(
+                            self, 'Warning',
+                            'IKFK_SWITCH default index must be an integer.')
+                        return
+                    # Placeholder enum; rebuild_derived() fills it from
+                    # IKFK_MODES below
+                    parsed[name] = (items[0], items[1], '', dv)
+                elif name in self.TUPLE_FIELDS:
+                    parsed[name] = tuple(items)
+                else:
+                    parsed[name] = items
+            else:
+                parsed[name] = text
+
+        for name, value in parsed.items():
+            setattr(rt_cst, name, value)
+        rt_cst.rebuild_derived()
         super().accept()
 
 
 class ConstantsEditor(QtWidgets.QDialog):
+    '''
+    Pop-up editor for numeric constants: control counts ('num') and
+    control sizes ('size').
+    '''
+
     def __init__(self, section, parent=None):
         super().__init__(parent)
         self.section = section
@@ -614,6 +766,7 @@ class ConstantsEditor(QtWidgets.QDialog):
         self.setup_ui()
 
     def setup_ui(self):
+        '''Build one spinbox per constant in this section.'''
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
 
@@ -661,6 +814,7 @@ class ConstantsEditor(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
     def get_constants_for_section(self):
+        '''Return {attr name: current value} for this section.'''
         if self.section == 'num':
             return {
                 'NUM_CTRL_FK': rt_cst.NUM_CTRL_FK,
@@ -685,15 +839,19 @@ class ConstantsEditor(QtWidgets.QDialog):
         return {}
 
     def accept(self):
+        '''Commit all spinbox values to rig_tail_constants.'''
         for name, spinbox in self.fields.items():
             setattr(rt_cst, name, spinbox.value())
+        rt_cst.rebuild_derived()
         super().accept()
 
 def get_maya_window():
+    '''Return the Maya main window as a QWidget for parenting.'''
     ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(int(ptr), QtWidgets.QWidget)
 
 def show_ui():
+    '''Show the Tail Rig Builder, closing any previous instance.'''
     global rig_tail_window
     try:
         rig_tail_window.close()
