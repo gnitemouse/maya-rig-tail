@@ -22,7 +22,6 @@ import rig_tail_joint as rt_jnt
 from rig_tail_matrix import build_matrix_offset_network
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
-import rig_tail_util as rt_utl
 import rig_tail_test as rt_test
 import re
 
@@ -74,7 +73,7 @@ def connect_root(fk, ik):
     skeleton_grp = rt_nam.fstr('', SKELETON_GRP)
     clusters_grp = rt_nam.fstr('', CLUSTERS_GRP)
     logger.info(f'Connect root \'{root_ctrl}\'')
-    rt_utl.parent_to(root_ctrl, control_grp)
+    rt_mya.parent_to(root_ctrl, control_grp)
 
     if fk and ik:
         ik_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_IK)
@@ -102,7 +101,7 @@ def connect_root(fk, ik):
         ]
 
     for group, ln_attr, nn_attr, dv in rootctrl_attrs:
-        rt_utl.add_attribute_enum(root_ctrl, ln_attr, nn_attr, dv=dv)
+        rt_mya.add_attribute_enum(root_ctrl, ln_attr, nn_attr, dv=dv)
         if group != 'divider':
             if cmds.objExists(group):
                 cmds.connectAttr(f'{root_ctrl}.{ln_attr}', f'{group}.visibility', f=1)
@@ -110,7 +109,7 @@ def connect_root(fk, ik):
                 logger.warning(f'Group \'{group}\' does not exist, skipping visibility connection.')
 
     if cmds.objExists(geometry_grp):
-        rt_utl.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
+        rt_mya.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
                            en='Unlocked:Wireframe:Locked', dv=0)
         cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
         cmds.connectAttr(f'{root_ctrl}.export_geo',
@@ -121,7 +120,7 @@ def connect_cog(fk, ik):
     root_ctrl = rt_nam.fstr('', ROOT_CTRL)
     cog_ctrl = rt_nam.fstr('', COG_CTRL)
     logger.info(f'Connect cog \'{cog_ctrl}\'')
-    rt_utl.parent_to(cog_ctrl, root_ctrl)
+    rt_mya.parent_to(cog_ctrl, root_ctrl)
 
     if ik:
         add_attributes_ikfk_switch(cog_ctrl, fk, ik)
@@ -132,7 +131,7 @@ def connect_basectrl(rigname, fk, ik):
     basectrl = rt_nam.fstr(rigname, BASECTRL)
     logger.info(f'{rigname}: Connect basectrl \'{basectrl}\'')
 
-    rt_utl.parent_to(basectrl_grp, cog_ctrl)
+    rt_mya.parent_to(basectrl_grp, cog_ctrl)
 
     if ik:
         add_ik_attributes_to_basectrl(rigname, basectrl)
@@ -167,7 +166,7 @@ def connect_fk(rigname, fk, ik):
 
     if ik:
         fk_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_FK)
-        rt_utl.parent_to(fkjnt_grp, fk_skeleton_grp)
+        rt_mya.parent_to(fkjnt_grp, fk_skeleton_grp)
 
         for i in range(NUM_CTRL_FK):
             fk_ctrl = rt_nam.fstr(rigname, CONTROL, '', i+1)
@@ -176,12 +175,12 @@ def connect_fk(rigname, fk, ik):
         setup_switch_fk(rigname, fkroot_grp, fkjnt_grp)
     else:
         skeleton_grp = rt_nam.fstr('', SKELETON_GRP)
-        rt_utl.parent_to(fkjnt_grp, skeleton_grp)
+        rt_mya.parent_to(fkjnt_grp, skeleton_grp)
 
 def connect_spline_fk(rigname):
     curve_fk = rt_nam.fstr(rigname, CURVE, TYPE_FK)
     spline_grp_fk = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_FK)
-    rt_utl.parent_to(curve_fk, spline_grp_fk)
+    rt_mya.parent_to(curve_fk, spline_grp_fk)
 
 
 # CONNECT IK ===========================================================
@@ -196,9 +195,9 @@ def connect_ik(rigname, fk, ik):
 
     if not cmds.objExists(ikjnt_grp):
         ikjnt_grp = cmds.group(em=True, n=ikjnt_grp)
-        rt_utl.parent_to(ikjnt_grp, ik_skeleton_grp)
-    rt_utl.parent_to(rt_cst.JOINTS_IK[rigname][0], ikjnt_grp)
-    rt_utl.parent_to(ikjnt_grp, ik_skeleton_grp)
+        rt_mya.parent_to(ikjnt_grp, ik_skeleton_grp)
+    rt_mya.parent_to(rt_cst.JOINTS_IK[rigname][0], ikjnt_grp)
+    rt_mya.parent_to(ikjnt_grp, ik_skeleton_grp)
 
     spline_constraints = constrain_spline_controls(rigname)
     setup_switch_ik(rigname, ikjnt_grp, spline_constraints)
@@ -219,9 +218,9 @@ def connect_spline_ik(rigname):
     spline_grp_ik = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_IK)
     driver_curve = rt_nam.fstr(rigname, CURVE, TYPE_IK)
     ikhandle, effector, solver_curve = get_spline_handle(rigname)
-    rt_utl.parent_to(ikhandle, spline_grp_ik)
-    rt_utl.parent_to(solver_curve, spline_grp_ik)
-    rt_utl.parent_to(driver_curve, spline_grp_ik)
+    rt_mya.parent_to(ikhandle, spline_grp_ik)
+    rt_mya.parent_to(solver_curve, spline_grp_ik)
+    rt_mya.parent_to(driver_curve, spline_grp_ik)
 
     basectrl = rt_nam.fstr(rigname, BASECTRL)
     contents = list()
@@ -229,7 +228,7 @@ def connect_spline_ik(rigname):
     contents.extend(ik_ctrlgrps['float'])
     contents.extend([ik_ctrlgrps['spline'][0], ik_ctrlgrps['spline'][-1]])
     for obj in contents:
-        rt_utl.parent_to(obj, basectrl)
+        rt_mya.parent_to(obj, basectrl)
 
     spline_handle = rt_nam.fstr(rigname, SPLINE_HANDLE, TYPE_IK)
     if cmds.objExists(spline_handle):
@@ -272,42 +271,42 @@ def connect_stretch(rigname, fk, ik):
 def add_ik_attributes_to_basectrl(rigname, basectrl):
     cog_ctrl = rt_nam.fstr('', COG_CTRL)
     ikfk_switch = rt_nam.fstr(rigname, IKFK)
-    rt_utl.add_attribute_enum(basectrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-    rt_utl.add_attribute_enum(basectrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
+    rt_mya.add_attribute_enum(basectrl, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, IKFK_SWITCH[0], IKFK_SWITCH[1],
                        pxy=f'{cog_ctrl}.{ikfk_switch}')
 
-    rt_utl.add_attribute_enum(basectrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
 
     for attr in ['twist', 'roll', 'offset']:
         if not cmds.attributeQuery(attr, n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln=attr, at='float', k=1, dv=0)
 
 def add_attributes_ikfk_switch(control, fk, ik):
-    rt_utl.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    rt_mya.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
 
     for rigname in rt_cst.RIGPARTS:
         ln_ikfk = rt_nam.fstr(rigname, IKFK)
         nn_ikfk = re.sub(r'[-_\s]+', ' ', ln_ikfk).title()
-        rt_utl.add_attribute_enum(control, ln_ikfk, nn_ikfk, IKFK_SWITCH[2], IKFK_SWITCH[3])
+        rt_mya.add_attribute_enum(control, ln_ikfk, nn_ikfk, IKFK_SWITCH[2], IKFK_SWITCH[3])
 
 def add_proxy_attributes_to_controls(rigname, control, typ):
     basectrl = rt_nam.fstr(rigname, BASECTRL)
     cog_ctrl = rt_nam.fstr('', COG_CTRL)
 
     ikfk_switch = rt_nam.fstr(rigname, IKFK)
-    rt_utl.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-    rt_utl.add_attribute_enum(control, IKFK_SWITCH[0], IKFK_SWITCH[1],
+    rt_mya.add_attribute_enum(control, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+    rt_mya.add_attribute_enum(control, IKFK_SWITCH[0], IKFK_SWITCH[1],
                        pxy=f'{cog_ctrl}.{ikfk_switch}')
 
     if rt_cst.EFFECTS['stretchy']:
-        rt_utl.add_attribute_enum(control, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
+        rt_mya.add_attribute_enum(control, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
         for atr in ['stretch', 'squash']:
-            rt_utl.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
+            rt_mya.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
 
     if rt_cst.EFFECTS['stretchy'] and typ == TYPE_IK:
-        rt_utl.add_attribute_enum(control, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
+        rt_mya.add_attribute_enum(control, TWIST_DIVIDER[0], TWIST_DIVIDER[1], TWIST_DIVIDER[2])
         for atr in ['twist', 'roll', 'offset']:
-            rt_utl.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
+            rt_mya.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
 
 
 # CONSTRAINTS ==========================================================
@@ -345,11 +344,11 @@ def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
 
     for mode in range(len(IKFK_MODES)):
         if mode == len(IKFK_MODES)-1:
-            rt_utl.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=1)
-            rt_utl.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=1)
+            rt_mya.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=1)
+            rt_mya.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=1)
         else:
-            rt_utl.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=0)
-            rt_utl.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=0)
+            rt_mya.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=0)
+            rt_mya.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=0)
 
 def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
@@ -364,33 +363,33 @@ def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
 
             for mode in range(len(IKFK_MODES)):
                 if mode == i:
-                    rt_utl.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=1)
+                    rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=1)
                 else:
-                    rt_utl.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=0)
+                    rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=0)
 
             for mode in range(len(IKFK_MODES)):
                 if mode == len(IKFK_MODES)-1:
-                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
+                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
                 elif mode == i:
-                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=1)
+                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=1)
                 else:
-                    rt_utl.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
+                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
 
         if ctrltyp == 'spline':
             mid_rot_ctrl = rt_nam.fstr(rigname, SPLINE_MID_ROT, TYPE_IK)
             mid_rot_grp = f'{mid_rot_ctrl}_{GRP}'
             for mode in range(len(IKFK_MODES)):
                 if mode == 0:
-                    rt_utl.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=1)
+                    rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=1)
                 else:
-                    rt_utl.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=0)
+                    rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=0)
 
     ikfk_attr = f"{rt_nam.fstr('', COG_CTRL)}.{rt_nam.fstr(rigname, IKFK)}"
     for mode in range(len(IKFK_MODES)):
         if mode == len(IKFK_MODES)-1:
-            rt_utl.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=0)
+            rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=0)
         else:
-            rt_utl.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=1)
+            rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=1)
 
 def setup_switch_upvec(rigname, typ=TYPE_IK):
     logger.debug(f"{rigname}: Space switching for upvec")
@@ -424,16 +423,16 @@ def setup_switch_upvec(rigname, typ=TYPE_IK):
         for i, parent in enumerate(parents):
             for mode in range(len(IKFK_MODES)):
                 if mode == len(IKFK_MODES)-1 or mode != i:
-                    rt_utl.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=0)
+                    rt_mya.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=0)
                 else:
-                    rt_utl.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=1)
+                    rt_mya.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=1)
 
     for grp in (upvec_bsegrp, upvec_endgrp):
         for mode in range(len(IKFK_MODES)):
             if mode == len(IKFK_MODES)-1:
-                rt_utl.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=0)
+                rt_mya.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=0)
             else:
-                rt_utl.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=1)
+                rt_mya.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=1)
 
     cluster_handle_bse = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='base')
     cluster_handle_end = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='end')

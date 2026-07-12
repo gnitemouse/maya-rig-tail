@@ -12,7 +12,6 @@ import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
-import rig_tail_util as rt_utl  # Backward compatibility
 
 logger = logger_setup(__name__)
 
@@ -58,13 +57,13 @@ def create_basectrl(rigname, up_axis=None):
                                             match_to=joints[0], parent=cog_ctrl,
                                             size=BASE_CTRL_SZ, nr=(1,0,0),
                                             color='magenta', shape='circle')
-    rt_utl.opm(basectrl_grp)
+    rt_mya.opm(basectrl_grp)
     if not up_axis:
         up_axis = rt_mat.get_axis_orientation(joints)
     rot_offset = ROT_AXIS_DICT[up_axis]
     logger.debug(f"up_axis '{up_axis}' rot_offset '{rot_offset}'")
     cmds.setAttr(f'{basectrl_grp}.rotate', rot_offset[0], rot_offset[1], rot_offset[2])
-    rt_utl.opm(basectrl_grp)
+    rt_mya.opm(basectrl_grp)
     return basectrl, basectrl_grp
 
 def create_circle_control(name, size, nr=(1,0,0), color='darkgrey'):
@@ -168,10 +167,10 @@ def create_control(control, group=None, match_to=None, parent=None,
     groupname = group if group else f'{control}_{GRP}'
     group = rt_mya.create_group(groupname)
     if parent:
-        rt_utl.parent_to(group, parent)
+        rt_mya.parent_to(group, parent)
     if match_to: # Match transforms position and rotation
-        rt_utl.reset_opm(group)
-        rt_utl.reset_transforms(group)
+        rt_mya.reset_opm(group)
+        rt_mya.reset_transforms(group)
         cmds.matchTransform(group, match_to)
 
     # Create control or handle existing control
@@ -199,7 +198,7 @@ def create_control(control, group=None, match_to=None, parent=None,
         rt_mya.create_group(control)
 
     # Parent control to group
-    rt_utl.parent_to(control, group, r=1)
+    rt_mya.parent_to(control, group, r=1)
     cmds.delete(control, ch=1)
 
     # Restore children
@@ -273,8 +272,8 @@ def create_controls_fk(rigname, joints, jnt_pos):
 
     # Create FK root group
     rt_mya.create_group(fkroot_grp)
-    rt_utl.parent_to(fkroot_grp, basectrl) # Move fkroot_grp under basectrl
-    rt_utl.match_transform(fkroot_grp, basectrl)
+    rt_mya.parent_to(fkroot_grp, basectrl) # Move fkroot_grp under basectrl
+    rt_mya.match_transform(fkroot_grp, basectrl)
 
     # Calculate indices evenly distributed throughout FK chain
     indices = list(rt_mat.linspace(0, len(jnt_pos)-1, NUM_CTRL_FK+2))
@@ -331,7 +330,7 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
             Keys: 'ik', 'float', 'spline', 'upvec'
     '''
     logger.info(f"{rigname}: Create IK controls")
-    basectrl = rt_utl.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
 
     all_cluster_handles = [x[1] for x in clusters]
     if duplicate_ends:
@@ -456,7 +455,7 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     groups = list()
     # Create spline controls matched to clusters
     for i, template in enumerate(SPLINE_CONTROLS):
-        ctrlname = rt_utl.fstr(rigname, template, TYPE_IK)
+        ctrlname = rt_nam.fstr(rigname, template, TYPE_IK)
         if 'mid_rot' in ctrlname: # spline_mid_rot. Same position as spline_mid
             control, group = create_control(ctrlname, match_to=cluster_handles[2],
                                             parent=orient_world,
@@ -471,9 +470,9 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
         groups.append(group)
     orient_control_aims(groups, orient_world)
 
-    rt_utl.parent_to(groups[1], controls[0]) # Parent bot_sml to bot
-    rt_utl.parent_to(groups[3], controls[4]) # Parent top_sml to top
-    rt_utl.parent_to(groups[4], controls[5]) # Parent top to mid_rot
+    rt_mya.parent_to(groups[1], controls[0]) # Parent bot_sml to bot
+    rt_mya.parent_to(groups[3], controls[4]) # Parent top_sml to top
+    rt_mya.parent_to(groups[4], controls[5]) # Parent top to mid_rot
 
     return controls, groups
 
@@ -491,11 +490,11 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
         controls_upv (list): [upvec_base_ctrl, upvec_end_ctrl]
         groups_upv (list): [upvec_base_grp, upvec_end_grp]
     '''
-    basectrl = rt_utl.fstr(rigname, BASECTRL)
-    upvec_bsectrl = rt_utl.fstr(rigname, UPV_CTRL, TAG='base')
-    upvec_endctrl = rt_utl.fstr(rigname, UPV_CTRL, TAG='end')
-    upvec_bsegrp = rt_utl.fstr(rigname, UPV_CTRLGRP, TAG='base')
-    upvec_endgrp = rt_utl.fstr(rigname, UPV_CTRLGRP, TAG='end')
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    upvec_bsectrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='base')
+    upvec_endctrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='end')
+    upvec_bsegrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='base')
+    upvec_endgrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='end')
 
     upvec_bsectrl, upvec_bsegrp = create_control(upvec_bsectrl,
                                                  group=upvec_bsegrp,
@@ -545,9 +544,9 @@ def get_controls_all(rigname, fk=True, ik=True, bn=True,
     Return
         controls (list): List of control names
     '''
-    root_ctrl = rt_utl.fstr('', ROOT_CTRL)
-    cog_ctrl = rt_utl.fstr('', COG_CTRL)
-    basectrl = rt_utl.fstr(rigname, BASECTRL)
+    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
+    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+    basectrl = rt_nam.fstr(rigname, BASECTRL)
     controls = list()
 
     all_controls = get_control_hierarchy(root_ctrl)
@@ -589,7 +588,7 @@ def get_controls_ik(rigname):
         ctrlgrps = list()
         for num in range(NUM_CTRL_IK):
             NN = num + 1
-            ctrl = rt_utl.fstr(rigname, ctrl_template[i], TYPE_IK, NN)
+            ctrl = rt_nam.fstr(rigname, ctrl_template[i], TYPE_IK, NN)
             ctrlgrp = f'{ctrl}_{GRP}'
             if cmds.objExists(ctrl):
                 controls.append(ctrl)
@@ -604,7 +603,7 @@ def get_controls_ik(rigname):
 
     # Type spline
     for ctrl_template in SPLINE_CONTROLS:
-        ctrl = rt_utl.fstr(rigname, ctrl_template, TYPE_IK)
+        ctrl = rt_nam.fstr(rigname, ctrl_template, TYPE_IK)
         ctrlgrp = f'{ctrl}_{GRP}'
         if cmds.objExists(ctrl):
             ik_controls['spline'].append(ctrl)
@@ -616,10 +615,10 @@ def get_controls_ik(rigname):
             logger.warning(f"ctrlgrp '{ctrlgrp}' does not exist")
 
     # Type upvec
-    upvec_bsectrl = rt_utl.fstr(rigname, UPV_CTRL, TAG='base')
-    upvec_endctrl = rt_utl.fstr(rigname, UPV_CTRL, TAG='end')
-    upvec_bsegrp = rt_utl.fstr(rigname, UPV_CTRLGRP, TAG='base')
-    upvec_endgrp = rt_utl.fstr(rigname, UPV_CTRLGRP, TAG='end')
+    upvec_bsectrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='base')
+    upvec_endctrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='end')
+    upvec_bsegrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='base')
+    upvec_endgrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='end')
     ik_controls['upvec'] = [upvec_bsectrl, upvec_endctrl]
     ik_ctrlgrps['upvec'] = [upvec_bsegrp, upvec_endgrp]
 
@@ -732,7 +731,7 @@ def set_attributes_visibility_fk(fk_controls):
             if cmds.attributeQuery(f'rotate{axis}', n=ctrl, ex=1):
                 cmds.setAttr(f'{ctrl}.rotate{axis}', k=1, cb=0, l=0)
         # Show visibility
-        rt_utl.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
+        rt_mya.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
 
 def set_attributes_visibility_ik(ik_controls):
     '''
@@ -758,7 +757,7 @@ def set_attributes_visibility_ik(ik_controls):
                 if cmds.attributeQuery(f'rotate{axis}', n=ctrl, ex=1):
                     cmds.setAttr(f'{ctrl}.rotate{axis}', k=1, cb=0, l=0)
             # Show visibility
-            rt_utl.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
+            rt_mya.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
 
 
 # CONTROL UTILITY ======================================================
@@ -776,8 +775,8 @@ def get_control_position(control, joints):
         v (float): Normalized position (0=start, 1=end)
     '''
     end = joints[-1]
-    fullv = rt_utl.get_vec_length(joints[0], end)
-    length = rt_utl.get_vec_length(control, end)
+    fullv = rt_mat.get_vec_length(joints[0], end)
+    length = rt_mat.get_vec_length(control, end)
     logger.debug(f"ctrl '{control}' - length {length} fullv {fullv}")
     if length == 0:
         v = 0

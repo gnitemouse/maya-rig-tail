@@ -18,7 +18,6 @@ from rig_tail_constants import *
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
-import rig_tail_util as rt_utl
 
 logger = logger_setup(__name__)
 
@@ -38,10 +37,10 @@ def delete_expression(expr):
     conv_types = ('unitConversion', 'unitToTimeConversion', 'timeToUnitConversion')
     convs = {c for c in (cmds.listConnections(expr) or [])
              if cmds.nodeType(c) in conv_types}
-    rt_utl.remove(expr)
+    rt_mya.remove(expr)
     for conv in convs:
         if cmds.objExists(conv):
-            rt_utl.remove(conv)
+            rt_mya.remove(conv)
 
 ensure_connect = rt_mya.ensure_connect
 
@@ -84,7 +83,7 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
     logger.info(f'{rigname}: Add animation effect attributes to basectrl')
 
     if rt_cst.effects_enabled():
-        rt_utl.add_attribute_enum(basectrl, ANIM_DIVIDER[0], ANIM_DIVIDER[1], ANIM_DIVIDER[2])
+        rt_mya.add_attribute_enum(basectrl, ANIM_DIVIDER[0], ANIM_DIVIDER[1], ANIM_DIVIDER[2])
 
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]

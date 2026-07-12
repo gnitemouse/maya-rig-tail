@@ -12,7 +12,6 @@ import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
 import rig_tail_joint as rt_jnt
-import rig_tail_util as rt_utl  # Backward compatibility
 
 logger = logger_setup(__name__)
 
@@ -80,11 +79,11 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
 
     # Clean up and organize
     rt_nam.rename_shapes(curve, typ='crv')
-    rt_utl.set_curve_visibility(curve)
+    rt_mya.set_curve_visibility(curve)
     cmds.delete(curve, ch=1) # Delete construction history
 
     spline_grp = rt_nam.fstr(rigname, SPLINE_GRP, typ)
-    rt_utl.parent_to(curve, spline_grp)
+    rt_mya.parent_to(curve, spline_grp)
 
     num_cv = cmds.getAttr(f'{curve}.controlPoints', size=True)
     logger.debug(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
@@ -250,9 +249,9 @@ def rename_spline_handle(rigname, spline_list, curve, typ):
     rt_mya.remove(spline_list[2]) # Delete temp curve
 
     # Organize
-    rt_utl.parent_to(spline_list[0], rt_nam.fstr(rigname, SPLINE_GRP, typ))
+    rt_mya.parent_to(spline_list[0], rt_nam.fstr(rigname, SPLINE_GRP, typ))
     rt_nam.rename_shapes(curve, typ='crv')
-    rt_utl.set_curve_visibility(curve)
+    rt_mya.set_curve_visibility(curve)
 
     return [spline_handle, spline_effector, curve]
 
@@ -473,7 +472,7 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     # Organize under cluster group
     cluster_grp = rt_nam.fstr(rigname, CLUSTER_GRP, typ)
     for cluster_node, cluster_handle in clusters:
-        rt_utl.parent_to(cluster_handle, cluster_grp)
+        rt_mya.parent_to(cluster_handle, cluster_grp)
         cmds.setAttr(f'{cluster_handle}.displayHandle', show_handle)
         logger.debug(f'[{cluster_node}, {cluster_handle}],')
 

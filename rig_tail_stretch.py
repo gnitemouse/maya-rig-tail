@@ -11,7 +11,6 @@ from rig_tail_constants import *
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
-import rig_tail_util as rt_utl
 
 logger = logger_setup(__name__)
 
@@ -105,7 +104,7 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
 def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not rt_cst.EFFECTS['stretchy']:
         return
-    rt_utl.add_attribute_enum(basectrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
 
     if not cmds.attributeQuery('stretch', n=basectrl, ex=1):
         cmds.addAttr(basectrl, ln='stretch', at='float', k=1, dv=0, min=-10, max=10)
@@ -114,7 +113,7 @@ def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
         cmds.addAttr(basectrl, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
 
-    rt_utl.add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
 
     for i, bn_jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
         if not cmds.attributeQuery(f'jntScaleYZ{i:02}', n=basectrl, ex=1):

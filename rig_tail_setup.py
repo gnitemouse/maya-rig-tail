@@ -22,7 +22,6 @@ import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_joint as rt_jnt
 import rig_tail_cache as rt_cache
-import rig_tail_util as rt_utl  # Backward compatibility
 import rig_tail_control as rt_ctl
 import rig_tail_connect as rt_con
 
@@ -109,8 +108,8 @@ def cleanup_rigname(rigname, fk, ik):
                 cmds.delete(constr)
             # Reset OPM and transforms on controls
             if f'{CTRL}' in node:
-                rt_utl.reset_opm(node, unlock=True)
-                rt_utl.reset_transforms(node, unlock=True)
+                rt_mya.reset_opm(node, unlock=True)
+                rt_mya.reset_transforms(node, unlock=True)
 
     # 3. Delete skinClusters from curves
     logger.debug(f"{rigname}: Cleaning up skinClusters")
@@ -160,7 +159,7 @@ def cleanup_rigname(rigname, fk, ik):
         # Re-parent FK joints in proper hierarchy
         for i in range(len(joints)-1, 0, -1):  # Reverse order
             if cmds.objExists(joints[i]) and cmds.objExists(joints[i-1]):
-                rt_utl.parent_to(joints[i], joints[i-1])
+                rt_mya.parent_to(joints[i], joints[i-1])
 
     # 5. Delete utility nodes (conditions, multiply, math nodes)
     logger.debug(f"{rigname}: Cleaning up utility nodes")
@@ -351,15 +350,15 @@ def setup_rig(fk, ik):
         if group == geometry_grp:
             meshes = rt_mya.get_geometry_from_scene()
             for geo in meshes:
-                rt_utl.parent_to(geo, geometry_grp)
+                rt_mya.parent_to(geo, geometry_grp)
         elif group == control_grp:
             controls = rt_mya.get_controls_from_scene()
             for ctrl in controls:
-                rt_utl.parent_to(ctrl, control_grp)
+                rt_mya.parent_to(ctrl, control_grp)
         elif group == skeleton_grp:
             joints = rt_mya.get_joints_from_scene()
             for joint in joints:
-                rt_utl.parent_to(joint, skeleton_grp)
+                rt_mya.parent_to(joint, skeleton_grp)
         else:
             logger.debug(f"Group exists '{group}'")
 
@@ -588,8 +587,8 @@ def rename_components():
         for old_switch in old_switches:
             if cmds.attributeQuery(old_switch, n=node, ex=1):
                 cmds.deleteAttr(node, at=old_switch)
-                rt_utl.add_attribute_enum(node, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-                rt_utl.add_attribute_enum(node, IKFK_SWITCH[0], IKFK_SWITCH[1], IKFK_SWITCH[2], IKFK_SWITCH[3])
+                rt_mya.add_attribute_enum(node, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
+                rt_mya.add_attribute_enum(node, IKFK_SWITCH[0], IKFK_SWITCH[1], IKFK_SWITCH[2], IKFK_SWITCH[3])
 
     # Rename DAG nodes
     for node in dag_nodes:

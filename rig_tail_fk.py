@@ -25,7 +25,6 @@ from rig_tail_constants import *
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
-import rig_tail_util as rt_utl  # Backward compatibility
 
 logger = logger_setup(__name__)
 
@@ -327,18 +326,18 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
 
     if cmds.objExists(fkjnt_grp):
         logger.debug(f"fkjnt_grp exists:'{fkjnt_grp}' basectrl:'{basectrl}'")
-        rt_utl.match_transform(fkjnt_grp, basectrl, moc=1)
+        rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
     else:
         # Check if first_sdk_grp has a parent that could be fkjnt_grp
         first_sdk_parent = cmds.listRelatives(first_sdk_grp, p=True, typ='transform')
         if first_sdk_parent:
             logger.debug(f"fkjnt_grp found:'{first_sdk_parent[0]}' basectrl:'{basectrl}'")
             fkjnt_grp = cmds.rename(first_sdk_parent[0], fkjnt_grp)
-            rt_utl.match_transform(fkjnt_grp, basectrl, moc=1)
+            rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
         else:
             logger.debug(f"Create new fkjnt_grp:'{fkjnt_grp}' basectrl:'{basectrl}'")
             rt_mya.create_group(fkjnt_grp)
-            rt_utl.match_transform(fkjnt_grp, basectrl, moc=0)
+            rt_mya.match_transform(fkjnt_grp, basectrl, moc=0)
 
     # Create SDK groups for each joint (in reverse order for proper parenting)
     for jnt in reversed(joints):
@@ -372,8 +371,8 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
                 cmds.setAttr(f'{sdk_grp}.joint_pos', cb=1, l=1)
 
             if prev_sdk_grp: # Nest current SDK group under previous
-                rt_utl.parent_to(sdk_grp, prev_sdk_grp, r=True)
-                rt_utl.match_transform(sdk_grp, prev_sdk_grp, moc=1)
+                rt_mya.parent_to(sdk_grp, prev_sdk_grp, r=True)
+                rt_mya.match_transform(sdk_grp, prev_sdk_grp, moc=1)
             else:
                 first_sdk_grp = sdk_grp
             prev_sdk_grp = sdk_grp
@@ -382,8 +381,8 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
         put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp)
 
     # Move first_sdk_grp under fkjnt_grp
-    rt_utl.parent_to(first_sdk_grp, fkjnt_grp)
-    rt_utl.opm(first_sdk_grp)
+    rt_mya.parent_to(first_sdk_grp, fkjnt_grp)
+    rt_mya.opm(first_sdk_grp)
     return fkjnt_grp
 
 def get_sdk_groups(joints):
@@ -425,7 +424,7 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         first_sdk_grp (str): Top SDK group in hierarchy
         last_sdk_grp (str): Bottom SDK group (direct parent of joint)
     '''
-    if rt_utl.is_parent(jnt, last_sdk_grp):
+    if rt_mya.is_parent(jnt, last_sdk_grp):
         return # Joint already under SDK groups
 
     jnt_parent = cmds.listRelatives(jnt, p=True) or []
@@ -434,18 +433,18 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         # Create temporary group to preserve joint transform
         tmp_grp = cmds.group(em=True, n=f'{jnt}_tmp')
         cmds.matchTransform(tmp_grp, jnt)
-        rt_utl.parent_to(jnt, tmp_grp, a=1) # Unparent joint
+        rt_mya.parent_to(jnt, tmp_grp, a=1) # Unparent joint
         logger.debug(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
 
         # Move first_sdk_grp under joint's parent
-        rt_utl.parent_to(first_sdk_grp, jnt_parent)
+        rt_mya.parent_to(first_sdk_grp, jnt_parent)
         cmds.matchTransform(first_sdk_grp, jnt_parent)
-        rt_utl.reset_opm(first_sdk_grp)
-        rt_utl.reset_transforms(first_sdk_grp)
+        rt_mya.reset_opm(first_sdk_grp)
+        rt_mya.reset_transforms(first_sdk_grp)
         cmds.matchTransform(first_sdk_grp, jnt)
 
         # Move joint under last_sdk_grp
-        rt_utl.parent_to(jnt, last_sdk_grp, a=1)
+        rt_mya.parent_to(jnt, last_sdk_grp, a=1)
         # Clean up any extra transform created by reparenting
         transf = cmds.listRelatives(jnt, p=True, typ='transform')[0]
         if transf != last_sdk_grp:
@@ -453,5 +452,5 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         cmds.delete(tmp_grp)
     else:
         # No parent - simple case
-        rt_utl.match_transform(first_sdk_grp, jnt, moc=0)
-        rt_utl.parent_to(jnt, last_sdk_grp, a=1)
+        rt_mya.match_transform(first_sdk_grp, jnt, moc=0)
+        rt_mya.parent_to(jnt, last_sdk_grp, a=1)

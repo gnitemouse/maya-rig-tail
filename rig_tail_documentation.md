@@ -23,7 +23,6 @@ Complete API reference for the Maya Tail Rig system.
 |--------|--------------|-------------|
 | `rig_tail_naming` | `rt_nam` | Template strings, naming conventions |
 | `rig_tail_maya` | `rt_mya` | Maya scene operations, node creation, geometry binding |
-| `rig_tail_util` | `rt_utl` | Transform helpers, connections, constraints |
 | `rig_tail_math` | `rt_mat` | Vector math, orientation helpers |
 | `rig_tail_matrix` | `rt_mtx` | Matrix offset network builder |
 | `rig_tail_cache` | `rt_che` | Control caching and validation |
@@ -224,15 +223,6 @@ Create skinCluster binding.
 
 #### `unbind_skincluster(node, delete_history=True)`
 Unbind skinCluster from node.
-
----
-
-## rig_tail_util.py (rt_utl)
-
-Transform helpers, connections, and constraints.
-
-### Re-exports
-All functions from specialized modules are re-exported for backward compatibility.
 
 ---
 

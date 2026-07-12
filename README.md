@@ -71,7 +71,6 @@ Component naming can be changed through UI or in rig_tail_constants.py
 | `rig_tail_constants` | `rt_cst` | Global constants and caches |
 | `rig_tail_naming` | `rt_nam` | Template strings and naming |
 | `rig_tail_maya` | `rt_mya` | Maya scene/node operations |
-| `rig_tail_util` | `rt_utl` | Transform/connection helpers |
 | `rig_tail_joint` | `rt_jnt` | Joint chain utilities |
 | `rig_tail_math` | `rt_mat` | Vector/matrix math |
 | `rig_tail_matrix` | `rt_mtx` | Matrix network builder |
