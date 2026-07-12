@@ -69,7 +69,7 @@ class RigTailUI(QtWidgets.QDialog):
                 font-size: 10px;
                 border: 1px solid #555555;
                 border-radius: 2px;
-                padding: 0px;
+                padding: 0px 8px;
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
@@ -78,12 +78,27 @@ class RigTailUI(QtWidgets.QDialog):
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
-        self.lbl_config_file = QtWidgets.QLabel('[Default Config]')
-        self.lbl_config_file.setStyleSheet('color: #4A90E2; font-size: 10px;')
-        self.lbl_config_file.setToolTip(
-            'Config file currently in effect. [Default Config] means the '
-            'built-in defaults (no config file loaded).')
-        display_layout.addWidget(self.lbl_config_file)
+        self.txt_config = QtWidgets.QLineEdit()
+        self.txt_config.setPlaceholderText('[Default Config]')
+        self.txt_config.setStyleSheet('''
+            QLineEdit {
+                background-color: #2b2b2b;
+                color: #4A90E2;
+                font-size: 10px;
+                border: 1px solid #555555;
+                border-radius: 2px;
+                padding: 2px 6px;
+            }
+            QLineEdit:focus {
+                border-color: #F5D041;
+            }
+        ''')
+        self.txt_config.setToolTip(
+            'Config file currently in effect ([Default Config] = built-in '
+            'defaults). Type a path and press Enter to load it directly; '
+            'Load/Save Config update it too.')
+        self.txt_config.returnPressed.connect(self.load_config_from_text)
+        display_layout.addWidget(self.txt_config)
 
         config_btn_layout = QtWidgets.QHBoxLayout()
         self.btn_load_config = QtWidgets.QPushButton('Load Config')
@@ -192,19 +207,20 @@ class RigTailUI(QtWidgets.QDialog):
         options_layout.addLayout(features_layout)
 
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_master = QtWidgets.QCheckBox('Master Controller')
-        self.chk_master.setEnabled(len(rt_cst.RIGPARTS) > 1)
-        self.chk_master.setToolTip(
-            'Build one centralized dashboard control that drives the '
-            'ikfk switches and effect attributes of every tail in '
-            'RIGPARTS. Enabled when RIGPARTS has 2+ parts.')
+        self.chk_main = QtWidgets.QCheckBox('Main Controller (multiple)')
+        self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_main.setToolTip(
+            'Build one centralized dashboard control with proxy '
+            'attributes (IKFK switch, IK Twist, Stretch, Animation '
+            'effects) for every tail in RIGPARTS. Enabled when RIGPARTS '
+            'has 2+ parts.')
         self.chk_force = QtWidgets.QCheckBox('Force Rebuild (ignore cache)')
         self.chk_force.setToolTip(
             'Tear the existing rig down completely and rebuild, even if '
             'the joints are unchanged since the last build.')
-        self.style_checkbox(self.chk_master)
+        self.style_checkbox(self.chk_main)
         self.style_checkbox(self.chk_force)
-        toggles_layout.addWidget(self.chk_master)
+        toggles_layout.addWidget(self.chk_main)
         toggles_layout.addWidget(self.chk_force)
         options_layout.addLayout(toggles_layout)
 
@@ -378,12 +394,12 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_noise.setChecked(rt_cst.EFFECTS.get('noise', False))
         self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
         self.chk_force.setChecked(rt_cst.FORCE_REBUILD)
-        self.chk_master.setChecked(rt_cst.MASTER_CONTROLLER)
+        self.chk_main.setChecked(rt_cst.MAIN_CONTROLLER)
         self.update_display()
 
     def update_display(self):
-        '''Refresh the config-file label and configuration summary text.'''
-        self.lbl_config_file.setText(rt_cst.LOADED_CONFIG or '[Default Config]')
+        '''Refresh the config-file textbox and configuration summary.'''
+        self.txt_config.setText(rt_cst.LOADED_CONFIG or '')
         display_text = '\n'.join([
             f"ROOT = '{rt_cst.ROOT}'",
             f'RIGPARTS = {rt_cst.RIGPARTS}',
@@ -394,7 +410,7 @@ class RigTailUI(QtWidgets.QDialog):
             f'  SPLINE_BOT = {rt_cst.SPLINE_BOT_SZ}  MID = {rt_cst.SPLINE_MID_SZ}  TOP = {rt_cst.SPLINE_TOP_SZ}',
         ])
         self.txt_display.setText(display_text)
-        self.chk_master.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
 
     def on_build_mode_changed(self):
         '''
@@ -415,12 +431,13 @@ class RigTailUI(QtWidgets.QDialog):
         if not ik:
             self.chk_stretchy.setChecked(False)
 
-    def load_config(self):
-        '''Import configuration from a user-chosen JSON config file.'''
-        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, 'Load Config', rt_cst.CONFIG_FILE, 'JSON Files (*.json);;All Files (*)')
-        if not filepath:
-            return
+    def config_start_path(self):
+        '''Config path to preselect in file dialogs: the textbox path if
+        one is typed/displayed, otherwise the default CONFIG_FILE.'''
+        return self.txt_config.text().strip() or rt_cst.CONFIG_FILE
+
+    def load_config_path(self, filepath):
+        '''Load the given config file and refresh the UI.'''
         if rt_cst.load_config(filepath):
             self.load_current_values()
             QtWidgets.QMessageBox.information(
@@ -429,13 +446,34 @@ class RigTailUI(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(
                 self, 'Warning', f'Failed to load configuration from:\n{filepath}')
 
+    def load_config(self):
+        '''Import configuration from a user-chosen JSON config file.'''
+        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Load Config', self.config_start_path(),
+            'JSON Files (*.json);;All Files (*)')
+        if filepath:
+            self.load_config_path(filepath)
+
+    def load_config_from_text(self):
+        '''Load the config path typed into the config textbox (Enter).'''
+        filepath = self.txt_config.text().strip()
+        if not filepath:
+            return
+        if not os.path.isfile(filepath):
+            QtWidgets.QMessageBox.warning(
+                self, 'Warning', f'Config file not found:\n{filepath}')
+            return
+        self.load_config_path(filepath)
+
     def save_config(self):
         '''Export configuration to a user-chosen JSON config file.'''
         filepath, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, 'Save Config', rt_cst.CONFIG_FILE, 'JSON Files (*.json);;All Files (*)')
+            self, 'Save Config', self.config_start_path(),
+            'JSON Files (*.json);;All Files (*)')
         if not filepath:
             return
         if rt_cst.save_config(filepath):
+            self.update_display()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration saved to:\n{filepath}')
         else:
@@ -487,7 +525,7 @@ class RigTailUI(QtWidgets.QDialog):
             'loop': self.chk_loop.isChecked()
             }
         rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
-        rt_cst.MASTER_CONTROLLER = self.chk_master.isChecked()
+        rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
