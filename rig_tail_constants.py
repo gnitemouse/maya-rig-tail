@@ -42,8 +42,8 @@ RIGPARTS = ['tail']
 
 # Root Name
 ROOT = 'tail'
-# Build Group Controls (for multiple tails)
-GROUP_CONTROLS = False
+# Build centralized master controller dashboard (for multiple tails)
+MASTER_CONTROLLER = False
 # Force Rebuild (even if joints are unchanged)
 FORCE_REBUILD = False
 # Max per-joint world position drift (scene units) still treated as
@@ -255,7 +255,7 @@ def get_user_editable_config():
         # User Variables
         'ROOT': ROOT,
         'EFFECTS': EFFECTS,
-        'GROUP_CONTROLS': GROUP_CONTROLS,
+        'MASTER_CONTROLLER': MASTER_CONTROLLER,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
 
@@ -383,7 +383,7 @@ def load_config(filepath=None):
     Returns True on success, False if the file is missing or unreadable.
     '''
     global LOADED_CONFIG
-    global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD, JOINT_POS_TOLERANCE
+    global RIGPARTS, ROOT, EFFECTS, MASTER_CONTROLLER, FORCE_REBUILD, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
     global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
@@ -412,7 +412,9 @@ def load_config(filepath=None):
         RIGPARTS = config.get('RIGPARTS', RIGPARTS)
         ROOT = config.get('ROOT', ROOT)
         EFFECTS = config.get('EFFECTS', EFFECTS)
-        GROUP_CONTROLS = config.get('GROUP_CONTROLS', GROUP_CONTROLS)
+        # 'GROUP_CONTROLS' is the legacy key for MASTER_CONTROLLER
+        MASTER_CONTROLLER = config.get(
+            'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MASTER_CONTROLLER))
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
 

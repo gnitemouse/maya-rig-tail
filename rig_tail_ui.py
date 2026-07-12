@@ -33,10 +33,11 @@ class RigTailUI(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Rig Tail')
-        self.setMinimumSize(500, 950)
-        self.resize(500, 980)
+        self.setMinimumWidth(500)
         self.setup_ui()
         self.load_current_values()
+        # Fit height to content so no dead space is left under the buttons
+        self.resize(500, self.sizeHint().height())
 
     def setup_ui(self):
         '''Build the main window layout.'''
@@ -59,7 +60,7 @@ class RigTailUI(QtWidgets.QDialog):
 
         self.txt_display = QtWidgets.QTextEdit()
         self.txt_display.setReadOnly(True)
-        self.txt_display.setMaximumHeight(120)
+        self.txt_display.setMaximumHeight(105)
         self.txt_display.setStyleSheet('''
             QTextEdit {
                 background-color: #2b2b2b;
@@ -72,13 +73,23 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
+        self.txt_display.setToolTip('Summary of the configuration the next build will use.')
         display_layout.setContentsMargins(4, 2, 4, 2)
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
+        self.lbl_config_file = QtWidgets.QLabel('[Default Config]')
+        self.lbl_config_file.setStyleSheet('color: #4A90E2; font-size: 10px;')
+        self.lbl_config_file.setToolTip(
+            'Config file currently in effect. [Default Config] means the '
+            'built-in defaults (no config file loaded).')
+        display_layout.addWidget(self.lbl_config_file)
+
         config_btn_layout = QtWidgets.QHBoxLayout()
         self.btn_load_config = QtWidgets.QPushButton('Load Config')
         self.btn_save_config = QtWidgets.QPushButton('Save Config')
+        self.btn_load_config.setToolTip('Import all settings from a JSON config file.')
+        self.btn_save_config.setToolTip('Export all settings to a JSON config file.')
         self.btn_load_config.clicked.connect(self.load_config)
         self.btn_save_config.clicked.connect(self.save_config)
         self.style_button(self.btn_load_config, 0)
@@ -86,6 +97,7 @@ class RigTailUI(QtWidgets.QDialog):
         config_btn_layout.addWidget(self.btn_load_config)
         config_btn_layout.addWidget(self.btn_save_config)
         display_layout.addLayout(config_btn_layout)
+        display_layout.addSpacing(6)
 
         display_group.setLayout(display_layout)
         main_layout.addWidget(display_group)
@@ -99,6 +111,9 @@ class RigTailUI(QtWidgets.QDialog):
         root_label.setMinimumWidth(100)
         self.txt_root = QtWidgets.QLineEdit()
         self.txt_root.setPlaceholderText('e.g. tail_root_grp')
+        self.txt_root.setToolTip(
+            'Name of the rig root group (ROOT). A trailing group label '
+            'is stripped, e.g. tail_root_grp -> tail_root.')
         self.style_line_edit(self.txt_root)
         root_layout.addWidget(root_label)
         root_layout.addWidget(self.txt_root)
@@ -113,6 +128,12 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik.setChecked(True)
         self.chk_fk.toggled.connect(self.on_build_mode_changed)
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
+        self.chk_fk.setToolTip(
+            'Build the FK chain: variable-FK sliding controls with '
+            'rotation falloff. At least one of FK/IK must stay checked.')
+        self.chk_ik.setToolTip(
+            'Build the IK chain: spline IK with clusters, plus IK and '
+            'Float control modes. At least one of FK/IK must stay checked.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         build_layout.addWidget(build_label)
@@ -126,6 +147,9 @@ class RigTailUI(QtWidgets.QDialog):
         features_label.setMinimumWidth(100)
         self.chk_stretchy = QtWidgets.QCheckBox('Stretchy')
         self.chk_stretchy.setChecked(True)
+        self.chk_stretchy.setToolTip(
+            'Build the squash & stretch network. Requires IK: the '
+            'stretch nodes read the ikfk switch attribute.')
         self.style_checkbox(self.chk_stretchy)
         features_layout.addWidget(features_label)
         features_layout.addWidget(self.chk_stretchy)
@@ -143,6 +167,18 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_curl.setChecked(False)
         self.chk_noise.setChecked(False)
         self.chk_loop.setChecked(False)
+        self.chk_wave.setToolTip(
+            'Add animatable wave attributes: a traveling sine ripple '
+            'along the tail (amplitude/frequency per axis).')
+        self.chk_curl.setToolTip(
+            'Add animatable curl attributes: roll the tail up around '
+            'its base (curl X/Y/Z).')
+        self.chk_noise.setToolTip(
+            'Add animatable noise attributes: random jitter on the '
+            'joints for organic motion.')
+        self.chk_loop.setToolTip(
+            'Add a looping time driver so wave/curl/noise effects cycle '
+            'seamlessly over the timeline.')
         self.style_checkbox(self.chk_wave)
         self.style_checkbox(self.chk_curl)
         self.style_checkbox(self.chk_noise)
@@ -156,14 +192,19 @@ class RigTailUI(QtWidgets.QDialog):
         options_layout.addLayout(features_layout)
 
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_group_control = QtWidgets.QCheckBox('Group Control (multiple tails)')
-        self.chk_group_control.setEnabled(len(rt_cst.RIGPARTS) > 1)
-        self.chk_group_control.setToolTip(
-            'Reserved: GROUP_CONTROLS is stored/saved but not consumed by the build yet.')
+        self.chk_master = QtWidgets.QCheckBox('Master Controller')
+        self.chk_master.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_master.setToolTip(
+            'Build one centralized dashboard control that drives the '
+            'ikfk switches and effect attributes of every tail in '
+            'RIGPARTS. Enabled when RIGPARTS has 2+ parts.')
         self.chk_force = QtWidgets.QCheckBox('Force Rebuild (ignore cache)')
-        self.style_checkbox(self.chk_group_control)
+        self.chk_force.setToolTip(
+            'Tear the existing rig down completely and rebuild, even if '
+            'the joints are unchanged since the last build.')
+        self.style_checkbox(self.chk_master)
         self.style_checkbox(self.chk_force)
-        toggles_layout.addWidget(self.chk_group_control)
+        toggles_layout.addWidget(self.chk_master)
         toggles_layout.addWidget(self.chk_force)
         options_layout.addLayout(toggles_layout)
 
@@ -175,20 +216,37 @@ class RigTailUI(QtWidgets.QDialog):
         editors_layout.setSpacing(6)
 
         editor_buttons = [
-            ('Edit Rig Parts', lambda: self.open_rigparts_editor()),
-            ('Edit Naming: Type Labels', lambda: self.open_naming_editor('types')),
-            ('Edit Naming: Controls, Joints', lambda: self.open_naming_editor('controls')),
-            ('Edit Naming: Groups', lambda: self.open_naming_editor('groups')),
-            ('Edit Naming: Curves, Clusters', lambda: self.open_naming_editor('curves')),
-            ('Edit Naming: Spline', lambda: self.open_naming_editor('spline')),
-            ('Edit Naming: IKFK, Switch, Divider', lambda: self.open_naming_editor('ikfk')),
-            ('Edit Constants: Number of Controls', lambda: self.open_constants_editor('num')),
-            ('Edit Constants: Control Size', lambda: self.open_constants_editor('size')),
+            ('Edit Rig Parts', lambda: self.open_rigparts_editor(),
+             'Edit RIGPARTS: the list of {rigname} components to rig, '
+             'one tail per entry. Can also be filled from selected joints.'),
+            ('Edit Naming: Type Labels', lambda: self.open_naming_editor('types'),
+             'Edit the naming labels used as suffixes in every template '
+             '(grp, ctrl, jnt, sdk, ...).'),
+            ('Edit Naming: Controls, Joints', lambda: self.open_naming_editor('controls'),
+             'Edit naming templates for control curves, their offset '
+             'groups, and joints.'),
+            ('Edit Naming: Groups', lambda: self.open_naming_editor('groups'),
+             'Edit naming templates for the rig hierarchy groups and '
+             'SDK nodes.'),
+            ('Edit Naming: Curves, Clusters', lambda: self.open_naming_editor('curves'),
+             'Edit naming templates for curves, curveInfo, clusters, and '
+             'up-vector controls.'),
+            ('Edit Naming: Spline', lambda: self.open_naming_editor('spline'),
+             'Edit naming templates for spline IK handle, effector, and '
+             'spline mode controls.'),
+            ('Edit Naming: IKFK, Switch, Divider', lambda: self.open_naming_editor('ikfk'),
+             'Edit the ikfk attribute name, switch modes, and channel '
+             'box divider attributes.'),
+            ('Edit Constants: Number of Controls', lambda: self.open_constants_editor('num'),
+             'Edit how many FK and IK controls are built along the tail.'),
+            ('Edit Constants: Control Size', lambda: self.open_constants_editor('size'),
+             'Edit the size of each control curve.'),
         ]
 
-        for btn_text, btn_func in editor_buttons:
+        for btn_text, btn_func, btn_tip in editor_buttons:
             btn = QtWidgets.QPushButton(btn_text)
             btn.clicked.connect(btn_func)
+            btn.setToolTip(btn_tip)
             self.style_button(btn, 0)
             editors_layout.addWidget(btn)
 
@@ -200,6 +258,8 @@ class RigTailUI(QtWidgets.QDialog):
 
         self.btn_cancel = QtWidgets.QPushButton('Cancel')
         self.btn_build = QtWidgets.QPushButton('Build Rig')
+        self.btn_cancel.setToolTip('Close the window without building.')
+        self.btn_build.setToolTip('Build the rig with the settings above.')
 
         self.btn_cancel.clicked.connect(self.close)
         self.btn_build.clicked.connect(self.build_rig)
@@ -211,7 +271,6 @@ class RigTailUI(QtWidgets.QDialog):
         button_layout.addWidget(self.btn_build)
 
         main_layout.addLayout(button_layout)
-        main_layout.addStretch()
 
     def create_group_box(self, title):
         group = QtWidgets.QGroupBox(title)
@@ -319,17 +378,13 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_noise.setChecked(rt_cst.EFFECTS.get('noise', False))
         self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
         self.chk_force.setChecked(rt_cst.FORCE_REBUILD)
-        self.chk_group_control.setChecked(rt_cst.GROUP_CONTROLS)
+        self.chk_master.setChecked(rt_cst.MASTER_CONTROLLER)
         self.update_display()
 
     def update_display(self):
-        '''Refresh the read-only configuration summary text.'''
-        if rt_cst.LOADED_CONFIG:
-            source = f'config file  {rt_cst.LOADED_CONFIG}'
-        else:
-            source = 'default values (no config file loaded)'
+        '''Refresh the config-file label and configuration summary text.'''
+        self.lbl_config_file.setText(rt_cst.LOADED_CONFIG or '[Default Config]')
         display_text = '\n'.join([
-            f'Config: {source}',
             f"ROOT = '{rt_cst.ROOT}'",
             f'RIGPARTS = {rt_cst.RIGPARTS}',
             f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
@@ -339,7 +394,7 @@ class RigTailUI(QtWidgets.QDialog):
             f'  SPLINE_BOT = {rt_cst.SPLINE_BOT_SZ}  MID = {rt_cst.SPLINE_MID_SZ}  TOP = {rt_cst.SPLINE_TOP_SZ}',
         ])
         self.txt_display.setText(display_text)
-        self.chk_group_control.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_master.setEnabled(len(rt_cst.RIGPARTS) > 1)
 
     def on_build_mode_changed(self):
         '''
@@ -432,7 +487,7 @@ class RigTailUI(QtWidgets.QDialog):
             'loop': self.chk_loop.isChecked()
             }
         rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
-        rt_cst.GROUP_CONTROLS = self.chk_group_control.isChecked()
+        rt_cst.MASTER_CONTROLLER = self.chk_master.isChecked()
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
@@ -482,6 +537,9 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.btn_add = QtWidgets.QPushButton('Add')
         self.btn_edit = QtWidgets.QPushButton('Edit')
         self.btn_remove = QtWidgets.QPushButton('Remove')
+        self.btn_add.setToolTip('Add a new rig part name to the list.')
+        self.btn_edit.setToolTip('Rename the selected rig part.')
+        self.btn_remove.setToolTip('Delete the selected rig part from the list.')
         self.btn_add.clicked.connect(self.add_item)
         self.btn_edit.clicked.connect(self.edit_item)
         self.btn_remove.clicked.connect(self.remove_item)
@@ -493,6 +551,9 @@ class RigPartsEditor(QtWidgets.QDialog):
         btn_layout.addWidget(self.btn_remove)
 
         self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
+        self.btn_get_rigparts.setToolTip(
+            'Replace the list with {rigname}s extracted from the joints '
+            'selected in the scene (joints must follow the JOINT template).')
         self.btn_get_rigparts.clicked.connect(self.get_rigparts_from_selection)
         self.parent().style_button(self.btn_get_rigparts, 2)
 
