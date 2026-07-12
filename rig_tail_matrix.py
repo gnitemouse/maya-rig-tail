@@ -37,7 +37,6 @@ def build_matrix_offset_network(rigname, fk, ik):
         fk (bool): If True and ik is False, use FK joints as drivers
         ik (bool): If True, use IK joints as drivers (preferred when both True)
     '''
-    from rig_tail_constants import COG_CTRL, IKFK
 
     logger.info(f'{rigname}: Building pure matrix OPM network')
 
@@ -46,8 +45,8 @@ def build_matrix_offset_network(rigname, fk, ik):
         return
 
     joints = rt_cst.JOINTS_BN[rigname]
-    cog_ctrl = rt_name.fstr('', COG_CTRL)
-    ikfk_attr = rt_name.fstr(rigname, IKFK)
+    cog_ctrl = rt_name.fstr('', rt_cst.COG_CTRL)
+    ikfk_attr = rt_name.fstr(rigname, rt_cst.IKFK)
 
     # Build FX list from constants
     fx_list = []

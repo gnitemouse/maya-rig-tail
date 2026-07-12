@@ -16,7 +16,7 @@ validate_cache() checks whether RIGPARTS / ROOT changed
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -82,9 +82,9 @@ def cleanup_rigname(rigname, fk, ik):
     Can be called independently for targeted cleanup.
     '''
     logger.info(f"{rigname}: Cleanup rig part")
-    types = ['', TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX]
-    basectrl_grp = rt_nam.fstr(rigname, BASECTRL_GRP)
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    types = ['', rt_cst.TYPE_BN, rt_cst.TYPE_IK, rt_cst.TYPE_FK, rt_cst.TYPE_FX]
+    basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     # 1. Disconnect skeleton, delete joint constraints
     logger.debug(f"{rigname}: Cleaning up skeleton constraints")
@@ -107,18 +107,18 @@ def cleanup_rigname(rigname, fk, ik):
             for constr in constraints:
                 cmds.delete(constr)
             # Reset OPM and transforms on controls
-            if f'{CTRL}' in node:
+            if f'{rt_cst.CTRL}' in node:
                 rt_mya.reset_opm(node, unlock=True)
                 rt_mya.reset_transforms(node, unlock=True)
 
     # 3. Delete skinClusters from curves
     logger.debug(f"{rigname}: Cleaning up skinClusters")
     if fk:
-        curve_fk = rt_nam.fstr(rigname, CURVE, TYPE_FK)
+        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
         rt_mya.unbind_skincluster(curve_fk)
     if ik:
-        curve_ik = rt_nam.fstr(rigname, CURVE, TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, CURVE, TYPE_IK, TAG='_spline')
+        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
+        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
         rt_mya.unbind_skincluster(curve_ik)
         rt_mya.unbind_skincluster(curve_ik_spline)
 
@@ -128,7 +128,7 @@ def cleanup_rigname(rigname, fk, ik):
     rt_mya.remove(basectrl)
 
     if fk:
-        fkroot_grp = rt_nam.fstr(rigname, CTRLROOT_GRP, TYPE_FK)
+        fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
         rt_mya.remove(fkroot_grp)
 
     # Remove SDK groups for FK
@@ -136,7 +136,7 @@ def cleanup_rigname(rigname, fk, ik):
         logger.debug(f'{rigname}: Cleaning up FK SDK groups')
         # First, restore FK joint hierarchy by removing SDK groups
         joints = rt_cst.JOINTS_FK[rigname]
-        fkjnt_grp = rt_nam.fstr(rigname, GROUP, TYPE_FK)
+        fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
 
         # Unparent all FK joints to world temporarily
         for jnt in joints:
@@ -148,11 +148,11 @@ def cleanup_rigname(rigname, fk, ik):
         # Delete all SDK groups
         for i, jnt in enumerate(joints):
             NN = rt_nam.get_index_from_name(jnt)
-            for idx in range(NUM_CTRL_FK+1):
-                if idx < NUM_CTRL_FK:
-                    sdk_grp = rt_nam.fstr(rigname, SDK_GRP, TYPE_FK, NN, nn=idx+1)
+            for idx in range(rt_cst.NUM_CTRL_FK+1):
+                if idx < rt_cst.NUM_CTRL_FK:
+                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
                 else:
-                    sdk_grp = rt_nam.fstr(rigname, SDK_JNT, TYPE_FK, NN)
+                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
                 if cmds.objExists(sdk_grp):
                     rt_mya.remove(sdk_grp)
 
@@ -185,20 +185,20 @@ def cleanup_rigname(rigname, fk, ik):
     # 7. Delete curves, clusters, ikHandles
     logger.debug(f"{rigname}: Cleaning up curves and clusters")
     if fk:
-        curve_fk = rt_nam.fstr(rigname, CURVE, TYPE_FK)
-        spline_grp_fk = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_FK)
-        cluster_grp_fk = rt_nam.fstr(rigname, CLUSTER_GRP, TYPE_FK)
+        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
+        spline_grp_fk = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_FK)
+        cluster_grp_fk = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_FK)
         rt_mya.remove(curve_fk)
         rt_mya.remove(spline_grp_fk)
         rt_mya.remove(cluster_grp_fk)
 
     if ik:
-        curve_ik = rt_nam.fstr(rigname, CURVE, TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, CURVE, TYPE_IK, TAG='_spline')
-        spline_grp_ik = rt_nam.fstr(rigname, SPLINE_GRP, TYPE_IK)
-        cluster_grp_ik = rt_nam.fstr(rigname, CLUSTER_GRP, TYPE_IK)
-        spline_handle = rt_nam.fstr(rigname, SPLINE_HANDLE, TYPE_IK)
-        spline_effector = rt_nam.fstr(rigname, SPLINE_EFFECTOR, TYPE_IK)
+        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
+        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
+        spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_IK)
+        cluster_grp_ik = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_IK)
+        spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
+        spline_effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, rt_cst.TYPE_IK)
         rt_mya.remove(spline_handle)
         rt_mya.remove(spline_effector)
         rt_mya.remove(curve_ik)
@@ -210,20 +210,20 @@ def cleanup_rigname(rigname, fk, ik):
     cleanup_anim_effects(rigname, fk, ik)
 
     # Delete scale group
-    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     rt_mya.remove(scale_grp)
 
     # Clean up old visibility conditions
-    basectrl_name = basectrl.rsplit(CTRL, 1)[0]
-    rt_mya.remove(f'{basectrl_name}{VIS}{COND}')
+    basectrl_name = basectrl.rsplit(rt_cst.CTRL, 1)[0]
+    rt_mya.remove(f'{basectrl_name}{rt_cst.VIS}{rt_cst.COND}')
 
     # Clean up old items
     patterns = list()
     for typ in types:
         patterns.extend([
-            f'{typ}_{rigname}_revik_{NUM_CTRL_IK:02d}{CTRL}{GRP}',
-            f'{typ}_{rigname}_switch_*{VIS}{COND}',
-            f'{typ}_{rigname}_measure_scale{GRP}'
+            f'{typ}_{rigname}_revik_{rt_cst.NUM_CTRL_IK:02d}{rt_cst.CTRL}{rt_cst.GRP}',
+            f'{typ}_{rigname}_switch_*{rt_cst.VIS}{rt_cst.COND}',
+            f'{typ}_{rigname}_measure_scale{rt_cst.GRP}'
         ])
     # for p in patterns:
     #     nodes = cmds.ls(p) or []
@@ -254,11 +254,11 @@ def cleanup_connections(rigname, fk, ik):
     if fk and rigname in rt_cst.JOINTS_FK:
         for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
             NN = rt_nam.get_index_from_name(jnt)
-            for idx in range(NUM_CTRL_FK + 1):
-                if idx < NUM_CTRL_FK:
-                    sdk_grp = rt_nam.fstr(rigname, SDK_GRP, TYPE_FK, NN, nn=idx+1)
+            for idx in range(rt_cst.NUM_CTRL_FK + 1):
+                if idx < rt_cst.NUM_CTRL_FK:
+                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
                 else:
-                    sdk_grp = rt_nam.fstr(rigname, SDK_JNT, TYPE_FK, NN)
+                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
                 if cmds.objExists(sdk_grp):
                     rt_mya.disconnect_all(sdk_grp, source=True)
 
@@ -277,7 +277,7 @@ def cleanup_anim_effects(rigname, fk, ik):
     '''
     logger.debug(f'{rigname}: Cleanup animation effects')
     # Delete animation node patterns (expressions first)
-    typ = TYPE_FX
+    typ = rt_cst.TYPE_FX
     node_patterns = [
         f'{rigname}_*_wave*_expression',
         f'{rigname}_*_noise_*_expression',
@@ -325,20 +325,20 @@ def setup_rig(fk, ik):
     '''
     logger.info('-----------------------------------------------------')
     logger.info('Setup rig components')
-    root_grp = rt_nam.fstr('', ROOT_GRP)
-    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', COG_CTRL)
-    geometry_grp = rt_nam.fstr('', GEOMETRY_GRP)
-    control_grp = rt_nam.fstr('', CONTROL_GRP)
-    skeleton_grp = rt_nam.fstr('', SKELETON_GRP)
-    rig_systems_grp = rt_nam.fstr('', RIG_SYSTEMS_GRP)
-    clusters_grp = rt_nam.fstr('', CLUSTERS_GRP)
+    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
+    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
+    control_grp = rt_nam.fstr('', rt_cst.CONTROL_GRP)
+    skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP)
+    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
+    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
 
     if fk and not ik:
         groups = [geometry_grp, control_grp, skeleton_grp, rig_systems_grp, clusters_grp]
     else:
-        fk_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_FK)
-        ik_skeleton_grp = rt_nam.fstr('', SKELETON_GRP, TYPE_IK)
+        fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)
+        ik_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK)
         groups = [geometry_grp, control_grp, skeleton_grp,
                   fk_skeleton_grp, ik_skeleton_grp,
                   rig_systems_grp, clusters_grp]
@@ -381,7 +381,7 @@ def set_root(root):
     '''
     if root:
         rt_cst.ROOT = root
-        root_grp = rt_nam.fstr('', ROOT_GRP)
+        root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
         logger.info(f"Set ROOT '{rt_cst.ROOT}'")
 
         if cmds.objExists(root) and root != root_grp:
@@ -404,12 +404,12 @@ def set_joints_auto():
 
     for rigname in rt_cst.RIGPARTS:
         # Try to find start joint using naming convention
-        start_jnt = rt_nam.fstr(rigname, JOINT, TYPE_BN, NN=0)
+        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
 
         if not cmds.objExists(start_jnt):
             # Fallback: search for any joint with rigname
             all_joints = cmds.ls(type='joint')
-            matching = [j for j in all_joints if rigname in j and TYPE_BN in j]
+            matching = [j for j in all_joints if rigname in j and rt_cst.TYPE_BN in j]
             if matching:
                 start_jnt = matching[0]
                 logger.info(f"{rigname}: Found start joint '{start_jnt}'")
@@ -434,7 +434,7 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
         end_jnt (str): Last joint in chain (auto-detected if None)
     '''
     joints_list = [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]
-    types = [TYPE_BN, TYPE_FK, TYPE_IK]
+    types = [rt_cst.TYPE_BN, rt_cst.TYPE_FK, rt_cst.TYPE_IK]
 
     # Check if cached joints are still valid
     cache_valid = True
@@ -455,7 +455,7 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
 
     # Detect or validate start joint
     if not start_jnt:
-        start_jnt = rt_nam.fstr(rigname, JOINT, TYPE_BN, 0)
+        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, 0)
         logger.info(f"{rigname}: Auto-detect start_jnt: {start_jnt}")
 
     if not cmds.objExists(start_jnt):
@@ -474,11 +474,11 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
     logger.debug(f'Joint Chain: {joint_chain}')
 
     # Create/rename joints - always create BN
-    rt_cst.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, TYPE_BN)
-    logger.info(f'{rigname}: Processed {TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
+    rt_cst.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, rt_cst.TYPE_BN)
+    logger.info(f'{rigname}: Processed {rt_cst.TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
     # Create IK/FK joints here since setup runs before build
-    rt_cst.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], TYPE_FK)
-    rt_cst.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], TYPE_IK)
+    rt_cst.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_FK)
+    rt_cst.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_IK)
 
 
 def create_rename_joints(rigname, joints, typ):
@@ -497,11 +497,11 @@ def create_rename_joints(rigname, joints, typ):
     logger.debug(f"rigname:'{rigname}' joints:'{typ}'")
 
     # BN: rename in place
-    if typ == TYPE_BN:
+    if typ == rt_cst.TYPE_BN:
         out = []
         for jnt in joints:
             NN = rt_nam.get_index_from_name(jnt)
-            new_name = rt_nam.fstr(rigname, JOINT, TYPE_BN, NN)
+            new_name = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN)
             if jnt != new_name:
                 jnt = cmds.rename(jnt, new_name)
             if NN == 'ee':
@@ -512,7 +512,7 @@ def create_rename_joints(rigname, joints, typ):
     # FK/IK: duplicate BN hierarchy
     # BN root must already exist
     bn_root = joints[0]
-    target_root = rt_nam.fstr(rigname, JOINT, typ, 0)
+    target_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
 
     # Remove existing FK / IK chain cleanly
     if cmds.objExists(target_root):
@@ -526,7 +526,7 @@ def create_rename_joints(rigname, joints, typ):
     out = []
     for jnt in dup_jnts:
         NN = rt_nam.get_index_from_name(jnt)
-        new_name = rt_nam.fstr(rigname, JOINT, typ, NN)
+        new_name = rt_nam.fstr(rigname, rt_cst.JOINT, typ, NN)
         if jnt != new_name:
             jnt = cmds.rename(jnt, new_name)
         if NN == 'ee':
@@ -587,8 +587,8 @@ def rename_components():
         for old_switch in old_switches:
             if cmds.attributeQuery(old_switch, n=node, ex=1):
                 cmds.deleteAttr(node, at=old_switch)
-                rt_mya.add_attribute_enum(node, IKFK_DIVIDER[0], IKFK_DIVIDER[1], IKFK_DIVIDER[2])
-                rt_mya.add_attribute_enum(node, IKFK_SWITCH[0], IKFK_SWITCH[1], IKFK_SWITCH[2], IKFK_SWITCH[3])
+                rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
+                rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
 
     # Rename DAG nodes
     for node in dag_nodes:

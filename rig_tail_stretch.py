@@ -7,7 +7,7 @@ Squash and Stretch for Rig Tail
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -95,16 +95,16 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
 
     # Apply stretch to joints
     if ik:
-        stretch_ratio = f'{TYPE_IK}_{rigname}_stretch_ratio'
-        connect_ik_stretch_to_joints(rigname, rt_cst.JOINTS_IK[rigname], stretch_ratio, TYPE_IK)
+        stretch_ratio = f'{rt_cst.TYPE_IK}_{rigname}_stretch_ratio'
+        connect_ik_stretch_to_joints(rigname, rt_cst.JOINTS_IK[rigname], stretch_ratio, rt_cst.TYPE_IK)
     if fk:
-        stretch_ratio = f'{TYPE_FK}_{rigname}_stretch_ratio'
-        connect_fk_stretch_to_joints(rigname, rt_cst.JOINTS_FK[rigname], stretch_ratio, TYPE_FK)
+        stretch_ratio = f'{rt_cst.TYPE_FK}_{rigname}_stretch_ratio'
+        connect_fk_stretch_to_joints(rigname, rt_cst.JOINTS_FK[rigname], stretch_ratio, rt_cst.TYPE_FK)
 
 def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not rt_cst.EFFECTS['stretchy']:
         return
-    rt_mya.add_attribute_enum(basectrl, STRETCH_DIVIDER[0], STRETCH_DIVIDER[1], STRETCH_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, rt_cst.STRETCH_DIVIDER[0], rt_cst.STRETCH_DIVIDER[1], rt_cst.STRETCH_DIVIDER[2])
 
     if not cmds.attributeQuery('stretch', n=basectrl, ex=1):
         cmds.addAttr(basectrl, ln='stretch', at='float', k=1, dv=0, min=-10, max=10)
@@ -113,7 +113,7 @@ def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
         cmds.addAttr(basectrl, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
 
-    rt_mya.add_attribute_enum(basectrl, SCALE_DIVIDER[0], SCALE_DIVIDER[1], SCALE_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, rt_cst.SCALE_DIVIDER[0], rt_cst.SCALE_DIVIDER[1], rt_cst.SCALE_DIVIDER[2])
 
     for i, bn_jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
         if not cmds.attributeQuery(f'jntScaleYZ{i:02}', n=basectrl, ex=1):
@@ -178,7 +178,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         return
     logger.debug(f'curvelen {curvelen} initial_len {initial_len:.3f}')
 
-    if typ == TYPE_IK:
+    if typ == rt_cst.TYPE_IK:
         # IK: Reactive stretch based on current curve length
 
         # (multiplyDivide) reactive stretch ratio (current_len / initial_len)
@@ -209,7 +209,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
 
-    elif typ == TYPE_FK:
+    elif typ == rt_cst.TYPE_FK:
         # FK: Direct multiplier from stretch attribute
 
         # (multiplyDivide) double user stretch
@@ -301,7 +301,7 @@ def create_world_scale(rigname, squash_pma):
         scale_world (str): World scale volume based on scale_grp
         squash_world (str): World scale compensation node
     '''
-    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
 
     # Set scale visibility for scale group
     for axis in 'XYZ':
@@ -346,7 +346,7 @@ def create_joint_mult(rigname, joints, typ):
     logger.debug(f"{rigname}: Create joint multiply nodes")
     # Stretch multiply nodes
     stretch_jnt_mult = list()
-    if typ == TYPE_IK:
+    if typ == rt_cst.TYPE_IK:
         for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
             jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
             if not cmds.objExists(jnt_mult):
@@ -355,10 +355,10 @@ def create_joint_mult(rigname, joints, typ):
             cmds.setAttr(f'{jnt_mult}.input1X', cmds.getAttr(f'{jnt}.translateX'))
             stretch_jnt_mult.append(jnt_mult)
 
-    elif typ == TYPE_FK:
+    elif typ == rt_cst.TYPE_FK:
         for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
             jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
-            first_sdk = rt_nam.fstr(rigname, SDK_GRP, typ, i, 1)
+            first_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, typ, i, 1)
             if not cmds.objExists(jnt_mult):
                 cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
                 cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
@@ -397,7 +397,7 @@ def connect_preserve_volume(rigname, basectrl, squash_blend):
         return
 
     # Check if IK nodes exist
-    stretch_preservevol = f'{TYPE_IK}_{rigname}_stretch_preservevol_blendTwoAttr'
+    stretch_preservevol = f'{rt_cst.TYPE_IK}_{rigname}_stretch_preservevol_blendTwoAttr'
     if cmds.objExists(stretch_preservevol):
         cmds.connectAttr(f'{basectrl}.preserveVolume',
                          f'{stretch_preservevol}.attributesBlender', f=1)
@@ -418,7 +418,7 @@ def connect_world_scale(rigname, basectrl, scale_world):
         scale_world (str): World scale volume based on scale_grp
     '''
     logger.debug(f"{rigname}: Connect world scale")
-    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     if not cmds.objExists(scale_grp):
         logger.error(f'Scale group not found: {scale_grp}')
 
@@ -510,7 +510,7 @@ def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
-        first_sdk = rt_nam.fstr(rigname, SDK_GRP, typ, i, 1)
+        first_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, typ, i, 1)
         if not cmds.objExists(jnt_mult):
             logger.warning(f'Joint multiply node not found: {jnt_mult}')
             continue
@@ -544,18 +544,21 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     if not cmds.objExists(curve):
         logger.error(f'Curve {curve} does not exist')
 
-    # Create curveInfo on curve
+    # Create curveInfo on curve (reused on re-run)
     scale_crvinfo = f'{typ}_{rigname}_scale_curveInfo'
-    cmds.createNode('curveInfo', n=scale_crvinfo, s=1, ss=1)
+    if not cmds.objExists(scale_crvinfo):
+        cmds.createNode('curveInfo', n=scale_crvinfo, s=1, ss=1)
 
     # Connect curve's worldSpace to curveInfo
     curve_shape = cmds.listRelatives(curve, s=1, ni=1)[0]
     cmds.connectAttr(f'{curve_shape}.worldSpace[0]', f'{scale_crvinfo}.inputCurve', f=1)
 
-    # Get initial_len and store as custom attribute
+    # Get initial_len and store as custom attribute; on re-run keep the
+    # stored rest length instead of re-baking a possibly stretched curve
     cmds.dgeval(f'{scale_crvinfo}.arcLength')
     initial_len = cmds.getAttr(f'{scale_crvinfo}.arcLength')
-    cmds.addAttr(scale_crvinfo, ln='initial_length', at='float', dv=initial_len)
+    if not cmds.attributeQuery('initial_length', node=scale_crvinfo, exists=True):
+        cmds.addAttr(scale_crvinfo, ln='initial_length', at='float', dv=initial_len)
 
     if initial_len <= 0:
         logger.warning(f"Curve '{curve}' - initial_len is invalid {initial_len:.3f}")
@@ -577,9 +580,9 @@ def fallback_curve_length(rigname, typ):
     '''
     logger.warning(f"{typ}_{rigname}: Using fallback joint distance calculation")
 
-    if typ == TYPE_FK:
+    if typ == rt_cst.TYPE_FK:
         joints = rt_cst.JOINTS_FK[rigname]
-    elif typ == TYPE_IK:
+    elif typ == rt_cst.TYPE_IK:
         joints = rt_cst.JOINTS_IK[rigname]
     else:
         logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')

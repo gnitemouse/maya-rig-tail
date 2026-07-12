@@ -21,7 +21,7 @@ Credits:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
@@ -31,7 +31,7 @@ logger = logger_setup(__name__)
 
 # ADD CURVEINFO (FK) ===================================================
 
-def set_curveinfo_fk(rigname, curve, controls, typ=TYPE_FK):
+def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
     '''
     Parameterize control position to curve length using pointOnCurveInfo.
     Creates node network to slide controls along curve based on position attribute.
@@ -52,8 +52,8 @@ def set_curveinfo_fk(rigname, curve, controls, typ=TYPE_FK):
         controls (list): List of Variable FK control names
     '''
     logger.debug(f"{rigname}: Add control curveInfo")
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
-    curveinfo = rt_mya.create_curveinfo(rigname, curve, TYPE_FK)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    curveinfo = rt_mya.create_curveinfo(rigname, curve, rt_cst.TYPE_FK)
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
 
     for i, ctrl in enumerate(controls):
@@ -98,7 +98,7 @@ def set_curveinfo_fk(rigname, curve, controls, typ=TYPE_FK):
 
 # FALLOFF ROTATION (FK) ================================================
 
-def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
+def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
     '''
     Remap control's rotation to joint rotations with falloff.
 
@@ -131,7 +131,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
         joints (list): List of FK joints
         sdks (list): SDK groups corresponding to this control's layer
     '''
-    ctrl = rt_nam.fstr(rigname, CONTROL, '', n+1)
+    ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', n+1)
     logger.debug(f"Setup Falloff Rotations for '{ctrl}'")
     control = f'{typ}_{rigname}_{n:02d}'
 
@@ -173,7 +173,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
     # Add rotations from all parent controls
     i = 1
     for parent_n in range(n):
-        parent_ctrl = rt_nam.fstr(rigname, CONTROL, '', parent_n+1)
+        parent_ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', parent_n+1)
         cmds.connectAttr(f'{parent_ctrl}.rotate', f'{rotsum}.input3D[{i}]', f=1)
         i += 1
     # Output: f'{rotsum}.output3D' = accumulated rotation
@@ -232,8 +232,8 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
         cmds.connectAttr(f'{falloff}.output', f'{rotmult_neg}.input2X', f=1)
 
         # Check if joint falls inside falloff range
-        falloff_pos_cond = f'{sdk_name}_falloff_pos_{COND}'
-        falloff_neg_cond = f'{sdk_name}_falloff_neg_{COND}'
+        falloff_pos_cond = f'{sdk_name}_falloff_pos_{rt_cst.COND}'
+        falloff_neg_cond = f'{sdk_name}_falloff_neg_{rt_cst.COND}'
         cmds.createNode('condition', n=falloff_pos_cond, s=1, ss=1)
         cmds.createNode('condition', n=falloff_neg_cond, s=1, ss=1)
 
@@ -252,7 +252,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
         cmds.setAttr(f'{falloff_neg_cond}.colorIfTrueR', 1)
 
         # Choose appropriate rotation multiplier based on position
-        cond = f'{sdk_name}_rotmult_{COND}'
+        cond = f'{sdk_name}_rotmult_{rt_cst.COND}'
         cmds.createNode('condition', n=cond, s=1, ss=1)
         cmds.setAttr(f'{cond}.operation', 2) # greater than
         cmds.connectAttr(f'{ctrlpos}.output', f'{cond}.firstTerm', f=1) # ctrlpos
@@ -284,7 +284,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
         cmds.connectAttr(f'{ctrl}.num_joints', f'{percentage}.input2Z', f=1)
 
         # Apply threshold (zero out rotation if outside falloff range)
-        threshold_cond = f'{sdk_name}_threshold_{COND}'
+        threshold_cond = f'{sdk_name}_threshold_{rt_cst.COND}'
         cmds.createNode('condition', n=threshold_cond, s=1, ss=1)
         cmds.connectAttr(f'{cond}.outColorG', f'{threshold_cond}.firstTerm', f=1)
         cmds.setAttr(f'{threshold_cond}.secondTerm', 0)
@@ -298,7 +298,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=TYPE_FK):
 
 # SDK GROUPS (FK) ======================================================
 
-def create_sdk_groups(rigname, joints, typ=TYPE_FK):
+def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
     '''
     Create NUM_CTRL_FK+1 SDK groups above each joint for rotation distribution.
 
@@ -320,8 +320,8 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
     '''
     logger.debug('Create SDK groups above FK joints')
     basejnt = joints[0]
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
-    fkjnt_grp = rt_nam.fstr(rigname, GROUP, typ)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
     first_sdk_grp = None
 
     if cmds.objExists(fkjnt_grp):
@@ -342,17 +342,17 @@ def create_sdk_groups(rigname, joints, typ=TYPE_FK):
     # Create SDK groups for each joint (in reverse order for proper parenting)
     for jnt in reversed(joints):
         NN = rt_nam.get_index_from_name(jnt)
-        jnt_name = rt_nam.fstr(rigname, JOINT, typ, NN, TAG='_sdk')
+        jnt_name = rt_nam.fstr(rigname, rt_cst.JOINT, typ, NN, TAG='_sdk')
         prev_sdk_grp = None
         first_sdk_grp = None
         last_sdk_grp = None
 
         # Create NUM_CTRL_FK + 1 SDK groups
-        for idx in range(NUM_CTRL_FK+1):
-            if idx < NUM_CTRL_FK:
-                sdk_grp = rt_nam.fstr(rigname, SDK_GRP, typ, NN, nn=idx+1)
+        for idx in range(rt_cst.NUM_CTRL_FK+1):
+            if idx < rt_cst.NUM_CTRL_FK:
+                sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, typ, NN, nn=idx+1)
             else:
-                sdk_grp = rt_nam.fstr(rigname, SDK_JNT, typ, NN)
+                sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, typ, NN)
 
             if not cmds.objExists(sdk_grp):
                 rt_mya.create_group(sdk_grp)
@@ -401,10 +401,10 @@ def get_sdk_groups(joints):
             sdk_list[NUM_CTRL_FK] = [control SDK group for each joint]
     '''
     logger.debug('Get lists of SDK groups for all joints')
-    sdk_list = [list() for n in range(NUM_CTRL_FK+1)]
+    sdk_list = [list() for n in range(rt_cst.NUM_CTRL_FK+1)]
     for jnt in joints:
         child = jnt
-        for num in reversed(range(NUM_CTRL_FK+1)):
+        for num in reversed(range(rt_cst.NUM_CTRL_FK+1)):
             parent = cmds.listRelatives(child, p=True, typ='transform')
             if parent:
                 parent = parent[0]

@@ -33,8 +33,8 @@ class RigTailUI(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Rig Tail')
-        self.setMinimumSize(500, 1100)
-        self.resize(500, 1100)
+        self.setMinimumSize(500, 950)
+        self.resize(500, 980)
         self.setup_ui()
         self.load_current_values()
 
@@ -54,14 +54,12 @@ class RigTailUI(QtWidgets.QDialog):
         author.setAlignment(QtCore.Qt.AlignRight)
         main_layout.addWidget(author)
 
-        self.add_separator(main_layout)
-
         display_group = self.create_group_box('Current Configuration')
         display_layout = QtWidgets.QVBoxLayout()
 
         self.txt_display = QtWidgets.QTextEdit()
         self.txt_display.setReadOnly(True)
-        self.txt_display.setMaximumHeight(160)
+        self.txt_display.setMaximumHeight(120)
         self.txt_display.setStyleSheet('''
             QTextEdit {
                 background-color: #2b2b2b;
@@ -70,9 +68,12 @@ class RigTailUI(QtWidgets.QDialog):
                 font-size: 10px;
                 border: 1px solid #555555;
                 border-radius: 2px;
-                padding: 2px;
+                padding: 0px;
             }
         ''')
+        self.txt_display.document().setDocumentMargin(4)
+        display_layout.setContentsMargins(4, 2, 4, 2)
+        display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
         config_btn_layout = QtWidgets.QHBoxLayout()
@@ -88,8 +89,6 @@ class RigTailUI(QtWidgets.QDialog):
 
         display_group.setLayout(display_layout)
         main_layout.addWidget(display_group)
-
-        self.add_separator(main_layout)
 
         options_group = self.create_group_box('Build Options')
         options_layout = QtWidgets.QVBoxLayout()
@@ -112,6 +111,8 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik = QtWidgets.QCheckBox('IK')
         self.chk_fk.setChecked(True)
         self.chk_ik.setChecked(True)
+        self.chk_fk.toggled.connect(self.on_build_mode_changed)
+        self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         build_layout.addWidget(build_label)
@@ -136,9 +137,8 @@ class RigTailUI(QtWidgets.QDialog):
         empty_label.setMinimumWidth(100)
         self.chk_wave = QtWidgets.QCheckBox('Wave')
         self.chk_curl = QtWidgets.QCheckBox('Curl')
-        self.chk_noise = QtWidgets.QCheckBox('noise')
-        self.chk_loop = QtWidgets.QCheckBox('loop')
-        self.chk_stretchy.setChecked(True)
+        self.chk_noise = QtWidgets.QCheckBox('Noise')
+        self.chk_loop = QtWidgets.QCheckBox('Loop')
         self.chk_wave.setChecked(False)
         self.chk_curl.setChecked(False)
         self.chk_noise.setChecked(False)
@@ -155,19 +155,20 @@ class RigTailUI(QtWidgets.QDialog):
         features_layout.addStretch()
         options_layout.addLayout(features_layout)
 
-        self.chk_group_control = QtWidgets.QCheckBox('Group Control (for multiple tails)')
+        toggles_layout = QtWidgets.QHBoxLayout()
+        self.chk_group_control = QtWidgets.QCheckBox('Group Control (multiple tails)')
         self.chk_group_control.setEnabled(len(rt_cst.RIGPARTS) > 1)
-        self.style_checkbox(self.chk_group_control)
-        options_layout.addWidget(self.chk_group_control)
-
+        self.chk_group_control.setToolTip(
+            'Reserved: GROUP_CONTROLS is stored/saved but not consumed by the build yet.')
         self.chk_force = QtWidgets.QCheckBox('Force Rebuild (ignore cache)')
+        self.style_checkbox(self.chk_group_control)
         self.style_checkbox(self.chk_force)
-        options_layout.addWidget(self.chk_force)
+        toggles_layout.addWidget(self.chk_group_control)
+        toggles_layout.addWidget(self.chk_force)
+        options_layout.addLayout(toggles_layout)
 
         options_group.setLayout(options_layout)
         main_layout.addWidget(options_group)
-
-        self.add_separator(main_layout)
 
         editors_group = self.create_group_box('Configuration Editor')
         editors_layout = QtWidgets.QVBoxLayout()
@@ -193,8 +194,6 @@ class RigTailUI(QtWidgets.QDialog):
 
         editors_group.setLayout(editors_layout)
         main_layout.addWidget(editors_group)
-
-        self.add_separator(main_layout)
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
@@ -231,13 +230,6 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         return group
-
-    def add_separator(self, layout):
-        line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.HLine)
-        line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        line.setStyleSheet('background-color: #555555;')
-        layout.addWidget(line)
 
     def style_button(self, button, style):
         if style == 0: # grey
@@ -319,26 +311,54 @@ class RigTailUI(QtWidgets.QDialog):
         ''')
 
     def load_current_values(self):
-        '''Refresh UI fields from the current rig_tail_constants values.'''
+        '''Refresh UI fields and checkboxes from rig_tail_constants.'''
         self.txt_root.setText(rt_cst.ROOT)
+        self.chk_stretchy.setChecked(rt_cst.EFFECTS.get('stretchy', False))
+        self.chk_wave.setChecked(rt_cst.EFFECTS.get('wave', False))
+        self.chk_curl.setChecked(rt_cst.EFFECTS.get('curl', False))
+        self.chk_noise.setChecked(rt_cst.EFFECTS.get('noise', False))
+        self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
+        self.chk_force.setChecked(rt_cst.FORCE_REBUILD)
+        self.chk_group_control.setChecked(rt_cst.GROUP_CONTROLS)
         self.update_display()
 
     def update_display(self):
         '''Refresh the read-only configuration summary text.'''
-        display_text = f'''
-            ROOT = '{rt_cst.ROOT}'
-            RIGPARTS = {rt_cst.RIGPARTS}
-
-            NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}
-            NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}
-
-            Control Sizes:
-              ROOT = {rt_cst.ROOT_CTRL_SZ}  COG = {rt_cst.COG_CTRL_SZ}  BASE = {rt_cst.BASE_CTRL_SZ}
-              FK = {rt_cst.VARFK_CTRL_SZ}  {rt_cst.FK_CTRL_SZ}    IK = {rt_cst.IK_CTRL_SZ}
-              SPLINE_BOT = {rt_cst.SPLINE_BOT_SZ}  MID = {rt_cst.SPLINE_MID_SZ}  TOP = {rt_cst.SPLINE_TOP_SZ}
-        '''
+        if rt_cst.LOADED_CONFIG:
+            source = f'config file  {rt_cst.LOADED_CONFIG}'
+        else:
+            source = 'default values (no config file loaded)'
+        display_text = '\n'.join([
+            f'Config: {source}',
+            f"ROOT = '{rt_cst.ROOT}'",
+            f'RIGPARTS = {rt_cst.RIGPARTS}',
+            f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
+            'Control Sizes:',
+            f'  ROOT = {rt_cst.ROOT_CTRL_SZ}  COG = {rt_cst.COG_CTRL_SZ}  BASE = {rt_cst.BASE_CTRL_SZ}',
+            f'  FK = {rt_cst.VARFK_CTRL_SZ}  {rt_cst.FK_CTRL_SZ}    IK = {rt_cst.IK_CTRL_SZ}',
+            f'  SPLINE_BOT = {rt_cst.SPLINE_BOT_SZ}  MID = {rt_cst.SPLINE_MID_SZ}  TOP = {rt_cst.SPLINE_TOP_SZ}',
+        ])
         self.txt_display.setText(display_text)
         self.chk_group_control.setEnabled(len(rt_cst.RIGPARTS) > 1)
+
+    def on_build_mode_changed(self):
+        '''
+        Enforce build mode rules:
+        - At least one of FK/IK stays checked (unchecking the last one
+          is reverted).
+        - Stretchy requires IK: the stretch network reads the ikfk
+          switch attribute, which only exists when IK is built.
+        '''
+        if not self.chk_fk.isChecked() and not self.chk_ik.isChecked():
+            sender = self.sender()
+            if sender in (self.chk_fk, self.chk_ik):
+                sender.blockSignals(True)
+                sender.setChecked(True)
+                sender.blockSignals(False)
+        ik = self.chk_ik.isChecked()
+        self.chk_stretchy.setEnabled(ik)
+        if not ik:
+            self.chk_stretchy.setChecked(False)
 
     def load_config(self):
         '''Import configuration from a user-chosen JSON config file.'''
@@ -404,14 +424,15 @@ class RigTailUI(QtWidgets.QDialog):
             return
 
         rt_cst.EFFECTS = {
-            'stretchy': self.chk_stretchy.isChecked(),
+            # stretch network needs the ikfk switch attr from the IK build
+            'stretchy': self.chk_stretchy.isChecked() and ik,
             'wave': self.chk_wave.isChecked(),
             'curl': self.chk_curl.isChecked(),
             'noise': self.chk_noise.isChecked(),
             'loop': self.chk_loop.isChecked()
             }
         rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
-        rt_cst.GROUP_CONTROL = self.chk_group_control.isChecked()
+        rt_cst.GROUP_CONTROLS = self.chk_group_control.isChecked()
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
@@ -651,9 +672,11 @@ class NamingTemplateEditor(QtWidgets.QDialog):
             return {
                 'ROOT_CTRL': rt_cst.ROOT_CTRL,
                 'COG_CTRL': rt_cst.COG_CTRL,
+                'BASECTRL_GRP': rt_cst.BASECTRL_GRP,
                 'BASECTRL': rt_cst.BASECTRL,
+                'CTRLROOT_GRP': rt_cst.CTRLROOT_GRP,
+                'CTRL_GRP': rt_cst.CTRL_GRP,
                 'CONTROL': rt_cst.CONTROL,
-                'SDK_JNT': rt_cst.SDK_JNT,
                 'JOINT': rt_cst.JOINT,
             }
         elif self.section == 'groups':
@@ -665,10 +688,8 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                 'RIG_SYSTEMS_GRP': rt_cst.RIG_SYSTEMS_GRP,
                 'CLUSTERS_GRP': rt_cst.CLUSTERS_GRP,
                 'SCALE_GRP': rt_cst.SCALE_GRP,
-                'BASECTRL_GRP': rt_cst.BASECTRL_GRP,
-                'CTRLROOT_GRP': rt_cst.CTRLROOT_GRP,
-                'CTRL_GRP': rt_cst.CTRL_GRP,
                 'SDK_GRP': rt_cst.SDK_GRP,
+                'SDK_JNT': rt_cst.SDK_JNT,
                 'GROUP': rt_cst.GROUP,
             }
         elif self.section == 'curves':

@@ -67,7 +67,7 @@ EFFECTS = {
 def effects_enabled():
     ''' Return True if EFFECTS are enabled. '''
     global EFFECTS
-    if EFFECTS['wave'] or EFFECTS['curl'] or EFFECTS['dynOffset'] or EFFECTS['loop']:
+    if EFFECTS['wave'] or EFFECTS['curl'] or EFFECTS['noise'] or EFFECTS['loop']:
         return True
     return False
 
@@ -102,9 +102,11 @@ CST = 'constraint'
 # Naming Template: controls, joints
 ROOT_CTRL = '{ROOT}_{CTRL}'
 COG_CTRL = 'cog_{CTRL}'
+BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
 BASECTRL = '{TYPE}_{rigname}_base_{CTRL}'
+CTRLROOT_GRP = '{TYPE}_{rigname}_root_{GRP}'
+CTRL_GRP = '{TYPE}_{rigname}_{NN}_{CTRL}_{GRP}'
 CONTROL = '{TYPE}_{rigname}_{NN}_{CTRL}'
-SDK_JNT = '{TYPE}_{rigname}_{NN}_{JNT}_{SDK}'
 JOINT = '{TYPE}_{rigname}_{NN}_{JNT}'
 
 # Naming Template: curves, clusters
@@ -142,10 +144,8 @@ SKELETON_GRP = '{TYPE}_skeleton'
 RIG_SYSTEMS_GRP = 'rig_systems'
 CLUSTERS_GRP = 'clusters'
 SCALE_GRP = '{TYPE}_{rigname}_scale_{GRP}'
-BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
-CTRLROOT_GRP = '{TYPE}_{rigname}_root_{GRP}'
-CTRL_GRP = '{TYPE}_{rigname}_{NN}_{CTRL}_{GRP}'
 SDK_GRP = '{TYPE}_{rigname}_{NN}_{nn}_{SDK}'
+SDK_JNT = '{TYPE}_{rigname}_{NN}_{JNT}_{SDK}'
 GROUP = '{TYPE}_{rigname}_{NN}_{GRP}'
 
 # Naming Template: ikfk, switch, divider
@@ -222,6 +222,10 @@ import os
 # Default config path; the UI can pass any other path to
 # save_config()/load_config() for per-user or per-show configs.
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'rig_tail_config.json')
+
+# Path of the config file currently in effect; None while running on the
+# module defaults. Set by load_config()/save_config(), shown in the UI.
+LOADED_CONFIG = None
 
 def rebuild_derived():
     '''
@@ -356,11 +360,13 @@ def save_config(filepath=None):
     filepath: path to write to; defaults to CONFIG_FILE.
     Returns True on success, False on failure.
     '''
+    global LOADED_CONFIG
     filepath = filepath or CONFIG_FILE
     config = get_user_editable_config()
     try:
         with open(filepath, 'w') as f:
             json.dump(config, f, indent=2)
+        LOADED_CONFIG = filepath
         return True
     except Exception as e:
         print(f'Failed to save config: {e}')
@@ -376,6 +382,7 @@ def load_config(filepath=None):
     enum, SPLINE_CONTROLS) are rebuilt afterwards.
     Returns True on success, False if the file is missing or unreadable.
     '''
+    global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
@@ -502,6 +509,7 @@ def load_config(filepath=None):
         SPLINE_TOP_SZ = config.get('SPLINE_TOP_SZ', SPLINE_TOP_SZ)
 
         rebuild_derived()
+        LOADED_CONFIG = filepath
         return True
     except Exception as e:
         print(f'Failed to load config: {e}')

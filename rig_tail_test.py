@@ -18,7 +18,7 @@ rt_test.test_time_evaluation()  # Test time
 '''
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_anim as rt_ani
@@ -477,9 +477,8 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     '''
     print(f'\n=== IK/FK DRIVE CHECK (joint {joint_index:02d}) ===\n')
 
-    from rig_tail_constants import COG_CTRL, IKFK
-    cog_ctrl = rt_nam.fstr('', COG_CTRL)
-    ikfk_attr = rt_nam.fstr(rigname, IKFK)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    ikfk_attr = rt_nam.fstr(rigname, rt_cst.IKFK)
 
     ik_jnt = rt_cst.JOINTS_IK[rigname][joint_index]
     fk_jnt = rt_cst.JOINTS_FK[rigname][joint_index]
@@ -488,7 +487,7 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
 
     # 1. What drives the FK joint's rotation?
     print('FK JOINT DRIVE:')
-    sdk_grp = rt_nam.fstr(rigname, SDK_JNT, TYPE_FK, NN)
+    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
     fk_rot_conn = cmds.listConnections(f'{sdk_grp}.rotate', s=1, d=0, p=1) or []
     fk_rx_conn = cmds.listConnections(f'{sdk_grp}.rotateX', s=1, d=0, p=1) or []
     if fk_rot_conn or fk_rx_conn:
@@ -522,7 +521,7 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     blend_mtx = f'{rigname}_{NN:02d}_ikfk_blendMatrix'
     saved = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}')
 
-    fk_ctrl0 = rt_nam.fstr(rigname, CONTROL, TYPE_FK, 0)
+    fk_ctrl0 = rt_nam.fstr(rigname, rt_cst.CONTROL, rt_cst.TYPE_FK, 0)
     saved_rot = cmds.getAttr(f'{fk_ctrl0}.rotate')[0]
     cmds.setAttr(f'{fk_ctrl0}.rotate', 0, 0, 30)
 
@@ -764,7 +763,7 @@ def test_wave(rigname='tail'):
     '''
     Quick test: Set wave attributes and check if values propagate.
     '''
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     header = '''
 === QUICK WAVE TEST ==='''
@@ -822,7 +821,7 @@ def test_curl(rigname='tail'):
     '''
     Quick test: Set curl attributes and check if values propagate.
     '''
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     print('\n=== QUICK CURL TEST ===\n')
 
@@ -1134,7 +1133,7 @@ def test_time_evaluation(rigname='tail'):
 '''
     print(header)
 
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     if not cmds.objExists(basectrl):
         print(f'✗ Base control missing: {basectrl}')
         return

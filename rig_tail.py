@@ -54,7 +54,7 @@ import maya.cmds as cmds
 from logger_config import logger_setup
 import importlib as il
 
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_joint as rt_jnt
 import rig_tail_math as rt_mat
@@ -106,7 +106,7 @@ def build_rig_tail(fk, ik):
         if ik:
             rig_tail_ik(rigname)
 
-def rig_tail_fk(rigname, typ=TYPE_FK):
+def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
     '''
     Create FK tail using variable FK method.
     '''
@@ -119,11 +119,11 @@ def rig_tail_fk(rigname, typ=TYPE_FK):
     rt_jnt.set_joint_attributes(joints)
 
     # Create groups
-    rig_systems_grp = rt_nam.fstr('', RIG_SYSTEMS_GRP)
-    clusters_grp = rt_nam.fstr('', CLUSTERS_GRP)
-    spline_grp_fk = rt_nam.fstr(rigname, SPLINE_GRP, typ)
-    cluster_grp_fk = rt_nam.fstr(rigname, CLUSTER_GRP, typ)
-    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
+    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
+    spline_grp_fk = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ)
+    cluster_grp_fk = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, typ)
+    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     rt_mya.create_group(spline_grp_fk, parent=rig_systems_grp)
     rt_mya.create_group(cluster_grp_fk, parent=clusters_grp)
     rt_mya.create_group(scale_grp, parent=rig_systems_grp)
@@ -142,7 +142,7 @@ def rig_tail_fk(rigname, typ=TYPE_FK):
     sdk_groups = rt_fk.get_sdk_groups(joints)
 
     # Falloff Rotation
-    for n in range(NUM_CTRL_FK):
+    for n in range(rt_cst.NUM_CTRL_FK):
        rt_fk.falloff_rotation(rigname, n, joints, sdk_groups[n])
 
     # Bind curve
@@ -153,7 +153,7 @@ def rig_tail_fk(rigname, typ=TYPE_FK):
     if rt_cst.EFFECTS['stretchy']:
         rt_str.build_stretch(rigname, curve_fk, joints, typ)
 
-def rig_tail_ik(rigname, typ=TYPE_IK):
+def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     '''
     Create IK tail
     '''
@@ -165,11 +165,11 @@ def rig_tail_ik(rigname, typ=TYPE_IK):
     jnt_pos = rt_jnt.get_joint_position_from_list(joints)
 
     # Create groups
-    rig_systems_grp = rt_nam.fstr('', RIG_SYSTEMS_GRP)
-    clusters_grp = rt_nam.fstr('', CLUSTERS_GRP)
-    spline_grp_ik = rt_nam.fstr(rigname, SPLINE_GRP, typ)
-    cluster_grp_ik = rt_nam.fstr(rigname, CLUSTER_GRP, typ)
-    scale_grp = rt_nam.fstr(rigname, SCALE_GRP)
+    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
+    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
+    spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ)
+    cluster_grp_ik = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, typ)
+    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     rt_mya.create_group(spline_grp_ik, parent=rig_systems_grp)
     rt_mya.create_group(cluster_grp_ik, parent=clusters_grp)
     rt_mya.create_group(scale_grp, parent=rig_systems_grp)
@@ -245,13 +245,12 @@ def rig_tail_selected(root=None, fk=True, ik=True):
         logger.error('Select joint to rig tail')
 
     rt_set.set_root(root)
-    start_jnts = dict()
     for jnt in selected:
         if cmds.objectType(jnt, i='joint'):
-            rigname = get_rigname(jnt, JOINT, underscore=True)
+            rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
             if rigname and rigname not in rt_cst.RIGPARTS:
                 rt_cst.RIGPARTS.append(rigname)
-            rt_set.set_joints(rigname, start_jnt)
+            rt_set.set_joints(rigname, jnt)
     rt_set.cleanup_rig(fk, ik)
     rt_set.setup_rig(fk, ik)
     build_rig_tail(fk, ik)

@@ -7,7 +7,7 @@ Curve and Cluster methods for Rig Tail
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
@@ -37,7 +37,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     Return
         curve (str): Name of created curve, or None if creation failed
     '''
-    curve = rt_nam.fstr(rigname, CURVE, typ, TAG=tag)
+    curve = rt_nam.fstr(rigname, rt_cst.CURVE, typ, TAG=tag)
     logger.info(f"{rigname}: Create curve '{curve}'")
     logger.debug(f'jnt_pos len{len(jnt_pos)} {jnt_pos}')
 
@@ -55,12 +55,12 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
         logger.error(f'Need at least 2 joint positions, got {len(jnt_pos)}')
         return None
 
-    if typ == TYPE_FK:
+    if typ == rt_cst.TYPE_FK:
         # FK: Create curve matching joint positions exactly for skinCluster binding
         degree = min(3, len(jnt_pos)-1)
         curve = cmds.curve(n=curve, d=degree, p=jnt_pos)
 
-    elif typ == TYPE_IK:
+    elif typ == rt_cst.TYPE_IK:
         if tag:
             # IK Spline solver curve: Duplicate end CVs for upvec clusters
             all_pos = [jnt_pos[0]] + jnt_pos + [jnt_pos[-1]]
@@ -68,7 +68,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
         else:
             # IK driver curve: Evenly spaced control CVs + duplicate ends for upvec
-            indices = rt_mat.linspace(0, len(jnt_pos)-1, NUM_CTRL_IK)
+            indices = rt_mat.linspace(0, len(jnt_pos)-1, rt_cst.NUM_CTRL_IK)
             all_pos = [jnt_pos[0]] + [jnt_pos[round(i)] for i in indices] + [jnt_pos[-1]]
             degree = min(3, len(all_pos)-1)
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
@@ -82,7 +82,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     rt_mya.set_curve_visibility(curve)
     cmds.delete(curve, ch=1) # Delete construction history
 
-    spline_grp = rt_nam.fstr(rigname, SPLINE_GRP, typ)
+    spline_grp = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ)
     rt_mya.parent_to(curve, spline_grp)
 
     num_cv = cmds.getAttr(f'{curve}.controlPoints', size=True)
@@ -174,7 +174,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
 
 # SPLINE ===============================================================
 
-def create_spline_handle(rigname, joints, curve, typ=TYPE_IK):
+def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
     '''
     Create spline IK handle with separated driver/solver curve system.
 
@@ -207,7 +207,7 @@ def create_spline_handle(rigname, joints, curve, typ=TYPE_IK):
         rt_mya.remove(obj)
 
     # Create IK handle [ikhandle, effector, temp_curve]
-    spline_list = cmds.ikHandle(n=rt_nam.fstr(rigname, SPLINE_HANDLE, typ),
+    spline_list = cmds.ikHandle(n=rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ),
                                 sj=joints[0],
                                 ee=joints[-1],
                                 sol='ikSplineSolver')
@@ -240,8 +240,8 @@ def rename_spline_handle(rigname, spline_list, curve, typ):
     Return
         list: [renamed_handle, renamed_effector, curve]
     '''
-    spline_handle = rt_nam.fstr(rigname, SPLINE_HANDLE, typ)
-    spline_effector = rt_nam.fstr(rigname, SPLINE_EFFECTOR, typ)
+    spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ)
+    spline_effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ)
 
     # Rename components
     cmds.rename(spline_list[0], spline_handle)
@@ -249,7 +249,7 @@ def rename_spline_handle(rigname, spline_list, curve, typ):
     rt_mya.remove(spline_list[2]) # Delete temp curve
 
     # Organize
-    rt_mya.parent_to(spline_list[0], rt_nam.fstr(rigname, SPLINE_GRP, typ))
+    rt_mya.parent_to(spline_list[0], rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ))
     rt_nam.rename_shapes(curve, typ='crv')
     rt_mya.set_curve_visibility(curve)
 
@@ -265,7 +265,7 @@ def get_spline_handle(rigname, joints=None):
     Return
         spline_list (list): [ikhandle, effector, curve]
     '''
-    spline_handle = rt_nam.fstr(rigname, SPLINE_HANDLE, TYPE_IK)
+    spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
 
     if not cmds.objExists(spline_handle):
         return []
@@ -298,7 +298,7 @@ def get_spline_handle(rigname, joints=None):
     logger.debug(f'({spline_handle}, {effector}, {curve})')
     return (spline_handle, effector, curve)
 
-def search_spline_handle(rigname, joints=None, typ=TYPE_IK):
+def search_spline_handle(rigname, joints=None, typ=rt_cst.TYPE_IK):
     '''
     Get existing spline handle components.
     Search by joint chain or by naming convention.
@@ -333,9 +333,9 @@ def search_spline_handle(rigname, joints=None, typ=TYPE_IK):
                 return spline_list
         return None
     else: # Find ikHandle by name
-        handle = rt_nam.fstr(rigname, SPLINE_HANDLE, typ)
-        effector = rt_nam.fstr(rigname, SPLINE_EFFECTOR, typ)
-        curve = rt_nam.fstr(rigname, CURVE, typ, TAG='spline')
+        handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ)
+        effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ)
+        curve = rt_nam.fstr(rigname, rt_cst.CURVE, typ, TAG='spline')
 
         if cmds.objExists(handle) and cmds.objExists(effector) and cmds.objExists(curve):
             return [handle, effector, curve]
@@ -417,7 +417,7 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     Return
         clusters (list): List of (cluster_node, cluster_handle) tuples
     '''
-    if typ not in [TYPE_FK, TYPE_IK]:
+    if typ not in [rt_cst.TYPE_FK, rt_cst.TYPE_IK]:
         logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
         return []
 
@@ -442,20 +442,20 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     logger.debug(f"Curve '{curve}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
     # Create clusters based on type
-    if typ == TYPE_FK:
+    if typ == rt_cst.TYPE_FK:
         # FK: Clusters at first and last CVs only
         for i in [0, num_cv-1]:
-            cluster_node = rt_nam.fstr(rigname, CLUSTER, typ, i)
-            cluster_handle = rt_nam.fstr(rigname, CLUSTER_HANDLE, typ, i)
+            cluster_node = rt_nam.fstr(rigname, rt_cst.CLUSTER, typ, i)
+            cluster_handle = rt_nam.fstr(rigname, rt_cst.CLUSTER_HANDLE, typ, i)
             cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
-    elif typ == TYPE_IK:
+    elif typ == rt_cst.TYPE_IK:
         # IK: Create upvec clusters at first and last CVs
-        cluster_upv_bse = rt_nam.fstr(rigname, CLUSTER_UPV, typ, TAG='base')
-        cluster_handle_bse = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='base')
-        cluster_upv_end = rt_nam.fstr(rigname, CLUSTER_UPV, typ, TAG='end')
-        cluster_handle_end = rt_nam.fstr(rigname, CLUSTER_UPV_HANDLE, typ, TAG='end')
+        cluster_upv_bse = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV, typ, TAG='base')
+        cluster_handle_bse = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='base')
+        cluster_upv_end = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV, typ, TAG='end')
+        cluster_handle_end = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='end')
 
         upv_bse = create_cluster([cluster_upv_bse, cluster_handle_bse], curve, 0)
         upv_end = create_cluster([cluster_upv_end, cluster_handle_end], curve, num_cv-1)
@@ -464,13 +464,13 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
 
         # IK: Control clusters for interior CVs (1 to num_cv-2)
         for i in range(1, num_cv-1):
-            cluster_node = rt_nam.fstr(rigname, CLUSTER, typ, i)
-            cluster_handle = rt_nam.fstr(rigname, CLUSTER_HANDLE, typ, i)
+            cluster_node = rt_nam.fstr(rigname, rt_cst.CLUSTER, typ, i)
+            cluster_handle = rt_nam.fstr(rigname, rt_cst.CLUSTER_HANDLE, typ, i)
             cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
     # Organize under cluster group
-    cluster_grp = rt_nam.fstr(rigname, CLUSTER_GRP, typ)
+    cluster_grp = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, typ)
     for cluster_node, cluster_handle in clusters:
         rt_mya.parent_to(cluster_handle, cluster_grp)
         cmds.setAttr(f'{cluster_handle}.displayHandle', show_handle)

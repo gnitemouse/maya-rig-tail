@@ -7,7 +7,7 @@ Control methods for Rig Tail
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -27,14 +27,14 @@ def create_root_cog():
         root_ctrl (str): Root control
         cog_ctrl (str): Cog control
     '''
-    root_grp = rt_nam.fstr('', ROOT_GRP)
-    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', COG_CTRL)
+    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
+    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
     rt_mya.create_group(root_grp) # Create root group
     if not cmds.objExists(root_ctrl): # Create root control
-        create_circle_control(root_ctrl, ROOT_CTRL_SZ, nr=(0,1,0), color='lightgreen')
+        create_circle_control(root_ctrl, rt_cst.ROOT_CTRL_SZ, nr=(0,1,0), color='lightgreen')
     if not cmds.objExists(cog_ctrl): # Create cog control
-        create_circle_control(cog_ctrl, COG_CTRL_SZ, nr=(0,1,0), color='cyan')
+        create_circle_control(cog_ctrl, rt_cst.COG_CTRL_SZ, nr=(0,1,0), color='cyan')
     return root_grp, root_ctrl, cog_ctrl
 
 def create_basectrl(rigname, up_axis=None):
@@ -50,17 +50,17 @@ def create_basectrl(rigname, up_axis=None):
         basectrl_grp (str): Base control group
     '''
     joints = rt_cst.JOINTS_BN[rigname]
-    cog_ctrl = rt_nam.fstr('', COG_CTRL)
-    basectrl_grp = rt_nam.fstr(rigname, BASECTRL_GRP)
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     basectrl, basectrl_grp = create_control(basectrl, group=basectrl_grp,
                                             match_to=joints[0], parent=cog_ctrl,
-                                            size=BASE_CTRL_SZ, nr=(1,0,0),
+                                            size=rt_cst.BASE_CTRL_SZ, nr=(1,0,0),
                                             color='magenta', shape='circle')
     rt_mya.opm(basectrl_grp)
     if not up_axis:
         up_axis = rt_mat.get_axis_orientation(joints)
-    rot_offset = ROT_AXIS_DICT[up_axis]
+    rot_offset = rt_cst.ROT_AXIS_DICT[up_axis]
     logger.debug(f"up_axis '{up_axis}' rot_offset '{rot_offset}'")
     cmds.setAttr(f'{basectrl_grp}.rotate', rot_offset[0], rot_offset[1], rot_offset[2])
     rt_mya.opm(basectrl_grp)
@@ -123,7 +123,7 @@ def create_cube_control(name, size, color='darkgrey'):
     Return
         cube_ctrl (str): Cube control name
     '''
-    cube_ctrl = cmds.curve(d=1, p=CUBE_CTRL_PTS, n=name)
+    cube_ctrl = cmds.curve(d=1, p=rt_cst.CUBE_CTRL_PTS, n=name)
     rt_nam.rename_shapes(cube_ctrl, typ='ctrl')
     set_control_color(cube_ctrl, color=color)
     cmds.xform(cube_ctrl, s=(size,size,size))
@@ -141,7 +141,7 @@ def set_control_color(control, color='neonblue'):
     '''
     cmds.setAttr(f'{control}.overrideEnabled', 1)
     cmds.setAttr(f'{control}.overrideRGBColors', 0)
-    cmds.setAttr(f'{control}.overrideColor', COLOR_OVERRIDE[color])
+    cmds.setAttr(f'{control}.overrideColor', rt_cst.COLOR_OVERRIDE[color])
 
 def create_control(control, group=None, match_to=None, parent=None,
              size=1, nr=(1,0,0), color='darkcyan', shape=None):
@@ -164,7 +164,7 @@ def create_control(control, group=None, match_to=None, parent=None,
     '''
     logger.debug(f'{control}, {match_to}, {parent}, {size}, {nr}, {color}, {shape}')
     # Create control group
-    groupname = group if group else f'{control}_{GRP}'
+    groupname = group if group else f'{control}_{rt_cst.GRP}'
     group = rt_mya.create_group(groupname)
     if parent:
         rt_mya.parent_to(group, parent)
@@ -234,7 +234,7 @@ def create_control_match_list(rigname, matchlist, template_ctrl, template_grp=No
     controls = list()
     groups = list()
     for i, obj in enumerate(matchlist):
-        nn = i if typ == TYPE_FK else i+1
+        nn = i if typ == rt_cst.TYPE_FK else i+1
         ctrl = rt_nam.fstr(rigname, template_ctrl, typ, nn)
         grp = rt_nam.fstr(rigname, template_grp, typ, nn) if template_grp else None
         control, group = create_control(ctrl, grp, match_to=obj, parent=parent,
@@ -260,9 +260,9 @@ def create_controls_fk(rigname, joints, jnt_pos):
         varfk_ctrls (list): List of Variable FK control names
     '''
     logger.info(f"{rigname}: Create FK controls")
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
-    fkroot_grp = rt_nam.fstr(rigname, CTRLROOT_GRP, TYPE_FK)
-    fkjnt_grp = rt_nam.fstr(rigname, GROUP, TYPE_FK)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
+    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
 
     if cmds.objExists(fkjnt_grp):
         # Delete constraint on fkjnt_grp
@@ -276,17 +276,17 @@ def create_controls_fk(rigname, joints, jnt_pos):
     rt_mya.match_transform(fkroot_grp, basectrl)
 
     # Calculate indices evenly distributed throughout FK chain
-    indices = list(rt_mat.linspace(0, len(jnt_pos)-1, NUM_CTRL_FK+2))
-    positions = [joints[round(indices[i])] for i in range(1, NUM_CTRL_FK+1)]
+    indices = list(rt_mat.linspace(0, len(jnt_pos)-1, rt_cst.NUM_CTRL_FK+2))
+    positions = [joints[round(indices[i])] for i in range(1, rt_cst.NUM_CTRL_FK+1)]
     # Create variable FK controls
     varfk_ctrls, varfk_ctrl_grps = create_control_match_list(rigname,
                                                              positions,
-                                                             template_ctrl=CONTROL,
-                                                             template_grp=CTRL_GRP,
+                                                             template_ctrl=rt_cst.CONTROL,
+                                                             template_grp=rt_cst.CTRL_GRP,
                                                              typ='',
                                                              parent=fkroot_grp,
                                                              nest_controls=False,
-                                                             size=VARFK_CTRL_SZ,
+                                                             size=rt_cst.VARFK_CTRL_SZ,
                                                              color='lightpink',
                                                              shape='cube')
     for varfk_ctrl in varfk_ctrls:
@@ -296,12 +296,12 @@ def create_controls_fk(rigname, joints, jnt_pos):
     # Create individual FK joint controls
     fk_ctrls, fk_ctrl_grps = create_control_match_list(rigname,
                                                        joints,
-                                                       template_ctrl=CONTROL,
-                                                       template_grp=CTRL_GRP,
-                                                       typ=TYPE_FK,
+                                                       template_ctrl=rt_cst.CONTROL,
+                                                       template_grp=rt_cst.CTRL_GRP,
+                                                       typ=rt_cst.TYPE_FK,
                                                        parent=fkroot_grp,
                                                        nest_controls=True,
-                                                       size=FK_CTRL_SZ,
+                                                       size=rt_cst.FK_CTRL_SZ,
                                                        color='pink',
                                                        shape='circle')
 
@@ -330,7 +330,7 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
             Keys: 'ik', 'float', 'spline', 'upvec'
     '''
     logger.info(f"{rigname}: Create IK controls")
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     all_cluster_handles = [x[1] for x in clusters]
     if duplicate_ends:
@@ -386,11 +386,11 @@ def create_spline_controls_ik(rigname, cluster_handles, orient_world, scale=1):
     logger.info(f"{rigname}: Create IK spline controls - IK")
     controls, groups = create_control_match_list(rigname,
                                                  cluster_handles,
-                                                 template_ctrl=SPLINE_IK_CTRL,
-                                                 typ=TYPE_IK,
+                                                 template_ctrl=rt_cst.SPLINE_IK_CTRL,
+                                                 typ=rt_cst.TYPE_IK,
                                                  parent=orient_world,
                                                  nest_controls=True,
-                                                 size=IK_CTRL_SZ*scale,
+                                                 size=rt_cst.IK_CTRL_SZ*scale,
                                                  color='neonyellow',
                                                  shape='cube')
     orient_control_aims(groups, orient_world)
@@ -414,11 +414,11 @@ def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1
     logger.info(f"{rigname}: Create IK spline controls - Float")
     controls, groups = create_control_match_list(rigname,
                                                  cluster_handles,
-                                                 template_ctrl=SPLINE_FLOAT_CTRL,
-                                                 typ=TYPE_IK,
+                                                 template_ctrl=rt_cst.SPLINE_FLOAT_CTRL,
+                                                 typ=rt_cst.TYPE_IK,
                                                  parent=orient_world,
                                                  nest_controls=False,
-                                                 size=IK_CTRL_SZ*scale,
+                                                 size=rt_cst.IK_CTRL_SZ*scale,
                                                  color='cyan',
                                                  shape='cube')
     orient_control_aims(groups, orient_world)
@@ -448,23 +448,23 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     '''
     logger.info(f"{rigname}: Create IK Spline controls - SplineIK")
     logger.debug(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
-    if len(cluster_handles) != NUM_CTRL_IK:
-        logger.error(f'Need {NUM_CTRL_IK} Cluster Handles')
+    if len(cluster_handles) != rt_cst.NUM_CTRL_IK:
+        logger.error(f'Need {rt_cst.NUM_CTRL_IK} Cluster Handles')
 
     controls = list()
     groups = list()
     # Create spline controls matched to clusters
-    for i, template in enumerate(SPLINE_CONTROLS):
-        ctrlname = rt_nam.fstr(rigname, template, TYPE_IK)
+    for i, template in enumerate(rt_cst.SPLINE_CONTROLS):
+        ctrlname = rt_nam.fstr(rigname, template, rt_cst.TYPE_IK)
         if 'mid_rot' in ctrlname: # spline_mid_rot. Same position as spline_mid
             control, group = create_control(ctrlname, match_to=cluster_handles[2],
                                             parent=orient_world,
-                                            size=SPLINE_CONTROLS_SZ[i]*scale,
+                                            size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,
                                             color='neongreen', shape='sphere')
         else: # spline_bot, spline_bot_sml, spline_mid, spline_top_sml, spline_top
             control, group = create_control(ctrlname, match_to=cluster_handles[i],
                                             parent=orient_world,
-                                            size=SPLINE_CONTROLS_SZ[i]*scale,
+                                            size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,
                                             color='neonred', shape='cube')
         controls.append(control)
         groups.append(group)
@@ -490,17 +490,17 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
         controls_upv (list): [upvec_base_ctrl, upvec_end_ctrl]
         groups_upv (list): [upvec_base_grp, upvec_end_grp]
     '''
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
-    upvec_bsectrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='base')
-    upvec_endctrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='end')
-    upvec_bsegrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='base')
-    upvec_endgrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='end')
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    upvec_bsectrl = rt_nam.fstr(rigname, rt_cst.UPV_CTRL, TAG='base')
+    upvec_endctrl = rt_nam.fstr(rigname, rt_cst.UPV_CTRL, TAG='end')
+    upvec_bsegrp = rt_nam.fstr(rigname, rt_cst.UPV_CTRLGRP, TAG='base')
+    upvec_endgrp = rt_nam.fstr(rigname, rt_cst.UPV_CTRLGRP, TAG='end')
 
     upvec_bsectrl, upvec_bsegrp = create_control(upvec_bsectrl,
                                                  group=upvec_bsegrp,
                                                  match_to=cluster_handles[0],
                                                  parent=basectrl,
-                                                 size=SPLINE_UPV_SZ,
+                                                 size=rt_cst.SPLINE_UPV_SZ,
                                                  nr=(0,1,0),
                                                  color='purple',
                                                  shape='sphere')
@@ -508,7 +508,7 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
                                                  group=upvec_endgrp,
                                                  match_to=cluster_handles[1],
                                                  parent=basectrl,
-                                                 size=SPLINE_UPV_SZ,
+                                                 size=rt_cst.SPLINE_UPV_SZ,
                                                  nr=(0,1,0),
                                                  color='purple',
                                                  shape='sphere')
@@ -517,10 +517,10 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
     upvec_endctrl_shapes = cmds.listRelatives(upvec_endctrl, s=True)
     # Offset shape CVs
     for shape in upvec_bsectrl_shapes:
-        tr = (SPLINE_BOT_SZ + 0.5) * scale
+        tr = (rt_cst.SPLINE_BOT_SZ + 0.5) * scale
         cmds.move(0,tr,0, f'{shape}.cv[*]', r=True, objectSpace=True)
     for shape in upvec_endctrl_shapes:
-        tr = (SPLINE_TOP_SZ + 0.5) * scale
+        tr = (rt_cst.SPLINE_TOP_SZ + 0.5) * scale
         cmds.move(0,-tr,0, f'{shape}.cv[*]', r=True, objectSpace=True)
     return [upvec_bsectrl, upvec_endctrl], [upvec_bsegrp, upvec_endgrp]
 
@@ -544,9 +544,9 @@ def get_controls_all(rigname, fk=True, ik=True, bn=True,
     Return
         controls (list): List of control names
     '''
-    root_ctrl = rt_nam.fstr('', ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', COG_CTRL)
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     controls = list()
 
     all_controls = get_control_hierarchy(root_ctrl)
@@ -557,11 +557,11 @@ def get_controls_all(rigname, fk=True, ik=True, bn=True,
             controls.append(ctrl)
         elif include_basectrl and ctrl == basectrl:
             controls.append(ctrl)
-        elif fk and TYPE_FK in ctrl:
+        elif fk and rt_cst.TYPE_FK in ctrl:
             controls.append(ctrl)
-        elif ik and TYPE_IK in ctrl:
+        elif ik and rt_cst.TYPE_IK in ctrl:
             controls.append(ctrl)
-        elif bn and TYPE_BN in ctrl:
+        elif bn and rt_cst.TYPE_BN in ctrl:
             controls.append(ctrl)
     return controls
 
@@ -582,14 +582,14 @@ def get_controls_ik(rigname):
     ik_ctrlgrps = {'ik':[], 'float':[], 'spline': [], 'upvec':[]}
 
     # Type ik, float
-    ctrl_template = [SPLINE_IK_CTRL, SPLINE_FLOAT_CTRL]
+    ctrl_template = [rt_cst.SPLINE_IK_CTRL, rt_cst.SPLINE_FLOAT_CTRL]
     for i, ctrltyp in enumerate(['ik', 'float']):
         controls = list()
         ctrlgrps = list()
-        for num in range(NUM_CTRL_IK):
+        for num in range(rt_cst.NUM_CTRL_IK):
             NN = num + 1
-            ctrl = rt_nam.fstr(rigname, ctrl_template[i], TYPE_IK, NN)
-            ctrlgrp = f'{ctrl}_{GRP}'
+            ctrl = rt_nam.fstr(rigname, ctrl_template[i], rt_cst.TYPE_IK, NN)
+            ctrlgrp = f'{ctrl}_{rt_cst.GRP}'
             if cmds.objExists(ctrl):
                 controls.append(ctrl)
             else:
@@ -602,9 +602,9 @@ def get_controls_ik(rigname):
         ik_ctrlgrps[ctrltyp] = ctrlgrps
 
     # Type spline
-    for ctrl_template in SPLINE_CONTROLS:
-        ctrl = rt_nam.fstr(rigname, ctrl_template, TYPE_IK)
-        ctrlgrp = f'{ctrl}_{GRP}'
+    for ctrl_template in rt_cst.SPLINE_CONTROLS:
+        ctrl = rt_nam.fstr(rigname, ctrl_template, rt_cst.TYPE_IK)
+        ctrlgrp = f'{ctrl}_{rt_cst.GRP}'
         if cmds.objExists(ctrl):
             ik_controls['spline'].append(ctrl)
         else:
@@ -615,10 +615,10 @@ def get_controls_ik(rigname):
             logger.warning(f"ctrlgrp '{ctrlgrp}' does not exist")
 
     # Type upvec
-    upvec_bsectrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='base')
-    upvec_endctrl = rt_nam.fstr(rigname, UPV_CTRL, TAG='end')
-    upvec_bsegrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='base')
-    upvec_endgrp = rt_nam.fstr(rigname, UPV_CTRLGRP, TAG='end')
+    upvec_bsectrl = rt_nam.fstr(rigname, rt_cst.UPV_CTRL, TAG='base')
+    upvec_endctrl = rt_nam.fstr(rigname, rt_cst.UPV_CTRL, TAG='end')
+    upvec_bsegrp = rt_nam.fstr(rigname, rt_cst.UPV_CTRLGRP, TAG='base')
+    upvec_endgrp = rt_nam.fstr(rigname, rt_cst.UPV_CTRLGRP, TAG='end')
     ik_controls['upvec'] = [upvec_bsectrl, upvec_endctrl]
     ik_ctrlgrps['upvec'] = [upvec_bsegrp, upvec_endgrp]
 
@@ -639,7 +639,7 @@ def get_control_hierarchy(control, end_control=None):
     controls = list()
     if control == end_control:
         return controls
-    elif cmds.objectType(control, i='transform') and CTRL in control:
+    elif cmds.objectType(control, i='transform') and rt_cst.CTRL in control:
         controls = [control]
 
     children = cmds.listRelatives(control, typ='transform') or []

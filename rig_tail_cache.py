@@ -26,7 +26,7 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import RIGPARTS, ROOT
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import math
 
@@ -42,9 +42,9 @@ def validate_cache():
     Compares current values against LAST_BUILD state.
     """
     # Check if RIGPARTS changed
-    if set(RIGPARTS) != set(rt_cst.LAST_BUILD['rigparts']):
-        removed = set(rt_cst.LAST_BUILD['rigparts']) - set(RIGPARTS)
-        added = set(RIGPARTS) - set(rt_cst.LAST_BUILD['rigparts'])
+    if set(rt_cst.RIGPARTS) != set(rt_cst.LAST_BUILD['rigparts']):
+        removed = set(rt_cst.LAST_BUILD['rigparts']) - set(rt_cst.RIGPARTS)
+        added = set(rt_cst.RIGPARTS) - set(rt_cst.LAST_BUILD['rigparts'])
 
         # Clear data for removed rigparts
         for rigname in removed:
@@ -53,12 +53,12 @@ def validate_cache():
             rt_cst.JOINTS_BN.pop(rigname, None)
 
         logger.info(f'RIGPARTS changed. Removed: {removed}, Added: {added}')
-        rt_cst.LAST_BUILD['rigparts'] = RIGPARTS.copy()
+        rt_cst.LAST_BUILD['rigparts'] = rt_cst.RIGPARTS.copy()
 
     # Check if ROOT changed
-    if ROOT != rt_cst.LAST_BUILD['root']:
-        logger.info(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{ROOT}'")
-        rt_cst.LAST_BUILD['root'] = ROOT
+    if rt_cst.ROOT != rt_cst.LAST_BUILD['root']:
+        logger.info(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{rt_cst.ROOT}'")
+        rt_cst.LAST_BUILD['root'] = rt_cst.ROOT
 
 
 def validate_cache_joints(rigname, tol=None):

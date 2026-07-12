@@ -14,7 +14,7 @@ FX
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-from rig_tail_constants import *
+import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -65,7 +65,7 @@ def build_anim_effects(rigname, fk, ik):
         logger.warning(f'{rigname}: No BN joints found')
         return
 
-    basectrl = rt_nam.fstr(rigname, BASECTRL)
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     joints = rt_cst.JOINTS_BN[rigname]
 
     loop_time = None
@@ -83,7 +83,7 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
     logger.info(f'{rigname}: Add animation effect attributes to basectrl')
 
     if rt_cst.effects_enabled():
-        rt_mya.add_attribute_enum(basectrl, ANIM_DIVIDER[0], ANIM_DIVIDER[1], ANIM_DIVIDER[2])
+        rt_mya.add_attribute_enum(basectrl, rt_cst.ANIM_DIVIDER[0], rt_cst.ANIM_DIVIDER[1], rt_cst.ANIM_DIVIDER[2])
 
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]
