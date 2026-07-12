@@ -69,7 +69,7 @@ class RigTailUI(QtWidgets.QDialog):
                 font-size: 10px;
                 border: 1px solid #555555;
                 border-radius: 2px;
-                padding: 0px 8px;
+                padding: 0px 14px;
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
@@ -78,8 +78,12 @@ class RigTailUI(QtWidgets.QDialog):
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
+        lbl_config = QtWidgets.QLabel('File Path:')
+        lbl_config.setStyleSheet('color: #999999; font-size: 9px;')
+        display_layout.addWidget(lbl_config)
+
         self.txt_config = QtWidgets.QLineEdit()
-        self.txt_config.setPlaceholderText('[Default Config]')
+        self.txt_config.setPlaceholderText('Default Configuration')
         self.txt_config.setStyleSheet('''
             QLineEdit {
                 background-color: #2b2b2b;
@@ -94,9 +98,9 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_config.setToolTip(
-            'Config file currently in effect ([Default Config] = built-in '
-            'defaults). Type a path and press Enter to load it directly; '
-            'Load/Save Config update it too.')
+            'Config file currently in effect (Default Configuration = '
+            'built-in defaults). Type a path and press Enter to load it '
+            'directly; Load/Save Config update it too.')
         self.txt_config.returnPressed.connect(self.load_config_from_text)
         display_layout.addWidget(self.txt_config)
 
@@ -206,8 +210,15 @@ class RigTailUI(QtWidgets.QDialog):
         features_layout.addStretch()
         options_layout.addLayout(features_layout)
 
+        # Rebuild toggles are not Features: set them off with a separator
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.HLine)
+        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        separator.setStyleSheet('background-color: #555555;')
+        options_layout.addWidget(separator)
+
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_main = QtWidgets.QCheckBox('Main Controller (multiple)')
+        self.chk_main = QtWidgets.QCheckBox('Main Controller (dashboard)')
         self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
         self.chk_main.setToolTip(
             'Build one centralized dashboard control with proxy '
