@@ -16,7 +16,7 @@ JOINTS_FX = dict()
 LAST_BUILD = {
     'rigparts': [],
     'root': '',
-    'joints_hash': {}  # {rigname: hash_of_joint_list}
+    'joints_pos': {}  # {rigname: [[x, y, z] per joint] from last build}
 }
 
 
@@ -35,6 +35,12 @@ ROOT = 'tail'
 GROUP_CONTROLS = False
 # Force Rebuild (even if joints are unchanged)
 FORCE_REBUILD = False
+# Max per-joint world position drift (scene units) still treated as
+# "unchanged" on re-rig. Building the rig drives joints through the OPM
+# network, which perturbs world positions by float noise; drift within
+# this tolerance takes the light cleanup_connections path instead of a
+# full teardown.
+JOINT_POS_TOLERANCE = 0.001
 
 
 # ANIMATION EFFECTS ====================================================
@@ -215,6 +221,7 @@ def get_user_editable_config():
         'EFFECTS': EFFECTS,
         'GROUP_CONTROLS': GROUP_CONTROLS,
         'FORCE_REBUILD': FORCE_REBUILD,
+        'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
 
         # Naming Template: type labels
         'TYPE_BN': TYPE_BN,
@@ -315,7 +322,7 @@ def save_config():
 
 def load_config():
     '''Load user variables and constants from JSON file.'''
-    global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD
+    global RIGPARTS, ROOT, EFFECTS, GROUP_CONTROLS, FORCE_REBUILD, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
     global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
     global CURVE, CURVE_SCALE, CURVEINFO, CLUSTER_GRP, CLUSTER, CLUSTER_HANDLE
@@ -342,6 +349,7 @@ def load_config():
         EFFECTS = config.get('EFFECTS', EFFECTS)
         GROUP_CONTROLS = config.get('GROUP_CONTROLS', GROUP_CONTROLS)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
+        JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
 
         # Type labels
         TYPE_BN = config.get('TYPE_BN', TYPE_BN)

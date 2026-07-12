@@ -17,9 +17,33 @@ from logger_config import logger_setup
 from rig_tail_constants import *
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
+import rig_tail_maya as rt_mya
 import rig_tail_util as rt_utl
 
 logger = logger_setup(__name__)
+
+
+def delete_expression(expr):
+    '''
+    Delete an expression node safely.
+    cmds.delete on a connected expression cascades through its whole
+    connection web (loop network node, sibling FX expressions, composeMatrix
+    nodes), so all connections must be broken before deleting.
+    Unit conversion nodes are removed with the expression: a dangling
+    conversion left connected to the written attribute blocks the rebuilt
+    expression from connecting to it.
+    '''
+    if not cmds.objExists(expr):
+        return
+    conv_types = ('unitConversion', 'unitToTimeConversion', 'timeToUnitConversion')
+    convs = {c for c in (cmds.listConnections(expr) or [])
+             if cmds.nodeType(c) in conv_types}
+    rt_utl.remove(expr)
+    for conv in convs:
+        if cmds.objExists(conv):
+            rt_utl.remove(conv)
+
+ensure_connect = rt_mya.ensure_connect
 
 
 # BUILD ANIM EFFECTS ===================================================
@@ -130,8 +154,7 @@ if ($loop_enabled > 0.5) {{
 }}
 '''
 
-    if cmds.objExists(modulo_expr):
-        cmds.delete(modulo_expr)
+    delete_expression(modulo_expr)
     cmds.expression(n=modulo_expr, s=expr_code, o='', ae=1, uc='all')
     logger.info(f'{rigname}: Loop expression built: {modulo_expr}')
     return f'{loop_time}.loop_time'
@@ -202,8 +225,7 @@ float $out = $val * $amp * $w;
 {compose_node}.inputRotate{rot_axis} = $out;
 '''
 
-            if cmds.objExists(expr):
-                cmds.delete(expr)
+            delete_expression(expr)
             cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
 
     logger.info(f'{rigname}: Wave effect built')
@@ -240,8 +262,8 @@ def build_curl(rigname, basectrl, joints):
         if not cmds.objExists(remap):
             cmds.createNode('multiplyDivide', n=remap)
             cmds.setAttr(f'{remap}.operation', 1)
-            cmds.connectAttr(f'{basectrl}.{curl_attr}', f'{remap}.input1X', f=1)
             cmds.setAttr(f'{remap}.input2X', 20.0)
+        ensure_connect(f'{basectrl}.{curl_attr}', f'{remap}.input1X')
 
         for i, jnt in enumerate(joints[1:], 1):
             NN = rt_nam.get_index_from_name(jnt)
@@ -254,7 +276,7 @@ def build_curl(rigname, basectrl, joints):
                 cmds.createNode('multiplyDivide', n=falloff_node)
                 cmds.setAttr(f'{falloff_node}.operation', 3)
                 cmds.setAttr(f'{falloff_node}.input1X', u)
-                cmds.connectAttr(f'{basectrl}.curl_falloff', f'{falloff_node}.input2X', f=1)
+            ensure_connect(f'{basectrl}.curl_falloff', f'{falloff_node}.input2X')
 
             weight_scale = f'{rigname}_curl{rot_axis}_{NN:02d}_weight_multiplyDivide'
             if not cmds.objExists(weight_scale):
@@ -271,7 +293,7 @@ def build_curl(rigname, basectrl, joints):
                 cmds.connectAttr(f'{weight_scale}.outputX', f'{curl_mult}.input2X', f=1)
 
             if cmds.objExists(compose_node):
-                cmds.connectAttr(f'{curl_mult}.outputX', f'{compose_node}.inputRotate{rot_axis}', f=1)
+                ensure_connect(f'{curl_mult}.outputX', f'{compose_node}.inputRotate{rot_axis}')
                 logger.debug(f'Connected curl{rot_axis} to {compose_node}')
 
     logger.info(f'{rigname}: Curl effect built')
@@ -371,8 +393,7 @@ float $out = $noise * $amp * $fall;
 
 {compose_node}.inputRotate{axis} = $out;
 '''
-            if cmds.objExists(expr):
-                cmds.delete(expr)
+            delete_expression(expr)
             cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
 
     logger.info(f'{rigname}: Noise effect built')

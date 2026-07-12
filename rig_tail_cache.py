@@ -5,6 +5,17 @@ author: Daisy Jane @gnitemouse
 Cache operations for Rig Tail.
 Centralized cache management using rig_tail_constants for persistent state.
 
+Decide upon re-rig whether the previous rig can be reused
+or must be fully torn down. Rebuild is needed (joints changed) if any of:
+
+    1. There's no cached BN joint list for this rigname in rt_cst.JOINTS_BN
+        (fresh session or first build)
+    2. Any cached BN/FK/IK joint no longer exists in scene
+    3. Any BN joint moved more than JOINT_POS_TOLERANCE (scene units) from
+        the positions stored in rt_cst.LAST_BUILD['joints_pos'] at the last
+        build. Stored positions are refreshed on every call, so float drift
+        from the rig driving the joints never accumulates into a rebuild.
+
 Functions:
     validate_cache: Clear cache if RIGPARTS or ROOT changed
     validate_cache_joints: Check if cached joints still exist
@@ -17,6 +28,7 @@ import maya.cmds as cmds
 from logger_config import logger_setup
 from rig_tail_constants import RIGPARTS, ROOT
 import rig_tail_constants as rt_cst
+import math
 
 logger = logger_setup(__name__)
 
@@ -49,16 +61,24 @@ def validate_cache():
         rt_cst.LAST_BUILD['root'] = ROOT
 
 
-def validate_cache_joints(rigname):
+def validate_cache_joints(rigname, tol=None):
     """
     Check if cached joints still exist and match scene.
+    Positions are compared per joint by Euclidean distance within tol,
+    not exact equality: building the rig drives the BN joints through the
+    OPM network, which perturbs world positions by float noise.
 
     Arguments:
         rigname (str): Name of rig component
+        tol (float): Max per-joint position drift in scene units.
+            Defaults to rt_cst.JOINT_POS_TOLERANCE.
 
     Return:
         bool: True if joints changed (full rebuild needed)
     """
+    if tol is None:
+        tol = rt_cst.JOINT_POS_TOLERANCE
+
     if rigname not in rt_cst.JOINTS_BN:
         return True  # No cache, need rebuild
 
@@ -70,17 +90,21 @@ def validate_cache_joints(rigname):
                     logger.warning(f"Cached joint '{jnt}' no longer exists")
                     return True  # Joints changed
 
-    # Compute hash of current joint positions
-    stored_hash = rt_cst.LAST_BUILD.get('joints_hash', {}).get(rigname)
-    current_hash = hash(tuple(
-        tuple(cmds.xform(j, q=1, ws=1, t=1))
-        for j in rt_cst.JOINTS_BN[rigname]
-    ))
+    # Compare current joint positions against last build within tolerance
+    stored_pos = rt_cst.LAST_BUILD.get('joints_pos', {}).get(rigname)
+    current_pos = [cmds.xform(j, q=1, ws=1, t=1)
+                   for j in rt_cst.JOINTS_BN[rigname]]
+    rt_cst.LAST_BUILD.setdefault('joints_pos', {})[rigname] = current_pos
 
-    if current_hash != stored_hash:
-        logger.info(f'{rigname}: Joint positions changed')
-        rt_cst.LAST_BUILD.setdefault('joints_hash', {})[rigname] = current_hash
+    if stored_pos is None or len(stored_pos) != len(current_pos):
+        logger.info(f'{rigname}: No stored joint positions, rebuild needed')
         return True
+
+    for jnt, old, new in zip(rt_cst.JOINTS_BN[rigname], stored_pos, current_pos):
+        dist = math.dist(old, new)
+        if dist > tol:
+            logger.info(f"{rigname}: '{jnt}' moved {dist:.4f} (tol {tol})")
+            return True
 
     return False  # Joints unchanged
 

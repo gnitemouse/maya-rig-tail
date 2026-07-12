@@ -4,6 +4,14 @@ author: Daisy Jane @gnitemouse
 
 Setup for Rig Tail
 Cleanup previous rig and prepare for build.
+
+cleanup_rig picks teardown path
+True ->
+    cleanup_rigname: full teardown, delete basectrl, curves, clusters, FX nodes
+False ->
+    cleanup_connections: only break connections, keep nodes
+
+validate_cache() checks whether RIGPARTS / ROOT changed
 '''
 
 import maya.cmds as cmds
@@ -55,6 +63,7 @@ def cleanup_rig(fk, ik):
     anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
     for anim_curve in anim_curves:
         cmds.delete(anim_curve)
+    cleanup_dangling_unit_conversions()
 
     for rigname in rt_cst.RIGPARTS:
         # Validate cache
@@ -257,15 +266,25 @@ def cleanup_connections(rigname, fk, ik):
 def cleanup_anim_effects(rigname, fk, ik):
     '''
     Clean up animation effect nodes.
+    Expressions are removed first via rt_mya.remove(), which disconnects
+    before deleting: cmds.delete on a connected expression cascades through
+    its whole connection web (loop network node, sibling FX expressions,
+    composeMatrix nodes).
+
     Arguments
         rigname (str): Name of rig component
         fk (bool): Clean FK effects
         ik (bool): Clean IK effects
     '''
     logger.debug(f'{rigname}: Cleanup animation effects')
-    # Delete animation node patterns
+    # Delete animation node patterns (expressions first)
     typ = TYPE_FX
     node_patterns = [
+        f'{rigname}_*_wave*_expression',
+        f'{rigname}_*_noise_*_expression',
+        f'{rigname}_loop_time_expression',
+        f'{rigname}_loop_time',
+        f'{rigname}_curl*_multiplyDivide',
         f'{typ}_{rigname}_wave_*',
         f'{typ}_{rigname}_curl_*',
         f'{typ}_{rigname}_dynOffset_*',
@@ -278,6 +297,18 @@ def cleanup_anim_effects(rigname, fk, ik):
         nodes = cmds.ls(pattern) or []
         for node in nodes:
             rt_mya.remove(node)
+
+    cleanup_dangling_unit_conversions()
+
+def cleanup_dangling_unit_conversions():
+    '''
+    Sweep unitConversion nodes orphaned by deleting SDK animCurves or
+    expressions, otherwise they accumulate with every rebuild.
+    '''
+    for uc in cmds.ls(type='unitConversion') or []:
+        if not cmds.listConnections(f'{uc}.input', s=True, d=False) \
+                or not cmds.listConnections(f'{uc}.output', s=False, d=True):
+            cmds.delete(uc)
 
 
 # SETUP ================================================================

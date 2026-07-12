@@ -299,6 +299,21 @@ def disconnect_all(node, source=True, destination=True, attrs=None):
                 cmds.disconnectAttr(conns[i], conns[i + 1])
 
 
+def ensure_connect(src, dst):
+    """
+    Connect src -> dst plug unless already connected (rebuild-safe).
+    Skips unitConversion nodes when comparing existing sources.
+
+    Arguments:
+        src (str): Source plug (node.attribute)
+        dst (str): Destination plug (node.attribute)
+    """
+    existing = cmds.listConnections(dst, s=True, d=False, p=True, scn=True) or []
+    if src in existing:
+        return
+    cmds.connectAttr(src, dst, f=1)
+
+
 def break_connection(plug):
     """
     Break plug connection.

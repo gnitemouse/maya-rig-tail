@@ -42,6 +42,15 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     logger.info(f"{rigname}: Create curve '{curve}'")
     logger.debug(f'jnt_pos len{len(jnt_pos)} {jnt_pos}')
 
+    # Rebuild-safe: reuse the existing curve untouched. This path is only
+    # reached when joints are unchanged (cleanup_connections); recreating
+    # would name-clash and orphan skinCluster/cluster/pointOnCurveInfo
+    # connections. A real joint change goes through cleanup_rigname, which
+    # deletes the curve first.
+    if cmds.objExists(curve):
+        logger.debug(f"Curve '{curve}' exists, reusing")
+        return curve
+
     # Validate input
     if len(jnt_pos) < 2:
         logger.error(f'Need at least 2 joint positions, got {len(jnt_pos)}')
@@ -128,12 +137,13 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
     logger.debug(f'Solver param range: {solver_min_param:.3f} to {solver_max_param:.3f}')
     logger.debug(f'Driver param range: {driver_min_param:.3f} to {driver_max_param:.3f}')
 
-    # Create pointOnCurveInfo nodes for each solver curve CV
+    # Create pointOnCurveInfo nodes for each solver curve CV (reuse existing)
     for cv_i in range(solver_num_cv):
         # Create pointOnCurveInfo node to sample driver curve
         poci = f'{typ}_{rigname}_poci_{cv_i:02d}_pointOnCurveInfo'
-        cmds.createNode('pointOnCurveInfo', n=poci, s=1, ss=1)
-        cmds.connectAttr(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
+        if not cmds.objExists(poci):
+            cmds.createNode('pointOnCurveInfo', n=poci, s=1, ss=1)
+        rt_mya.ensure_connect(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
 
         # Calculate parameter: Map solver CV position to driver curve parameter space
         if solver_num_cv == 1:
@@ -148,12 +158,12 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         logger.debug(f'CV {cv_i}: parameter {driver_param:.3f}')
 
         # Connect position to solver curve CV
-        cmds.connectAttr(f'{poci}.positionX',
-                         f'{solver_shape}.controlPoints[{cv_i}].xValue')
-        cmds.connectAttr(f'{poci}.positionY',
-                         f'{solver_shape}.controlPoints[{cv_i}].yValue')
-        cmds.connectAttr(f'{poci}.positionZ',
-                         f'{solver_shape}.controlPoints[{cv_i}].zValue')
+        rt_mya.ensure_connect(f'{poci}.positionX',
+                              f'{solver_shape}.controlPoints[{cv_i}].xValue')
+        rt_mya.ensure_connect(f'{poci}.positionY',
+                              f'{solver_shape}.controlPoints[{cv_i}].yValue')
+        rt_mya.ensure_connect(f'{poci}.positionZ',
+                              f'{solver_shape}.controlPoints[{cv_i}].zValue')
 
     logger.debug(f'Created {solver_num_cv} pointOnCurveInfo connections')
 
@@ -415,13 +425,18 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     logger.info(f"Create clusters on curve '{curve}'")
     clusters = list()
 
-    # Clean up old clusters
+    # Clean up old clusters, including their handle transforms:
+    # an orphaned handle name-clashes with the recreated cluster's handle
     crvshape = cmds.listRelatives(curve, shapes=True, noIntermediate=True) or []
     for shape in crvshape:
         deformers = cmds.listHistory(shape) or []
         for node in deformers:
             if cmds.objExists(node) and cmds.nodeType(node) == 'cluster':
+                handles = cmds.listConnections(f'{node}.matrix', s=True, d=False) or []
                 cmds.delete(node)
+                for handle in handles:
+                    if cmds.objExists(handle):
+                        rt_mya.remove(handle)
 
     # Get curve CV information
     num_cv, _spans, _degree = rt_mya.get_num_cv(curve)

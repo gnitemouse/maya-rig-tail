@@ -36,62 +36,6 @@ import re
 logger = logger_setup(__name__)
 
 
-# CACHE VALIDATION =====================================================
-
-def validate_cache():
-    '''
-    Clear cache if RIGPARTS or ROOT changed since last build.
-    '''
-    # Check if RIGPARTS changed
-    if set(RIGPARTS) != set(rt_cst.LAST_BUILD['rigparts']):
-        removed = set(rt_cst.LAST_BUILD['rigparts']) - set(RIGPARTS)
-        added = set(RIGPARTS) - set(rt_cst.LAST_BUILD['rigparts'])
-
-        # Clear data for removed rigparts
-        for rigname in removed:
-            rt_cst.JOINTS_FK.pop(rigname, None)
-            rt_cst.JOINTS_IK.pop(rigname, None)
-            rt_cst.JOINTS_BN.pop(rigname, None)
-
-        logger.info(f'RIGPARTS changed. Removed: {removed}, Added: {added}')
-        rt_cst.LAST_BUILD['rigparts'] = RIGPARTS.copy()
-
-    # Check if ROOT changed
-    if ROOT != rt_cst.LAST_BUILD['root']:
-        logger.info(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{ROOT}'")
-        rt_cst.LAST_BUILD['root'] = ROOT
-
-def validate_cache_joints(rigname):
-    '''
-    Check if cached joints still exist and match scene.
-    Return True if joints changed (full rebuild needed).
-    '''
-    if rigname not in rt_cst.JOINTS_BN:
-        return True # No cache, need rebuild
-
-    # Check if cached joints exist in scene
-    for joint_dict in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
-        if rigname in joint_dict:
-            for jnt in joint_dict[rigname]:
-                if not cmds.objExists(jnt):
-                    logger.warning(f"Cached joint '{jnt}' no longer exists")
-                    return True  # Joints changed
-
-    # Compute hash of current joint positions
-    stored_hash = rt_cst.LAST_BUILD.get('joints_hash', {}).get(rigname)
-    current_hash = hash(tuple(
-        tuple(cmds.xform(j, q=1, ws=1, t=1))
-        for j in rt_cst.JOINTS_BN[rigname]
-    ))
-
-    if current_hash != stored_hash:
-        logger.info(f'{rigname}: Joint positions changed')
-        rt_cst.LAST_BUILD.setdefault('joints_hash', {})[rigname] = current_hash
-        return True
-
-    return False  # Joints unchanged
-
-
 # NAMING ===============================================================
 
 def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):

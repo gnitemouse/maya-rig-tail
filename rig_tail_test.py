@@ -21,6 +21,7 @@ import maya.api.OpenMaya as om
 from rig_tail_constants import *
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
+import rig_tail_anim as rt_ani
 import math
 
 # FX MATRIX DIAGNOSTICS ======================================
@@ -1156,7 +1157,7 @@ def test_time_evaluation(rigname='tail'):
 
     wave_expressions = []
     noise_expressions = []
-    loop_expression = f'{rigname}_loop_modulo_expression'
+    loop_expression = f'{rigname}_loop_time_expression'
 
     for axis in ['X', 'Y', 'Z']:
         wave_expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
@@ -1397,12 +1398,14 @@ def fix_expression_time_dependency(rigname='tail'):
     deleted_count = 0
 
     # Delete all wave expressions
+    # Use delete_expression(): raw cmds.delete on a connected expression
+    # cascades through its whole connection web
     for jnt in joints[1:]:
         NN = rt_nam.get_index_from_name(jnt)
         for axis in ['X', 'Y', 'Z']:
             expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
             if cmds.objExists(expr):
-                cmds.delete(expr)
+                rt_ani.delete_expression(expr)
                 deleted_count += 1
                 print(f'  Deleted: {expr}')
 
@@ -1412,14 +1415,14 @@ def fix_expression_time_dependency(rigname='tail'):
         for axis in ['X', 'Y', 'Z']:
             expr = f'{rigname}_{NN:02d}_noise_{axis}_expression'
             if cmds.objExists(expr):
-                cmds.delete(expr)
+                rt_ani.delete_expression(expr)
                 deleted_count += 1
                 print(f'  Deleted: {expr}')
 
     # Delete loop expression
-    loop_expr = f'{rigname}_loop_modulo_expression'
+    loop_expr = f'{rigname}_loop_time_expression'
     if cmds.objExists(loop_expr):
-        cmds.delete(loop_expr)
+        rt_ani.delete_expression(loop_expr)
         deleted_count += 1
         print(f'  Deleted: {loop_expr}')
 
@@ -1459,7 +1462,7 @@ def check_expression_flags(rigname='tail'):
         if cmds.objExists(expr):
             expressions.append(expr)
 
-    loop_expr = f'{rigname}_loop_modulo_expression'
+    loop_expr = f'{rigname}_loop_time_expression'
     if cmds.objExists(loop_expr):
         expressions.append(loop_expr)
 
