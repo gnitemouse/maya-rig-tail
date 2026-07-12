@@ -78,12 +78,12 @@ class RigTailUI(QtWidgets.QDialog):
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
-        lbl_config = QtWidgets.QLabel('File Path:')
-        lbl_config.setStyleSheet('color: #999999; font-size: 9px;')
-        display_layout.addWidget(lbl_config)
+        config_file_layout = QtWidgets.QHBoxLayout()
+        lbl_config = QtWidgets.QLabel('File:')
+        lbl_config.setMinimumWidth(100)
 
         self.txt_config = QtWidgets.QLineEdit()
-        self.txt_config.setPlaceholderText('Default Configuration')
+        self.txt_config.setPlaceholderText('Default')
         self.txt_config.setStyleSheet('''
             QLineEdit {
                 background-color: #2b2b2b;
@@ -98,11 +98,13 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_config.setToolTip(
-            'Config file currently in effect (Default Configuration = '
-            'built-in defaults). Type a path and press Enter to load it '
+            'Config file currently in effect (Default = built-in '
+            'defaults). Type a path and press Enter to load it '
             'directly; Load/Save Config update it too.')
         self.txt_config.returnPressed.connect(self.load_config_from_text)
-        display_layout.addWidget(self.txt_config)
+        config_file_layout.addWidget(lbl_config)
+        config_file_layout.addWidget(self.txt_config)
+        display_layout.addLayout(config_file_layout)
 
         config_btn_layout = QtWidgets.QHBoxLayout()
         self.btn_load_config = QtWidgets.QPushButton('Load Config')
@@ -210,12 +212,8 @@ class RigTailUI(QtWidgets.QDialog):
         features_layout.addStretch()
         options_layout.addLayout(features_layout)
 
-        # Rebuild toggles are not Features: set them off with a separator
-        separator = QtWidgets.QFrame()
-        separator.setFrameShape(QtWidgets.QFrame.HLine)
-        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
-        separator.setStyleSheet('background-color: #555555;')
-        options_layout.addWidget(separator)
+        # Rebuild toggles are not Features: set them off with some space
+        options_layout.addSpacing(8)
 
         toggles_layout = QtWidgets.QHBoxLayout()
         self.chk_main = QtWidgets.QCheckBox('Main Controller (dashboard)')
