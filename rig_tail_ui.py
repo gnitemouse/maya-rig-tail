@@ -66,21 +66,21 @@ class RigTailUI(QtWidgets.QDialog):
                 background-color: #2b2b2b;
                 color: #cccccc;
                 font-family: Consolas, monospace;
-                font-size: 10px;
+                font-size: 11px;
                 border: 1px solid #555555;
-                border-radius: 2px;
-                padding: 0px 14px;
+                border-radius: 4px;
+                padding: 2px 20px;
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
         self.txt_display.setToolTip('Summary of the configuration the next build will use.')
-        display_layout.setContentsMargins(4, 2, 4, 2)
+        display_layout.setContentsMargins(8, 2, 8, 2)
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
 
         config_file_layout = QtWidgets.QHBoxLayout()
         lbl_config = QtWidgets.QLabel('File:')
-        lbl_config.setMinimumWidth(100)
+        lbl_config.setMinimumWidth(24)
 
         self.txt_config = QtWidgets.QLineEdit()
         self.txt_config.setPlaceholderText('Default')
@@ -90,8 +90,8 @@ class RigTailUI(QtWidgets.QDialog):
                 color: #4A90E2;
                 font-size: 10px;
                 border: 1px solid #555555;
-                border-radius: 2px;
-                padding: 2px 6px;
+                border-radius: 10px;
+                padding: 2px 14px;
             }
             QLineEdit:focus {
                 border-color: #F5D041;
@@ -135,7 +135,19 @@ class RigTailUI(QtWidgets.QDialog):
         self.txt_root.setToolTip(
             'Name of the rig root group (ROOT). A trailing group label '
             'is stripped, e.g. tail_root_grp -> tail_root.')
-        self.style_line_edit(self.txt_root)
+        self.txt_root.setStyleSheet('''
+            QLineEdit {
+                background-color: #3a3a3a;
+                color: #cccccc;
+                font-size: 11px;
+                border: 1px solid #4A90E2;
+                border-radius: 4px;
+                padding: 4px 6px;
+            }
+            QLineEdit:focus {
+                border-color: #F5D041;
+            }
+        ''')
         root_layout.addWidget(root_label)
         root_layout.addWidget(self.txt_root)
         options_layout.addLayout(root_layout)
@@ -238,7 +250,7 @@ class RigTailUI(QtWidgets.QDialog):
 
         editors_group = self.create_group_box('Configuration Editor')
         editors_layout = QtWidgets.QVBoxLayout()
-        editors_layout.setSpacing(6)
+        editors_layout.setSpacing(4)
 
         editor_buttons = [
             ('Edit Rig Parts', lambda: self.open_rigparts_editor(),
@@ -367,21 +379,6 @@ class RigTailUI(QtWidgets.QDialog):
                 }
             ''')
         button.setMinimumHeight(32)
-
-    def style_line_edit(self, line_edit):
-        line_edit.setStyleSheet('''
-            QLineEdit {
-                background-color: #3a3a3a;
-                color: #cccccc;
-                border: 1px solid #4A90E2;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QLineEdit:focus {
-                border-color: #F5D041;
-            }
-        ''')
-        line_edit.setMinimumHeight(32)
 
     def style_checkbox(self, checkbox):
         checkbox.setStyleSheet('''
