@@ -133,7 +133,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
     '''
     ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', n+1)
     logger.debug(f"Setup Falloff Rotations for '{ctrl}'")
-    control = f'{typ}_{rigname}_{n:02d}'
+    control = f'{typ}_{rigname}_{n+1:02d}'
 
     if len(sdks) != len(joints):
         logger.error('Lists of sdk groups and joints should match in length.')

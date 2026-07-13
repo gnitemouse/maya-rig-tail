@@ -33,7 +33,7 @@ LAST_BUILD = {
 
 # USER VARIABLES =======================================================
 
-# Rig Components: List all parts to be rigged
+# Rig Components: List all parts to be rigged, e.g.
 # RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
 #     'L_sidetail', 'R_sidetail',
 #     'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
@@ -153,12 +153,67 @@ IKFK = '{rigname}_ikfk'
 # Attribute Template: (longName, niceName, enumName, dv)
 # IKFK_SWITCH's enumName is derived from IKFK_MODES; if IKFK_MODES
 # changes, call rebuild_derived() to regenerate it.
+# The first three modes are assumed to be SplineIK, IK, Float in that
+# order (the switch SDKs map them positionally to the spline/ik/float
+# control sets); 'FK' can sit anywhere and is matched by name.
 IKFK_MODES = ['SplineIK', 'IK', 'Float', 'FK']
 IKFK_SWITCH = ('ikfk_switch', 'IKFK Switch', ':'.join(IKFK_MODES), 0)
+
+# What each IKFK switch mode does; used for UI tooltips.
+IKFK_MODE_DESCRIPTIONS = {
+    'SplineIK': 'Spline shaping: bot/mid/top controls (plus small in-between '
+                'offsets) bend the whole curve like a flexible spline.',
+    'IK': 'Chain IK: cluster controls nested in a chain; each control '
+          'follows the previous one down the tail.',
+    'Float': 'Floating IK: independent cluster controls; each one moves '
+             'freely without following the others.',
+    'FK': 'Variable FK: sliding rotation controls with adjustable falloff '
+          'along the tail (only available when the FK chain is built).',
+}
+
+def ikfk_mode_index(name):
+    '''
+    Index of a mode in IKFK_MODES matched by name (case-insensitive),
+    or None if the mode is not in the list.
+    '''
+    for i, mode in enumerate(IKFK_MODES):
+        if mode.strip().upper() == name.strip().upper():
+            return i
+    return None
+
+def update_ikfk_modes(fk, ik):
+    '''
+    Sync IKFK_MODES with the build options (case-insensitive):
+    - If IK is built, the list must at least offer 'IK'.
+    - 'FK' is only offered when the FK chain is built alongside IK;
+      it is removed for IK-only builds and restored when FK is re-enabled.
+    FK-only builds have no switch attribute, so the list is left alone.
+
+    Runs before every build (setup_rig) and when the UI build checkboxes
+    change. Rebuilds the derived IKFK_SWITCH enum when the list changes.
+
+    Return:
+        bool: True if IKFK_MODES changed
+    '''
+    global IKFK_MODES
+    before = list(IKFK_MODES)
+    if ik:
+        if fk and ikfk_mode_index('FK') is None:
+            IKFK_MODES.append('FK')
+        elif not fk:
+            IKFK_MODES = [m for m in IKFK_MODES
+                          if m.strip().upper() != 'FK']
+        if ikfk_mode_index('IK') is None:
+            # Restore 'IK' at its canonical slot (after SplineIK)
+            IKFK_MODES.insert(min(1, len(IKFK_MODES)), 'IK')
+    changed = IKFK_MODES != before
+    if changed:
+        rebuild_derived()
+    return changed
 IKFK_DIVIDER = ('ikfk_divider', '----------', 'IKFK')
 STRETCH_DIVIDER = ('stretch_divider', '----------', 'STRETCH')
 ANIM_DIVIDER = ('anim_divider', '----------', 'ANIMATION')
-TWIST_DIVIDER = ('twist_divider', '----------', 'IK TWIST')
+TWIST_DIVIDER = ('twist_divider', '----------', 'TWIST')
 SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
 
 
@@ -237,8 +292,11 @@ def rebuild_derived():
     loading a config so the derived values stay in sync.
     '''
     global IKFK_SWITCH, SPLINE_CONTROLS, SPLINE_CONTROLS_SZ
+    dv = IKFK_SWITCH[3]
+    if not 0 <= dv < len(IKFK_MODES):
+        dv = 0
     IKFK_SWITCH = (IKFK_SWITCH[0], IKFK_SWITCH[1],
-                   ':'.join(IKFK_MODES), IKFK_SWITCH[3])
+                   ':'.join(IKFK_MODES), dv)
     SPLINE_CONTROLS = [SPLINE_BOT, SPLINE_BOT_SML, SPLINE_MID,
                        SPLINE_TOP_SML, SPLINE_TOP, SPLINE_MID_ROT]
     SPLINE_CONTROLS_SZ = [SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_SZ,

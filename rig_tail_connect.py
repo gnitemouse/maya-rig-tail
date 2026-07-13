@@ -133,10 +133,15 @@ def connect_basectrl(rigname, fk, ik):
 
     rt_mya.parent_to(basectrl_grp, cog_ctrl)
 
+    # Channel box order: IKFK, STRETCH, TWIST, ANIMATION, JNT SCALE
+    # (STRETCH attributes always come before TWIST attributes)
     if ik:
-        add_ik_attributes_to_basectrl(rigname, basectrl)
+        add_ikfk_attributes_to_basectrl(rigname, basectrl)
     rt_str.add_stretch_attributes_to_basectrl(rigname, basectrl)
+    if ik:
+        add_twist_attributes_to_basectrl(rigname, basectrl)
     rt_ani.add_anim_attributes_to_basectrl(rigname, basectrl)
+    rt_str.add_jntscale_attributes_to_basectrl(rigname, basectrl)
 
 
 # CONNECT FK ===========================================================
@@ -268,13 +273,14 @@ def connect_stretch(rigname, fk, ik):
 
 # ATTRIBUTES ===========================================================
 
-def add_ik_attributes_to_basectrl(rigname, basectrl):
+def add_ikfk_attributes_to_basectrl(rigname, basectrl):
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
     ikfk_switch = rt_nam.fstr(rigname, rt_cst.IKFK)
     rt_mya.add_attribute_enum(basectrl, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
     rt_mya.add_attribute_enum(basectrl, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1],
                        pxy=f'{cog_ctrl}.{ikfk_switch}')
 
+def add_twist_attributes_to_basectrl(rigname, basectrl):
     rt_mya.add_attribute_enum(basectrl, rt_cst.TWIST_DIVIDER[0], rt_cst.TWIST_DIVIDER[1], rt_cst.TWIST_DIVIDER[2])
 
     for attr in ['twist', 'roll', 'offset']:
@@ -298,12 +304,16 @@ def add_proxy_attributes_to_controls(rigname, control, typ):
     rt_mya.add_attribute_enum(control, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1],
                        pxy=f'{cog_ctrl}.{ikfk_switch}')
 
+    # STRETCH proxies always come before TWIST proxies
     if rt_cst.EFFECTS['stretchy']:
         rt_mya.add_attribute_enum(control, rt_cst.STRETCH_DIVIDER[0], rt_cst.STRETCH_DIVIDER[1], rt_cst.STRETCH_DIVIDER[2])
-        for atr in ['stretch', 'squash']:
-            rt_mya.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
+        for atr, nice in [('stretch', 'Stretch'), ('squash', 'Squash'),
+                          ('preserveVolume', 'Preserve Volume')]:
+            rt_mya.add_attribute_enum(control, ln=atr, nn=nice, pxy=f'{basectrl}.{atr}')
 
-    if rt_cst.EFFECTS['stretchy'] and typ == rt_cst.TYPE_IK:
+    # Twist attributes exist on the basectrl whenever IK is built,
+    # independent of stretchy
+    if typ == rt_cst.TYPE_IK:
         rt_mya.add_attribute_enum(control, rt_cst.TWIST_DIVIDER[0], rt_cst.TWIST_DIVIDER[1], rt_cst.TWIST_DIVIDER[2])
         for atr in ['twist', 'roll', 'offset']:
             rt_mya.add_attribute_enum(control, ln=atr, nn=rt_nam.titlecase(atr), pxy=f'{basectrl}.{atr}')
@@ -338,21 +348,26 @@ def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
 
 
 # IKFK MODE SWITCH =====================================================
+# The FK mode is matched by name in IKFK_MODES (case-insensitive) instead
+# of assuming it is the last entry: IK-only builds drop 'FK' from the
+# list (rt_cst.update_ikfk_modes), so the last mode is then 'Float'.
 
 def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
     ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
+    fk_mode = rt_cst.ikfk_mode_index('FK')
+    if fk_mode is None:
+        logger.warning(f"{rigname}: No 'FK' mode in IKFK_MODES, skip FK switch")
+        return
 
     for mode in range(len(rt_cst.IKFK_MODES)):
-        if mode == len(rt_cst.IKFK_MODES)-1:
-            rt_mya.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=1)
-            rt_mya.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=1)
-        else:
-            rt_mya.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=0)
-            rt_mya.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=0)
+        v = 1 if mode == fk_mode else 0
+        rt_mya.sdk(ikfk_attr, f'{fkroot_grp}.visibility', dv=mode, v=v)
+        rt_mya.sdk(ikfk_attr, f'{fkjnt_grp}.visibility', dv=mode, v=v)
 
 def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
     ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
+    fk_mode = rt_cst.ikfk_mode_index('FK')
 
     for i, ctrltyp in enumerate(['spline', 'ik', 'float']):
 
@@ -362,34 +377,23 @@ def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
             constraint = spline_constraints[j]
 
             for mode in range(len(rt_cst.IKFK_MODES)):
-                if mode == i:
-                    rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=1)
-                else:
-                    rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=0)
+                v = 1 if mode == i else 0
+                rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=v)
 
             for mode in range(len(rt_cst.IKFK_MODES)):
-                if mode == len(rt_cst.IKFK_MODES)-1:
-                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
-                elif mode == i:
-                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=1)
-                else:
-                    rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=0)
+                v = 1 if (mode == i and mode != fk_mode) else 0
+                rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=v)
 
         if ctrltyp == 'spline':
             mid_rot_ctrl = rt_nam.fstr(rigname, rt_cst.SPLINE_MID_ROT, rt_cst.TYPE_IK)
             mid_rot_grp = f'{mid_rot_ctrl}_{rt_cst.GRP}'
             for mode in range(len(rt_cst.IKFK_MODES)):
-                if mode == 0:
-                    rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=1)
-                else:
-                    rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=0)
+                v = 1 if mode == 0 else 0
+                rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=v)
 
-    ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
     for mode in range(len(rt_cst.IKFK_MODES)):
-        if mode == len(rt_cst.IKFK_MODES)-1:
-            rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=0)
-        else:
-            rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=1)
+        v = 0 if mode == fk_mode else 1
+        rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=v)
 
 def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
     logger.debug(f"{rigname}: Space switching for upvec")
@@ -419,20 +423,17 @@ def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
         end_constr: end_parents
     }
 
+    fk_mode = rt_cst.ikfk_mode_index('FK')
     for constr, parents in upvec_SDKs.items():
         for i, parent in enumerate(parents):
             for mode in range(len(rt_cst.IKFK_MODES)):
-                if mode == len(rt_cst.IKFK_MODES)-1 or mode != i:
-                    rt_mya.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=0)
-                else:
-                    rt_mya.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=1)
+                v = 1 if (mode == i and mode != fk_mode) else 0
+                rt_mya.sdk(ikfk_attr, f'{constr}.{parent}W{i}', dv=mode, v=v)
 
     for grp in (upvec_bsegrp, upvec_endgrp):
         for mode in range(len(rt_cst.IKFK_MODES)):
-            if mode == len(rt_cst.IKFK_MODES)-1:
-                rt_mya.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=0)
-            else:
-                rt_mya.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=1)
+            v = 0 if mode == fk_mode else 1
+            rt_mya.sdk(ikfk_attr, f'{grp}.visibility', dv=mode, v=v)
 
     cluster_handle_bse = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='base')
     cluster_handle_end = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='end')

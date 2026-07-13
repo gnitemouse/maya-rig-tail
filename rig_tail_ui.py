@@ -163,10 +163,13 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.chk_fk.setToolTip(
             'Build the FK chain: variable-FK sliding controls with '
-            'rotation falloff. At least one of FK/IK must stay checked.')
+            'rotation falloff. At least one of FK/IK must stay checked.\n'
+            'Unchecking FK removes the FK mode from the IKFK switch '
+            '(IKFK_MODES); re-checking restores it.')
         self.chk_ik.setToolTip(
             'Build the IK chain: spline IK with clusters, plus IK and '
-            'Float control modes. At least one of FK/IK must stay checked.')
+            'Float control modes. At least one of FK/IK must stay checked.\n'
+            'The IKFK switch attribute is only created when IK is built.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         build_layout.addWidget(build_label)
@@ -409,6 +412,7 @@ class RigTailUI(QtWidgets.QDialog):
         display_text = '\n'.join([
             f"ROOT = '{rt_cst.ROOT}'",
             f'RIGPARTS = {rt_cst.RIGPARTS}',
+            f'IKFK_MODES = {rt_cst.IKFK_MODES}',
             f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
             'Control Sizes:',
             f'  ROOT = {rt_cst.ROOT_CTRL_SZ}  COG = {rt_cst.COG_CTRL_SZ}  BASE = {rt_cst.BASE_CTRL_SZ}',
@@ -425,6 +429,9 @@ class RigTailUI(QtWidgets.QDialog):
           is reverted).
         - Stretchy requires IK: the stretch network reads the ikfk
           switch attribute, which only exists when IK is built.
+        - IKFK_MODES follows the build options: IK-only drops 'FK' from
+          the switch modes, re-checking FK restores it (the same check
+          also runs at build time in setup_rig).
         '''
         if not self.chk_fk.isChecked() and not self.chk_ik.isChecked():
             sender = self.sender()
@@ -436,6 +443,8 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_stretchy.setEnabled(ik)
         if not ik:
             self.chk_stretchy.setChecked(False)
+        if rt_cst.update_ikfk_modes(self.chk_fk.isChecked(), ik):
+            self.update_display()
 
     def config_start_path(self):
         '''Config path to preselect in file dialogs: the textbox path if
@@ -719,7 +728,9 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                 'List/tuple values are comma-separated.\n'
                 'IKFK_SWITCH is (longName, niceName, default index); its enum\n'
                 'string is generated from IKFK_MODES automatically.\n'
-                'Dividers are (longName, niceName, enumLabel).')
+                'Dividers are (longName, niceName, enumLabel).\n'
+                'Hover IKFK_MODES for what each mode does. FK is only\n'
+                'offered when the FK chain is built alongside IK.')
             note.setStyleSheet('color: #999999; font-size: 10px;')
             layout.addWidget(note)
 
@@ -727,6 +738,7 @@ class NamingTemplateEditor(QtWidgets.QDialog):
         form_layout.setSpacing(8)
 
         templates = self.get_templates_for_section()
+        tooltips = self.get_tooltips_for_section()
 
         for name, value in templates.items():
             line_edit = QtWidgets.QLineEdit(value)
@@ -739,6 +751,8 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                     padding: 6px;
                 }
             ''')
+            if name in tooltips:
+                line_edit.setToolTip(tooltips[name])
             self.fields[name] = line_edit
             form_layout.addRow(f'{name}:', line_edit)
 
@@ -837,6 +851,25 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                 'ANIM_DIVIDER': ', '.join(rt_cst.ANIM_DIVIDER),
                 'TWIST_DIVIDER': ', '.join(rt_cst.TWIST_DIVIDER),
                 'SCALE_DIVIDER': ', '.join(rt_cst.SCALE_DIVIDER),
+            }
+        return {}
+
+    def get_tooltips_for_section(self):
+        '''Return {attr name: tooltip} for this section.'''
+        if self.section == 'ikfk':
+            mode_lines = '\n'.join(
+                f'{mode}: {desc}'
+                for mode, desc in rt_cst.IKFK_MODE_DESCRIPTIONS.items())
+            return {
+                'IKFK': 'Name template of the per-tail switch attribute '
+                        'on the cog control (e.g. tail_ikfk).',
+                'IKFK_MODES': 'Modes offered by the IKFK switch:\n'
+                              + mode_lines +
+                              '\nThe first three are matched positionally '
+                              '(SplineIK, IK, Float); FK is matched by name '
+                              'and only offered when FK is built with IK.',
+                'IKFK_SWITCH': 'Switch attribute shown on every control: '
+                               '(longName, niceName, default mode index).',
             }
         return {}
 

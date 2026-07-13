@@ -113,6 +113,14 @@ def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
         cmds.addAttr(basectrl, ln='preserveVolume', at='float', k=1, dv=1, min=0, max=1)
 
+def add_jntscale_attributes_to_basectrl(rigname, basectrl):
+    '''
+    Add per-joint scale tweak attributes under the JNT SCALE divider.
+    Kept separate from add_stretch_attributes_to_basectrl so the channel
+    box orders: STRETCH, TWIST, ANIMATION, then the long JNT SCALE list.
+    '''
+    if not rt_cst.EFFECTS['stretchy']:
+        return
     rt_mya.add_attribute_enum(basectrl, rt_cst.SCALE_DIVIDER[0], rt_cst.SCALE_DIVIDER[1], rt_cst.SCALE_DIVIDER[2])
 
     for i, bn_jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
@@ -262,12 +270,16 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
         logger.error(f'Unrecognized curvelen {curvelen}')
 
     # (multiplyDivide) squash_vol - Inverse sqrt for volume preservation
+    # Shared between FK and IK builds; the IK stretch ratio wins when both
+    # are built (it reacts to curve length, FK's is user-driven only)
     squash_vol = f'{rigname}_squash_volume_multiplyDivide'
     if not cmds.objExists(squash_vol):
         cmds.createNode('multiplyDivide', n=squash_vol, s=1, ss=1)
         cmds.setAttr(f'{squash_vol}.operation', 3)  # power
-        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{squash_vol}.input1X', f=1)
         cmds.setAttr(f'{squash_vol}.input2X', -0.5)
+    if typ == rt_cst.TYPE_IK or \
+            not cmds.listConnections(f'{squash_vol}.input1X', s=1, d=0):
+        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{squash_vol}.input1X', f=1)
 
     # (blendTwoAttr) squash_blend - Blend volume preservation on/off
     squash_blend = f'{rigname}_squash_volume_blendTwoAttr'

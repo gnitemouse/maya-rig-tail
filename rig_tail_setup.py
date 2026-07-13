@@ -325,6 +325,12 @@ def setup_rig(fk, ik):
     '''
     logger.info('-----------------------------------------------------')
     logger.info('Setup rig components')
+
+    # Sync IKFK_MODES with the build options before the switch attribute
+    # is created (connect_cog): IK-only builds must not offer 'FK'
+    if rt_cst.update_ikfk_modes(fk, ik):
+        logger.info(f'IKFK_MODES updated for build options: {rt_cst.IKFK_MODES}')
+
     root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
