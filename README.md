@@ -10,11 +10,10 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
   (count set by `NUM_CTRL_IK`)
 - **Variable FK** - Sliding FK controls with falloff rotation
   (count set by `NUM_CTRL_FK`)
-- **IK/FK Switching** - Seamless blend between modes; mode names are
-  customizable
+- **IK/FK Switching** - Switch between modes
 - **Stretch/Squash** - Optional volume preservation
-- **Wave & Dynamic FX** - Built-in procedural animation effects
-- **JSON Configs** - Save/load the whole setup through the UI
+- **Wave/Curl FX** - Built-in procedural animation effects
+- **JSON Configs** - Save/load custom configuration through UI
 
 ## Quick Start
 
@@ -24,9 +23,10 @@ import rig_tail
 
 il.reload(rig_tail)
 
-# Single tail from joint chain
-rig_tail.rig_tail_single('tail', root='tail_spline_grp', fk=True, ik=True)
-
+# Rig a single tail from a single joint chain
+rig_tail.rig_tail_single(root='tail', fk=True, ik=True)
+# Rig multiple tails with each part defined in rig_tail_constants.RIGPARTS
+rig_tail.rig_tail_multiple(root='tail', fk=True, ik=True)
 # Launch UI
 rig_tail.main()
 ```
