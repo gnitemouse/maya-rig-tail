@@ -15,28 +15,17 @@ import rig_tail_math as rt_mat
 
 logger = logger_setup(__name__)
 
-# Number of main SplineIK controls (bot, bot_sml, mid, top_sml, top).
-# The spline set is a fixed bot/mid/top structure: it does not grow or
-# shrink with NUM_CTRL_IK. mid_rot is an extra rotation offset control
-# sharing the mid position. The helpers below map between the fixed
-# spline controls and the NUM_CTRL_IK clusters (identity when
-# NUM_CTRL_IK == 5).
-NUM_SPLINE_MAIN = 5
-
-def spline_cluster_index(ctrl_i, num_clusters):
-    '''
-    Cluster index that the i-th main spline control sits on.
-
-    Arguments
-        ctrl_i (int): Main spline control index (0=bot .. 4=top)
-        num_clusters (int): Number of control clusters (NUM_CTRL_IK)
-
-    Return
-        int: Cluster index to match position to
-    '''
-    if num_clusters <= 1:
-        return 0
-    return round(ctrl_i * (num_clusters - 1) / (NUM_SPLINE_MAIN - 1))
+# Number of SplineIK controls (bot, bot_sml, mid, top_sml, top).
+# Spline controls are positioned at fixed tail fractions:
+# 0, 1/4, 1/2, 3/4, 1 (mid_rot shares the mid position).
+# SplineIK controls stay the same in number and position
+# regardless of change in NUM_CTRL_IK.
+# spline_control_index maps each of the NUM_CTRL_IK clusters
+# back onto the SplineIK control
+NUM_SPLINEIK = 5
+# Fixed position fractions of the 5 SplineIK controls:
+# bot, bot_sml, mid, top_sml, top. Used to place them independently of the cluster count.
+SPLINE_MAIN_FRACS = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 def spline_control_index(cluster_j, num_clusters):
     '''
@@ -51,7 +40,7 @@ def spline_control_index(cluster_j, num_clusters):
     '''
     if num_clusters <= 1:
         return 0
-    return round(cluster_j * (NUM_SPLINE_MAIN - 1) / (num_clusters - 1))
+    return round(cluster_j * (NUM_SPLINEIK - 1) / (num_clusters - 1))
 
 
 # CREATE CONTROLS ======================================================
@@ -285,7 +274,8 @@ def create_control_match_list(rigname, matchlist, template_ctrl, template_grp=No
 
 def create_controls_fk(rigname, joints, jnt_pos):
     '''
-    Create NUM_CTRL_FK Variable FK controls and individual FK joint controls.
+    Create NUM_CTRL_FK Variable FK controls and, when rt_cst.INDIV_FK is
+    enabled, individual FK joint controls.
     Variable FK controls are distributed evenly along the FK chain.
     Individual FK joint controls are created at each joint.
 
@@ -331,21 +321,23 @@ def create_controls_fk(rigname, joints, jnt_pos):
         for attr in ['tx', 'ty', 'tz']: # Hide translate
             cmds.setAttr(f'{varfk_ctrl}.{attr}', k=0, cb=0, l=1)
 
-    # Create individual FK joint controls
-    fk_ctrls, fk_ctrl_grps = create_control_match_list(rigname,
-                                                       joints,
-                                                       template_ctrl=rt_cst.CONTROL,
-                                                       template_grp=rt_cst.CTRL_GRP,
-                                                       typ=rt_cst.TYPE_FK,
-                                                       parent=fkroot_grp,
-                                                       nest_controls=True,
-                                                       size=rt_cst.FK_CTRL_SZ,
-                                                       color='pink',
-                                                       shape='circle')
+    # Create individual FK joint controls (optional, one per joint)
+    if rt_cst.INDIV_FK:
+        fk_ctrls, fk_ctrl_grps = create_control_match_list(rigname,
+                                                           joints,
+                                                           template_ctrl=rt_cst.CONTROL,
+                                                           template_grp=rt_cst.CTRL_GRP,
+                                                           typ=rt_cst.TYPE_FK,
+                                                           parent=fkroot_grp,
+                                                           nest_controls=True,
+                                                           size=rt_cst.FK_CTRL_SZ,
+                                                           color='pink',
+                                                           shape='circle')
+        # Set FK control visibility (hide translate, scale)
+        set_attributes_visibility_fk(fk_ctrls)
 
-    # Set FK control visibility (hide translate, scale)
+    # Set variable FK control visibility (hide translate, scale)
     set_attributes_visibility_fk(varfk_ctrls)
-    set_attributes_visibility_fk(fk_ctrls)
     return varfk_ctrls
 
 def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
@@ -385,7 +377,7 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
     controls_float, groups_float = create_spline_controls_float(
         rigname, cluster_handles, basectrl, scale)
     controls_spline, groups_spline = create_spline_controls_spline(
-        rigname, cluster_handles, basectrl, scale)
+        rigname, cluster_handles, basectrl, scale, joints=joints)
 
     # Up vector controls
     controls_upv, groups_upv = create_spline_up_vectors(rigname, cluster_handles_upv, scale)
@@ -462,15 +454,22 @@ def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1
     orient_control_aims(groups, orient_world)
     return controls, groups
 
-def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=1):
+def create_spline_controls_spline(rigname, cluster_handles, orient_world,
+                                  scale=1, joints=None):
     '''
     Build Spline IK mode controls for spline clusters.
     Creates 5 main controls plus a rotation offset mid control.
     SPLINE_CONTROLS = [bot, bot_sml, mid, top_sml, top, mid_rot]
 
-    The spline set is fixed regardless of NUM_CTRL_IK: controls are
-    positioned on clusters via spline_cluster_index (bot on the first
-    cluster, mid in the middle, top on the last).
+    The spline set is fixed regardless of NUM_CTRL_IK: each main control
+    is placed at a fixed fraction of the tail (bot=0, bot_sml=0.25,
+    mid=0.5, top_sml=0.75, top=1.0; mid_rot shares mid). Fractions are
+    resolved to the nearest joint (joints are far denser than clusters),
+    so bot_sml/top_sml no longer drift onto a different cluster when
+    NUM_CTRL_IK changes. When no joints are supplied the nearest cluster
+    handle is used as a fallback. Positioning stays consistent with the
+    SplineIK influence mapping (spline_control_index): control k drives the
+    clusters nearest fraction k/4, which is where control k sits.
 
     Control hierarchy:
     - bot_sml parents under bot
@@ -483,6 +482,8 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
         cluster_handles (list): Control cluster handle names
         orient_world (str): Object for aim constraint world up (-z axis)
         scale (float): Scale multiplier for controls
+        joints (list): Joint chain (base->tip) used to resolve fixed
+            fractions to positions; falls back to cluster_handles if None
 
     Return
         controls (list): List of Spline control names (length 6)
@@ -492,19 +493,27 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     logger.debug(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
     num_clusters = len(cluster_handles)
 
+    def match_target(frac):
+        # Object at a fixed fraction of the tail: nearest joint when
+        # available (dense, so position is stable across cluster counts),
+        # otherwise nearest control cluster.
+        if joints:
+            return joints[round(frac * (len(joints) - 1))]
+        return cluster_handles[round(frac * (num_clusters - 1))]
+
     controls = list()
     groups = list()
-    # Create spline controls matched to clusters
+    # Create spline controls at fixed tail fractions
     for i, template in enumerate(rt_cst.SPLINE_CONTROLS):
         ctrlname = rt_nam.fstr(rigname, template, rt_cst.TYPE_IK)
         if 'mid_rot' in ctrlname: # spline_mid_rot. Same position as spline_mid
-            match_to = cluster_handles[spline_cluster_index(2, num_clusters)]
+            match_to = match_target(0.5)
             control, group = create_control(ctrlname, match_to=match_to,
                                             parent=orient_world,
                                             size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,
                                             color='neongreen', shape='sphere')
         else: # spline_bot, spline_bot_sml, spline_mid, spline_top_sml, spline_top
-            match_to = cluster_handles[spline_cluster_index(i, num_clusters)]
+            match_to = match_target(SPLINE_MAIN_FRACS[i])
             control, group = create_control(ctrlname, match_to=match_to,
                                             parent=orient_world,
                                             size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,

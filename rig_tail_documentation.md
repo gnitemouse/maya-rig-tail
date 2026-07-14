@@ -330,6 +330,9 @@ Load/Save Config buttons).
 - `LAST_BUILD` - State of the previous build (rigparts, root, joint
   positions, control counts) used to pick the teardown path on re-rig
 - `EFFECTS` - Effect toggles (stretchy, wave, curl, noise, loop)
+- `INDIV_FK` - Build individual per-joint FK controls alongside the
+  variable-FK sliding controls (requires FK). A change toggles the full
+  teardown path on re-rig, like a control-count change.
 - `NUM_CTRL_FK`, `NUM_CTRL_IK` - Number of Variable FK controls and of
   IK/Float controls (and curve clusters). The SplineIK control set is
   a fixed bot/mid/top structure and does not change with NUM_CTRL_IK.

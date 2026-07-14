@@ -179,16 +179,20 @@ def connect_fk(rigname, fk, ik):
     cmds.parentConstraint(basectrl, fkjnt_grp, mo=1)
     connect_spline_fk(rigname)
 
-    for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
-        fk_ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, rt_cst.TYPE_FK, i)
-        fk_ctrl_grp = rt_nam.fstr(rigname, rt_cst.CTRL_GRP, rt_cst.TYPE_FK, i)
-        last_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, i, rt_cst.NUM_CTRL_FK)
-        sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, i)
+    # Wire the individual (per-joint) FK controls to the joint SDK layer.
+    # Only built when INDIV_FK is enabled; otherwise the SDK_JNT layer is
+    # left as an identity group and joints follow the variable-FK controls.
+    if rt_cst.INDIV_FK:
+        for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
+            fk_ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, rt_cst.TYPE_FK, i)
+            fk_ctrl_grp = rt_nam.fstr(rigname, rt_cst.CTRL_GRP, rt_cst.TYPE_FK, i)
+            last_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, i, rt_cst.NUM_CTRL_FK)
+            sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, i)
 
-        if not cmds.objExists(f'{fk_ctrl_grp}_parentConstraint1'):
-            cmds.parentConstraint(last_sdk, fk_ctrl_grp)
+            if not cmds.objExists(f'{fk_ctrl_grp}_parentConstraint1'):
+                cmds.parentConstraint(last_sdk, fk_ctrl_grp)
 
-        cmds.connectAttr(f'{fk_ctrl}.rotate', f'{sdk_grp}.rotate', f=1)
+            cmds.connectAttr(f'{fk_ctrl}.rotate', f'{sdk_grp}.rotate', f=1)
 
     if ik:
         fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)

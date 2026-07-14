@@ -29,7 +29,8 @@ LAST_BUILD = {
     'root': '',
     'joints_pos': {},  # {rigname: [[x, y, z] per joint] from last build}
     'num_ctrl_fk': None,  # control counts of the last build; a change
-    'num_ctrl_ik': None   # forces the full teardown path on re-rig
+    'num_ctrl_ik': None,  # forces the full teardown path on re-rig
+    'indiv_fk': None      # individual-FK toggle; a change forces rebuild
 }
 
 
@@ -44,6 +45,9 @@ RIGPARTS = ['tail']
 
 # Root Name
 ROOT = 'tail'
+# Build individual FK controls (one per joint) alongside variable-FK
+# sliding controls. Requires FK. If False, only build varFK controls.
+INDIV_FK = False
 # Build centralized main controller dashboard (for multiple tails)
 MAIN_CONTROLLER = False
 # Force Rebuild (even if joints are unchanged)
@@ -326,6 +330,7 @@ def get_user_editable_config():
         # User Variables
         'ROOT': ROOT,
         'EFFECTS': EFFECTS,
+        'INDIV_FK': INDIV_FK,
         'MAIN_CONTROLLER': MAIN_CONTROLLER,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
@@ -455,7 +460,7 @@ def load_config(filepath=None):
     Returns True on success, False if the file is missing or unreadable.
     '''
     global LOADED_CONFIG
-    global RIGPARTS, ROOT, EFFECTS, MAIN_CONTROLLER, FORCE_REBUILD, JOINT_POS_TOLERANCE
+    global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
     global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
@@ -484,6 +489,7 @@ def load_config(filepath=None):
         RIGPARTS = config.get('RIGPARTS', RIGPARTS)
         ROOT = config.get('ROOT', ROOT)
         EFFECTS = config.get('EFFECTS', EFFECTS)
+        INDIV_FK = config.get('INDIV_FK', INDIV_FK)
         # 'MASTER_CONTROLLER' and 'GROUP_CONTROLS' are legacy keys
         MAIN_CONTROLLER = config.get(
             'MAIN_CONTROLLER', config.get(

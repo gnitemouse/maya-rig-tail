@@ -66,29 +66,34 @@ def validate_cache_structure():
     """
     Check whether the rig structure constants changed since the last
     build. Changing NUM_CTRL_FK / NUM_CTRL_IK alters the SDK group,
-    curve CV and cluster layout, so reusing the previous nodes (light
-    cleanup path) would mix old and new counts and corrupt the build;
-    a change forces the full teardown path instead.
+    curve CV and cluster layout, and toggling INDIV_FK adds/removes the
+    per-joint FK controls, so reusing the previous nodes (light cleanup
+    path) would mix old and new layouts and corrupt the build; a change
+    forces the full teardown path instead.
 
-    Stored counts are refreshed on every call.
+    Stored values are refreshed on every call.
 
     Return:
-        bool: True if control counts changed (full rebuild needed)
+        bool: True if the structure changed (full rebuild needed)
     """
     prev_fk = rt_cst.LAST_BUILD.get('num_ctrl_fk')
     prev_ik = rt_cst.LAST_BUILD.get('num_ctrl_ik')
+    prev_indiv = rt_cst.LAST_BUILD.get('indiv_fk')
     rt_cst.LAST_BUILD['num_ctrl_fk'] = rt_cst.NUM_CTRL_FK
     rt_cst.LAST_BUILD['num_ctrl_ik'] = rt_cst.NUM_CTRL_IK
+    rt_cst.LAST_BUILD['indiv_fk'] = rt_cst.INDIV_FK
 
     if prev_fk is None and prev_ik is None:
         # No recorded build in this session: joint validation decides
         return False
     changed = (prev_fk != rt_cst.NUM_CTRL_FK
-               or prev_ik != rt_cst.NUM_CTRL_IK)
+               or prev_ik != rt_cst.NUM_CTRL_IK
+               or prev_indiv != rt_cst.INDIV_FK)
     if changed:
-        logger.info(f'Control counts changed: NUM_CTRL_FK '
+        logger.info(f'Structure changed: NUM_CTRL_FK '
                     f'{prev_fk} -> {rt_cst.NUM_CTRL_FK}, NUM_CTRL_IK '
-                    f'{prev_ik} -> {rt_cst.NUM_CTRL_IK}. Full rebuild.')
+                    f'{prev_ik} -> {rt_cst.NUM_CTRL_IK}, INDIV_FK '
+                    f'{prev_indiv} -> {rt_cst.INDIV_FK}. Full rebuild.')
     return changed
 
 
