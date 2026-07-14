@@ -2,49 +2,29 @@
 # rig_tail_stretch.py
 author: Daisy Jane @gnitemouse
 
-Squash and stretch for the tail. The module controls two things:
+Squash and stretch for the tail. A node network derives a single
+stretch ratio and drives two outputs from it:
 
     Length    - joints spread apart or bunch up along the tail
-    Thickness - BN joints fatten or thin through scaleY/scaleZ
+    Thickness - BN joints fatten or thin via scaleY/scaleZ
 
-How the values are computed:
+The ratio is the tail curve's current length over its rest length. IK
+derives it live from a curveInfo (the rest length is cached once so
+rebuilding while posed doesn't adopt a stretched rest); FK is slider-
+only. A 'stretch' slider adds on top and the result is clamped. Length
+multiplies each joint's rest translateX; Thickness uses ratio^-0.5
+(the taffy rule), blended by 'preserveVolume', trimmed by 'squash',
+divided out by global scale, and scaled per joint by 'jntScaleYZ'.
 
-    1. Measure the tail curve.
-       A curveInfo node reads the curve's current arcLength. The rest
-       length is stored once as an 'initial_length' attribute on the
-       curveInfo, so rebuilding the rig while the tail is posed does not
-       adopt the stretched length as the new rest length.
-
-    2. Stretch ratio (length).
-       IK: current length / rest length, so joints follow the curve
-       when the IK controls pull it longer or shorter; the
-       preserveVolume slider fades this reactive part in and out.
-       FK: slider-driven only, the curve is not consulted. Either way
-       the 'stretch' slider (-10..10 on the base control, remapped to
-       +-0.5) is added on top, and the result is clamped to 0.1..2.0.
-       The ratio multiplies each joint's rest translateX - IK joints
-       directly, FK through the SDK offset group above each FK control.
-
-    3. Volume preservation (thickness).
-       Thickness = ratio ^ -0.5, like pulling taffy: stretching thins
-       the tail, compressing fattens it. The 'preserveVolume' slider
-       blends this on or off, and the 'squash' slider (-10..10,
-       remapped to +-0.5) is added on top. The result is divided by the
-       rig's global scale squared, so scaling the whole character does
-       not fatten the tail, then multiplied by the per-joint
-       'jntScaleYZ' sliders before driving each BN joint's scaleY/Z.
-
-Build/connect split: build_stretch() runs early in the build and only
-creates nodes - the sliders do not exist on the base control yet.
-rig_tail_connect later creates the attributes and calls
-connect_stretch_to_joints() to wire everything together. Until then
-the remap nodes sit with their inputs unconnected; that is expected.
-All nodes are looked up by name and reused, so re-runs refresh
-connections instead of duplicating the network.
-
-Related: BN children are positioned by offsetParentMatrix, so a
-parent's squash scale would shear them. rig_tail_matrix appends a
-squashInv term to each child's OPM to cancel it.
+Architecture notes:
+  - Build/connect split: build_stretch() runs early and only creates
+    nodes; the base-control sliders don't exist yet, so remap inputs
+    sit unconnected until rig_tail_connect creates the attributes and
+    calls connect_stretch_to_joints(). Nodes are looked up by name and
+    reused, so re-runs refresh the network instead of duplicating it.
+  - BN children are placed by offsetParentMatrix, so a parent's squash
+    would shear them; rig_tail_matrix cancels it with a squashInv OPM
+    term.
 
 Functions:
     Build phase (called from rig_tail):
