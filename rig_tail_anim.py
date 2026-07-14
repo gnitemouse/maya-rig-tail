@@ -21,6 +21,17 @@ import rig_tail_maya as rt_mya
 
 logger = logger_setup(__name__)
 
+# 2*pi, matching the literal used inside the loop expression.
+TWO_PI = 6.28318530718
+# Default value of the basectrl 'loop_frame' attribute. When the Loop
+# effect is NOT built there is no loop node normalizing time, so wave and
+# noise scale raw time by TWO_PI / LOOP_FRAME_DEFAULT to run at the same
+# speed as a loop-built rig with loop toggled off (whose loop node outputs
+# time1.outTime * TWO_PI / loop_frame at the default loop_frame).
+LOOP_FRAME_DEFAULT = 60
+# Time-source expression for wave/noise when the Loop effect is not built.
+UNLOOPED_TIME_SRC = f'(time1.outTime * {TWO_PI / LOOP_FRAME_DEFAULT})'
+
 
 def delete_expression(expr):
     '''
@@ -118,7 +129,8 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
         if not cmds.attributeQuery('loop', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='loop', nn='Loop', at='bool', k=1, dv=0)
         if not cmds.attributeQuery('loop_frame', n=basectrl, ex=1):
-            cmds.addAttr(basectrl, ln='loop_frame', nn='Loop Frame', at='long', k=1, dv=60, min=1)
+            cmds.addAttr(basectrl, ln='loop_frame', nn='Loop Frame', at='long', k=1,
+                         dv=LOOP_FRAME_DEFAULT, min=1)
 
 
 # LOOP =================================================================
@@ -143,7 +155,7 @@ def build_loop(rigname, basectrl):
 float $loop_enabled = {basectrl}.loop;
 float $loop_len = {basectrl}.loop_frame;
 float $t = time1.outTime;
-float $two_pi = 6.28318530718;
+float $two_pi = {TWO_PI};
 
 if ($loop_enabled > 0.5) {{
     float $mod = $t - floor($t / $loop_len) * $loop_len;
@@ -182,7 +194,13 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
 
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     num_joints = len(joints)
-    time_source = loop_time if loop_time else 'time1.outTime'
+    # With no loop node, normalize raw time the same way the loop node does
+    # at its default frame (loop off) so wave speed matches a loop-built rig.
+    time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
+    # The loop attribute only exists when the Loop effect is built; when it
+    # is not, reference a literal 0 so the expression still compiles and
+    # takes the non-looping branch.
+    loop_enabled_src = f'{basectrl}.loop' if loop_time else '0'
 
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_nam.get_index_from_name(jnt)
@@ -198,7 +216,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
 
 
             expr_code = f'''// Wave expression for joint {NN:02d} axis {rot_axis}
-float $loop_enabled = {basectrl}.loop;
+float $loop_enabled = {loop_enabled_src};
 float $wave_freq = {basectrl}.wave_frequency;
 float $wave_speed = {basectrl}.wave_speed * 0.5;
 float $freq;
@@ -321,7 +339,13 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
     effect_axes = ['X', 'Y', 'Z']
     axis_offsets = {'X': 0.0, 'Y': 100.0, 'Z': 200.0}
     num_joints = len(joints)
-    time_source = loop_time if loop_time else 'time1.outTime'
+    # With no loop node, normalize raw time the same way the loop node does
+    # at its default frame (loop off) so noise speed matches a loop-built rig.
+    time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
+    # The loop attribute only exists when the Loop effect is built; when it
+    # is not, reference a literal 0 so the expression still compiles and
+    # takes the non-looping branch.
+    loop_enabled_src = f'{basectrl}.loop' if loop_time else '0'
 
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_nam.get_index_from_name(jnt)
@@ -337,7 +361,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
                 continue
 
             expr_code = f'''
-float $loop_enabled = {basectrl}.loop;
+float $loop_enabled = {loop_enabled_src};
 float $amp = {basectrl}.noise;
 float $noise_freq = {basectrl}.noise_frequency;
 float $noise_speed = {basectrl}.noise_speed * 0.2;
