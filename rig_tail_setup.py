@@ -14,6 +14,7 @@ False ->
 validate_cache() checks whether RIGPARTS / ROOT changed
 '''
 
+import re
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_cst
@@ -604,6 +605,117 @@ def rename(source, target):
         logger.info(f"Renamed '{source}' -> '{target}'")
     else:
         logger.debug(f"Cancel rename '{source}' -> '{target}'. Source '{source}' does not exist.")
+
+def rigpart_has_joints(rigname):
+    '''
+    True if the scene contains BN joints for `rigname`, using the same
+    detection as set_joints_auto (exact BN start joint, or any BN joint
+    whose name carries the rigname). Used to validate/warn about RIGPARTS
+    entries that would have nothing to build.
+
+    Arguments
+        rigname (str): Rig part name to check
+
+    Return
+        bool: True if BN joints exist for this rig part
+    '''
+    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
+    if cmds.objExists(start_jnt):
+        return True
+    all_joints = cmds.ls(type='joint') or []
+    return any(rigname in j and rt_cst.TYPE_BN in j for j in all_joints)
+
+
+def rename_rigpart(old, new):
+    '''
+    Rename a rig part in place: swap the rigname token `old` -> `new` in
+    every node that carries it (joints and any already-built rig nodes),
+    then update RIGPARTS and the joint caches so names stay consistent.
+
+    The match is bounded to whole tokens, so renaming 'tail' does not
+    touch 'detail' or 'tail2'. Renames are keyed by UUID (stable across
+    renames) and rolled back if any single rename fails, so on failure the
+    scene is left unchanged. If ROOT equals the old rigname (e.g. a single
+    default tail whose root group shares the name), ROOT is updated too so
+    it keeps matching the renamed root group.
+
+    Arguments
+        old (str): Current rig part name
+        new (str): New rig part name
+
+    Return
+        (bool, str): (success, message). Nothing is changed on failure.
+    '''
+    new = (new or '').strip()
+    if not new:
+        return False, 'New name is empty.'
+    if new == old:
+        return False, 'New name is unchanged.'
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new):
+        return False, ('Invalid name. Use letters, digits and underscores; '
+                       'do not start with a digit.')
+
+    old_token = re.compile(rf'(?<![A-Za-z0-9]){re.escape(old)}(?![A-Za-z0-9])')
+    new_token = re.compile(rf'(?<![A-Za-z0-9]){re.escape(new)}(?![A-Za-z0-9])')
+
+    all_nodes = cmds.ls(long=True)
+    # Refuse if the new name is already used by any node (would collide)
+    if any(new_token.search(n.split('|')[-1]) for n in all_nodes):
+        return False, f"Name '{new}' is already used in the scene."
+
+    targets = [n for n in all_nodes if old_token.search(n.split('|')[-1])]
+    if not targets:
+        # Nothing built for this part yet: just migrate list/cache state
+        _migrate_rigpart_state(old, new, old_token)
+        return True, f"Renamed '{old}' -> '{new}' (no scene nodes yet)."
+
+    # UUIDs survive renames; resolve to the current path at each step so a
+    # parent rename never invalidates a pending child.
+    uuids = cmds.ls(targets, uuid=True)
+    done = []  # (uuid, old_short) for rollback
+    try:
+        for uuid in uuids:
+            cur = cmds.ls(uuid, long=True)
+            if not cur:
+                continue
+            short = cur[0].split('|')[-1]
+            new_short = old_token.sub(new, short)
+            if new_short == short:
+                continue
+            cmds.rename(cur[0], new_short)
+            done.append((uuid, short))
+    except Exception as e:
+        for uuid, old_short in reversed(done):
+            cur = cmds.ls(uuid, long=True)
+            if cur:
+                try:
+                    cmds.rename(cur[0], old_short)
+                except Exception:
+                    pass
+        logger.warning(f"Rename '{old}' -> '{new}' failed, reverted: {e}")
+        return False, f'Rename failed and was reverted: {e}'
+
+    _migrate_rigpart_state(old, new, old_token)
+    logger.info(f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)")
+    return True, f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)."
+
+
+def _migrate_rigpart_state(old, new, old_token):
+    '''Move RIGPARTS, ROOT (if it matched) and joint caches from old to new.'''
+    rt_cst.RIGPARTS = [new if p == old else p for p in rt_cst.RIGPARTS]
+    for jdict in (rt_cst.JOINTS_BN, rt_cst.JOINTS_FK,
+                  rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+        if old in jdict:
+            jdict[new] = [old_token.sub(new, j) for j in jdict.pop(old)]
+    lb = rt_cst.LAST_BUILD
+    lb['rigparts'] = [new if p == old else p for p in lb.get('rigparts', [])]
+    jp = lb.get('joints_pos') or {}
+    if old in jp:
+        jp[new] = jp.pop(old)
+    if rt_cst.ROOT == old:
+        rt_cst.ROOT = new
+        lb['root'] = new
+
 
 def rename_components():
     '''

@@ -118,14 +118,14 @@ class RigTailUI(QtWidgets.QDialog):
         config_btn_layout.addWidget(self.btn_load_config)
         config_btn_layout.addWidget(self.btn_save_config)
         display_layout.addLayout(config_btn_layout)
-        display_layout.addSpacing(6)
+        display_layout.addSpacing(8)
 
         display_group.setLayout(display_layout)
         main_layout.addWidget(display_group)
 
         options_group = self.create_group_box('Build Options')
         options_layout = QtWidgets.QVBoxLayout()
-        options_layout.setSpacing(10)
+        options_layout.setSpacing(8)
 
         root_layout = QtWidgets.QHBoxLayout()
         root_label = QtWidgets.QLabel('Root Name:')
@@ -152,14 +152,22 @@ class RigTailUI(QtWidgets.QDialog):
         root_layout.addWidget(root_label)
         root_layout.addWidget(self.txt_root)
         options_layout.addLayout(root_layout)
+        options_layout.addSpacing(8)
 
-        build_layout = QtWidgets.QHBoxLayout()
-        build_label = QtWidgets.QLabel('Build:')
-        build_label.setMinimumWidth(100)
+        # Build: two rows of two columns.
+        #   Row 1: FK          Indiv FK (requires FK)
+        #   Row 2: IK          Stretchy (requires IK)
         self.chk_fk = QtWidgets.QCheckBox('FK')
         self.chk_ik = QtWidgets.QCheckBox('IK')
+        self.chk_indiv_fk = QtWidgets.QCheckBox('Indiv FK')
+        self.chk_stretchy = QtWidgets.QCheckBox('Stretchy')
         self.chk_fk.setChecked(True)
         self.chk_ik.setChecked(True)
+        self.chk_indiv_fk.setChecked(False)
+        self.chk_stretchy.setChecked(True)
+        # First-column boxes share a width so the second column aligns
+        self.chk_fk.setMinimumWidth(52)
+        self.chk_ik.setMinimumWidth(52)
         self.chk_fk.toggled.connect(self.on_build_mode_changed)
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.chk_fk.setToolTip(
@@ -168,31 +176,40 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik.setToolTip(
             'Build the IK chain: spline IK with clusters, plus IK and '
             'Float control modes. At least one of FK/IK must stay checked.')
+        self.chk_indiv_fk.setToolTip(
+            'Also build an individual FK control at each joint (nested '
+            'along the chain) for direct per-joint rotation, on top of '
+            'the variable-FK sliding controls. Requires FK.')
+        self.chk_stretchy.setToolTip(
+            'Build the squash & stretch network. Requires IK: the '
+            'stretch nodes read the ikfk switch attribute.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
-        build_layout.addWidget(build_label)
-        build_layout.addWidget(self.chk_fk)
-        build_layout.addWidget(self.chk_ik)
-        build_layout.addStretch()
-        options_layout.addLayout(build_layout)
+        self.style_checkbox(self.chk_indiv_fk, sub=True)
+        self.style_checkbox(self.chk_stretchy, sub=True)
+
+        build_row1 = QtWidgets.QHBoxLayout()
+        build_label = QtWidgets.QLabel('Build:')
+        build_label.setMinimumWidth(100)
+        build_row1.addWidget(build_label)
+        build_row1.addWidget(self.chk_fk)
+        build_row1.addWidget(self.chk_indiv_fk)
+        build_row1.addStretch()
+        options_layout.addLayout(build_row1)
+
+        build_row2 = QtWidgets.QHBoxLayout()
+        build_empty_label = QtWidgets.QLabel('')
+        build_empty_label.setMinimumWidth(100)
+        build_row2.addWidget(build_empty_label)
+        build_row2.addWidget(self.chk_ik)
+        build_row2.addWidget(self.chk_stretchy)
+        build_row2.addStretch()
+        options_layout.addLayout(build_row2)
+        options_layout.addSpacing(8)
 
         features_layout = QtWidgets.QHBoxLayout()
         features_label = QtWidgets.QLabel('Features:')
         features_label.setMinimumWidth(100)
-        self.chk_stretchy = QtWidgets.QCheckBox('Stretchy')
-        self.chk_stretchy.setChecked(True)
-        self.chk_stretchy.setToolTip(
-            'Build the squash & stretch network. Requires IK: the '
-            'stretch nodes read the ikfk switch attribute.')
-        self.style_checkbox(self.chk_stretchy)
-        features_layout.addWidget(features_label)
-        features_layout.addWidget(self.chk_stretchy)
-        features_layout.addStretch()
-        options_layout.addLayout(features_layout)
-
-        features_layout = QtWidgets.QHBoxLayout()
-        empty_label = QtWidgets.QLabel('')
-        empty_label.setMinimumWidth(100)
         self.chk_wave = QtWidgets.QCheckBox('Wave')
         self.chk_curl = QtWidgets.QCheckBox('Curl')
         self.chk_noise = QtWidgets.QCheckBox('Noise')
@@ -217,15 +234,13 @@ class RigTailUI(QtWidgets.QDialog):
         self.style_checkbox(self.chk_curl)
         self.style_checkbox(self.chk_noise)
         self.style_checkbox(self.chk_loop)
-        features_layout.addWidget(empty_label)
+        features_layout.addWidget(features_label)
         features_layout.addWidget(self.chk_wave)
         features_layout.addWidget(self.chk_curl)
         features_layout.addWidget(self.chk_noise)
         features_layout.addWidget(self.chk_loop)
         features_layout.addStretch()
         options_layout.addLayout(features_layout)
-
-        # Rebuild toggles are not Features: set them off with some space
         options_layout.addSpacing(8)
 
         toggles_layout = QtWidgets.QHBoxLayout()
@@ -290,6 +305,7 @@ class RigTailUI(QtWidgets.QDialog):
 
         editors_group.setLayout(editors_layout)
         main_layout.addWidget(editors_group)
+        main_layout.addSpacing(10)
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
@@ -381,20 +397,39 @@ class RigTailUI(QtWidgets.QDialog):
             ''')
         button.setMinimumHeight(32)
 
-    def style_checkbox(self, checkbox):
-        checkbox.setStyleSheet('''
+    def style_checkbox(self, checkbox, sub=False):
+        '''
+        Style a build-option checkbox. sub=True marks a secondary option
+        (Indiv FK, Stretchy) with lighter grey text so it reads as a
+        sub-option of the primary above it. The disabled color is set
+        explicitly, otherwise the stylesheet text color would override
+        Qt's disabled dimming and a disabled sub-option would look enabled.
+        '''
+        style = '''
             QCheckBox {
-                spacing: 8px;
+                spacing: 6px;
             }
             QCheckBox::indicator {
                 width: 18px;
                 height: 18px;
             }
-        ''')
+        '''
+        if sub:
+            style += '''
+            QCheckBox {
+                color: #999999;
+            }
+            QCheckBox:disabled {
+                color: #5a5a5a;
+            }
+            '''
+        checkbox.setStyleSheet(style)
 
     def load_current_values(self):
         '''Refresh UI fields and checkboxes from rig_tail_constants.'''
         self.txt_root.setText(rt_cst.ROOT)
+        self.chk_indiv_fk.setChecked(rt_cst.INDIV_FK)
+        self.chk_indiv_fk.setEnabled(self.chk_fk.isChecked())
         self.chk_stretchy.setChecked(rt_cst.EFFECTS.get('stretchy', False))
         self.chk_wave.setChecked(rt_cst.EFFECTS.get('wave', False))
         self.chk_curl.setChecked(rt_cst.EFFECTS.get('curl', False))
@@ -448,11 +483,16 @@ class RigTailUI(QtWidgets.QDialog):
                 sender.blockSignals(True)
                 sender.setChecked(True)
                 sender.blockSignals(False)
+        fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
         self.chk_stretchy.setEnabled(ik)
         if not ik:
             self.chk_stretchy.setChecked(False)
-        if rt_cst.update_ikfk_modes(self.chk_fk.isChecked(), ik):
+        # Individual FK controls require FK
+        self.chk_indiv_fk.setEnabled(fk)
+        if not fk:
+            self.chk_indiv_fk.setChecked(False)
+        if rt_cst.update_ikfk_modes(fk, ik):
             self.update_display()
 
     def config_start_path(self):
@@ -541,13 +581,25 @@ class RigTailUI(QtWidgets.QDialog):
         root = self.txt_root.text().strip() or None
 
         if not rt_cst.RIGPARTS:
-            QtWidgets.QMessageBox.warning(self, 'Error', 'RIGPARTS is empty. Add rig parts first.')
+            QtWidgets.QMessageBox.warning(self, 'Error',
+                'RIGPARTS is empty. Add rig parts first.')
             return
 
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
         if not fk and not ik:
-            QtWidgets.QMessageBox.warning(self, 'Error', 'Select at least FK or IK to build.')
+            QtWidgets.QMessageBox.warning(self, 'Error',
+                'Select at least FK or IK to build.')
+            return
+
+        # Warn about rig parts with no joints instead of failing mid-build
+        import rig_tail_setup as rt_set
+        missing = [p for p in rt_cst.RIGPARTS if not rt_set.rigpart_has_joints(p)]
+        if missing:
+            QtWidgets.QMessageBox.warning(self, 'Missing Joints',
+                'No BN joints found for: ' + ', '.join(missing) + '.\n'
+                'Add joints matching the naming template, or remove these '
+                'parts from RIGPARTS, then build again.')
             return
 
         rt_cst.EFFECTS = {
@@ -558,6 +610,8 @@ class RigTailUI(QtWidgets.QDialog):
             'noise': self.chk_noise.isChecked(),
             'loop': self.chk_loop.isChecked()
             }
+        # Individual FK controls require FK
+        rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
         rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
         rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
 
@@ -572,8 +626,10 @@ class RigPartsEditor(QtWidgets.QDialog):
     '''
     Pop-up editor for RIGPARTS.
 
-    Rig parts can be added/edited/removed manually, or filled from the
-    current joint selection via 'Get RIGPARTS from Selected Joints'.
+    Rig parts can be added/removed manually or filled from the current
+    joint selection via 'Get RIGPARTS from Selected Joints'. Rename
+    renames the part in the scene immediately (not deferred to build), so
+    the list and the scene node names never drift apart.
     '''
 
     def __init__(self, parent=None):
@@ -607,19 +663,24 @@ class RigPartsEditor(QtWidgets.QDialog):
 
         btn_layout = QtWidgets.QHBoxLayout()
         self.btn_add = QtWidgets.QPushButton('Add')
-        self.btn_edit = QtWidgets.QPushButton('Edit')
+        self.btn_rename = QtWidgets.QPushButton('Rename')
         self.btn_remove = QtWidgets.QPushButton('Remove')
-        self.btn_add.setToolTip('Add a new rig part name to the list.')
-        self.btn_edit.setToolTip('Rename the selected rig part.')
+        self.btn_add.setToolTip(
+            'Add a new rig part name to the list. Warns if no matching '
+            'joints exist in the scene yet.')
+        self.btn_rename.setToolTip(
+            'Rename the selected rig part immediately in the scene: every '
+            'node belonging to the part is renamed and RIGPARTS is updated '
+            'to match. Reverts to the old name if the rename fails.')
         self.btn_remove.setToolTip('Delete the selected rig part from the list.')
         self.btn_add.clicked.connect(self.add_item)
-        self.btn_edit.clicked.connect(self.edit_item)
+        self.btn_rename.clicked.connect(self.rename_item)
         self.btn_remove.clicked.connect(self.remove_item)
         self.parent().style_button(self.btn_add, 0)
-        self.parent().style_button(self.btn_edit, 0)
+        self.parent().style_button(self.btn_rename, 0)
         self.parent().style_button(self.btn_remove, 0)
         btn_layout.addWidget(self.btn_add)
-        btn_layout.addWidget(self.btn_edit)
+        btn_layout.addWidget(self.btn_rename)
         btn_layout.addWidget(self.btn_remove)
 
         self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
@@ -662,24 +723,52 @@ class RigPartsEditor(QtWidgets.QDialog):
     def add_item(self):
         '''Prompt for a new rig part name and append it to the list.'''
         text, ok = QtWidgets.QInputDialog.getText(self, 'Add Rig Part', 'Enter rig part name:')
-        if ok and text:
-            self.list_widget.addItem(text)
+        if not (ok and text):
+            return
+        text = text.strip()
+        if not text:
+            return
+        self.list_widget.addItem(text)
+        # Validate/warn: an added name with no joints builds nothing
+        import rig_tail_setup as rt_set
+        if not rt_set.rigpart_has_joints(text):
+            QtWidgets.QMessageBox.warning(self, 'Missing Joints',
+                f"No BN joints found for rig part '{text}'.")
 
-    def edit_item(self):
-        '''Rename the selected rig part.'''
+    def rename_item(self):
+        '''
+        Rename the selected rig part immediately in the scene.
+
+        The scene rename happens now (not on OK): the backend swaps the
+        rigname in every node for the part and updates RIGPARTS/caches, so
+        the list and the scene never drift. A failed rename is reverted and
+        the old name is kept.
+        '''
         current = self.list_widget.currentRow()
-        if current >= 0:
-            current_item = self.list_widget.item(current)
-            text, ok = QtWidgets.QInputDialog.getText(
-                self, 'Edit Rig Part',
-                'Edit rig part name:',
-                QtWidgets.QLineEdit.Normal,
-                current_item.text()
-            )
-            if ok and text:
-                current_item.setText(text)
-        else:
+        if current < 0:
             QtWidgets.QMessageBox.warning(self, 'Warning', 'No rig part selected.')
+            return
+        item = self.list_widget.item(current)
+        old = item.text()
+        new, ok = QtWidgets.QInputDialog.getText(
+            self, 'Rename Rig Part', f"Rename '{old}' to:",
+            QtWidgets.QLineEdit.Normal, old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+
+        import rig_tail_setup as rt_set
+        success, message = rt_set.rename_rigpart(old, new)
+        if success:
+            item.setText(new)
+            # Backend already updated RIGPARTS/ROOT/caches; refresh main UI
+            if self.parent():
+                self.parent().load_current_values()
+            QtWidgets.QMessageBox.information(self, 'Renamed', message)
+        else:
+            QtWidgets.QMessageBox.warning(self, 'Rename Failed', message)
 
     def remove_item(self):
         '''Delete the selected rig part from the list.'''
