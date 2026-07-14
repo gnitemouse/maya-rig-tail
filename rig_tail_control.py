@@ -15,6 +15,44 @@ import rig_tail_math as rt_mat
 
 logger = logger_setup(__name__)
 
+# Number of main SplineIK controls (bot, bot_sml, mid, top_sml, top).
+# The spline set is a fixed bot/mid/top structure: it does not grow or
+# shrink with NUM_CTRL_IK. mid_rot is an extra rotation offset control
+# sharing the mid position. The helpers below map between the fixed
+# spline controls and the NUM_CTRL_IK clusters (identity when
+# NUM_CTRL_IK == 5).
+NUM_SPLINE_MAIN = 5
+
+def spline_cluster_index(ctrl_i, num_clusters):
+    '''
+    Cluster index that the i-th main spline control sits on.
+
+    Arguments
+        ctrl_i (int): Main spline control index (0=bot .. 4=top)
+        num_clusters (int): Number of control clusters (NUM_CTRL_IK)
+
+    Return
+        int: Cluster index to match position to
+    '''
+    if num_clusters <= 1:
+        return 0
+    return round(ctrl_i * (num_clusters - 1) / (NUM_SPLINE_MAIN - 1))
+
+def spline_control_index(cluster_j, num_clusters):
+    '''
+    Main spline control index that drives cluster j in SplineIK mode.
+
+    Arguments
+        cluster_j (int): Cluster index (0 .. num_clusters-1)
+        num_clusters (int): Number of control clusters (NUM_CTRL_IK)
+
+    Return
+        int: Main spline control index (0=bot .. 4=top)
+    '''
+    if num_clusters <= 1:
+        return 0
+    return round(cluster_j * (NUM_SPLINE_MAIN - 1) / (num_clusters - 1))
+
 
 # CREATE CONTROLS ======================================================
 
@@ -430,6 +468,10 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     Creates 5 main controls plus a rotation offset mid control.
     SPLINE_CONTROLS = [bot, bot_sml, mid, top_sml, top, mid_rot]
 
+    The spline set is fixed regardless of NUM_CTRL_IK: controls are
+    positioned on clusters via spline_cluster_index (bot on the first
+    cluster, mid in the middle, top on the last).
+
     Control hierarchy:
     - bot_sml parents under bot
     - top_sml parents under top
@@ -438,7 +480,7 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
 
     Arguments
         rigname (str): Name of rig component
-        cluster_handles (list): Cluster handle names (must be NUM_CTRL_IK length)
+        cluster_handles (list): Control cluster handle names
         orient_world (str): Object for aim constraint world up (-z axis)
         scale (float): Scale multiplier for controls
 
@@ -448,8 +490,7 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     '''
     logger.info(f"{rigname}: Create IK Spline controls - SplineIK")
     logger.debug(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
-    if len(cluster_handles) != rt_cst.NUM_CTRL_IK:
-        logger.error(f'Need {rt_cst.NUM_CTRL_IK} Cluster Handles')
+    num_clusters = len(cluster_handles)
 
     controls = list()
     groups = list()
@@ -457,12 +498,14 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world, scale=
     for i, template in enumerate(rt_cst.SPLINE_CONTROLS):
         ctrlname = rt_nam.fstr(rigname, template, rt_cst.TYPE_IK)
         if 'mid_rot' in ctrlname: # spline_mid_rot. Same position as spline_mid
-            control, group = create_control(ctrlname, match_to=cluster_handles[2],
+            match_to = cluster_handles[spline_cluster_index(2, num_clusters)]
+            control, group = create_control(ctrlname, match_to=match_to,
                                             parent=orient_world,
                                             size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,
                                             color='neongreen', shape='sphere')
         else: # spline_bot, spline_bot_sml, spline_mid, spline_top_sml, spline_top
-            control, group = create_control(ctrlname, match_to=cluster_handles[i],
+            match_to = cluster_handles[spline_cluster_index(i, num_clusters)]
+            control, group = create_control(ctrlname, match_to=match_to,
                                             parent=orient_world,
                                             size=rt_cst.SPLINE_CONTROLS_SZ[i]*scale,
                                             color='neonred', shape='cube')
@@ -737,9 +780,10 @@ def set_attributes_visibility_ik(ik_controls):
     '''
     Hide scale on IK controls.
     Show translate, rotate, visibility as keyable.
+    Float controls are translate-only: rotate is non-keyable and hidden.
 
     Arguments
-        controls (list): List of IK control names
+        ik_controls (dict): Dict of control types -> control lists
     '''
     for mode, controls in ik_controls.items():
         for ctrl in controls:
@@ -752,10 +796,14 @@ def set_attributes_visibility_ik(ik_controls):
             for axis in 'XYZ':
                 if cmds.attributeQuery(f'scale{axis}', n=ctrl, ex=1):
                     cmds.setAttr(f'{ctrl}.scale{axis}', k=0, cb=0, l=1)
-            # Show rotate
+            # Rotate: hidden and locked on Float controls, shown elsewhere
+            if mode == 'float':
+                rk, rcb, rl = 0, 0, 1
+            else:
+                rk, rcb, rl = 1, 0, 0
             for axis in 'XYZ':
                 if cmds.attributeQuery(f'rotate{axis}', n=ctrl, ex=1):
-                    cmds.setAttr(f'{ctrl}.rotate{axis}', k=1, cb=0, l=0)
+                    cmds.setAttr(f'{ctrl}.rotate{axis}', k=rk, cb=rcb, l=rl)
             # Show visibility
             rt_mya.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
 

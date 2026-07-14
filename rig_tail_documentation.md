@@ -77,12 +77,12 @@ Template string formatting and naming conventions.
 
 ### Functions
 
-#### `fstr(rigname, template, typ='', nn=0, tag='', suffix='', *args)`
+#### `fstr(rigname, template, TYPE='', NN='', nn='', TAG='')`
 Format template string with rig name and placeholders.
 
 **Example:**
 ```python
-rt_nam.fstr('tail', '{rigname}_{type}_ctrl', 'ik')  # Returns: 'tail_ik_ctrl'
+rt_nam.fstr('tail', rt_cst.JOINT, 'IK', 3)  # Returns: 'IK_tail_03_jnt'
 ```
 
 #### `get_rigname(node, template)`
@@ -90,6 +90,9 @@ Extract rig name from node name using template pattern.
 
 #### `get_index_from_name(name)`
 Parse joint index (##) from naming convention.
+
+#### `strip_group_suffix(name)`
+Strip a trailing group label, e.g. `'tail_root_grp'` -> `'tail_root'`.
 
 #### `titlecase(name)`
 Convert snake_case to Title Case.
@@ -298,21 +301,49 @@ Get cached IK controls and groups.
 #### `clear_control_cache()`
 Clear all control caches.
 
-#### `validate_cache(rigname)`
-Validate cached data exists.
+#### `validate_cache()`
+Clear cached data if RIGPARTS or ROOT changed since the last build.
+
+#### `validate_cache_structure()`
+Check whether NUM_CTRL_FK / NUM_CTRL_IK changed since the last build.
+A change forces the full teardown path: reusing nodes built for a
+different control count would mix old and new layouts.
 
 #### `validate_cache_joints(rigname)`
-Validate joint cache.
+Check that cached joints still exist and have not moved beyond
+JOINT_POS_TOLERANCE; returns True when a full rebuild is needed.
 
 ---
 
 ## rig_tail_constants.py (rt_cst)
 
-Global constants, naming templates, and data caches.
+Global constants, naming templates, and data caches. All
+user-editable values can be exported/imported as a JSON config file
+via `save_config(filepath)` / `load_config(filepath)` (the UI's
+Load/Save Config buttons).
 
 ### Key Constants
 
 - `RIGPARTS` - List of rig component names
+- `ROOT` - Root group name (trailing group label is stripped)
 - `JOINTS_FK`, `JOINTS_IK`, `JOINTS_BN` - Joint caches per rigname
+- `LAST_BUILD` - State of the previous build (rigparts, root, joint
+  positions, control counts) used to pick the teardown path on re-rig
 - `EFFECTS` - Effect toggles (stretchy, wave, curl, noise, loop)
+- `NUM_CTRL_FK`, `NUM_CTRL_IK` - Number of Variable FK controls and of
+  IK/Float controls (and curve clusters). The SplineIK control set is
+  a fixed bot/mid/top structure and does not change with NUM_CTRL_IK.
 - Naming templates: `JOINT`, `CTRL`, `CTRL_GRP`, `SDK_GRP`, etc.
+
+### IKFK Modes
+
+- `IKFK_MODES_ALL` - Full user-configured mode name list. Positional:
+  `[0]=SplineIK, [1]=IK, [2]=Float, [3]=FK`; the names themselves are
+  free to change (e.g. `['spline', 'ik', 'float', 'fk']`).
+- `IKFK_MODES` - Active subset for the current build options, derived
+  by `update_ikfk_modes(fk, ik)`: IK-only drops the FK mode, FK-only
+  builds have no switch attribute.
+- `ikfk_fk_mode_index()` - Index of the FK mode in the active list
+  (matched by name, falling back to position for custom names).
+- `IKFK_SWITCH` - Switch attribute template; its enum string is
+  rebuilt from `IKFK_MODES` by `rebuild_derived()`.

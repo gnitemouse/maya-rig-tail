@@ -2,8 +2,29 @@
 # rig_tail_connect.py
 author: Daisy Jane @gnitemouse
 
-Connections and Constraints for Rig Tail
-Uses Local-space matrix-based offset architecture for FX.
+Final wiring phase of the build. rig_tail creates the pieces (joints,
+curves, clusters, controls, node networks); connect_rig_tail() then
+assembles them into one working rig. For each rig part it:
+
+    - Parents the FK/IK systems into the rig hierarchy and constrains
+      them to the base control.
+    - Creates the switch and channel-box attributes: the per-tail IKFK
+      switch lives on the cog control, and stretch/twist/animation
+      attributes live on the base control, mirrored onto every control
+      as proxy attributes.
+    - Wires the IKFK mode switching. Each curve cluster is parent-
+      constrained to one control per mode (spline/ik/float), and set
+      driven keys on the switch attribute fade constraint weights and
+      control/joint visibility so only the active mode has influence.
+      The spline set is fixed (bot/mid/top); spline_control_index maps
+      its 5 main controls onto however many clusters NUM_CTRL_IK made.
+      The FK mode index comes from rt_cst.ikfk_fk_mode_index().
+    - Hands off to rig_tail_matrix (BN offsetParentMatrix network),
+      rig_tail_anim (FX) and rig_tail_stretch (squash/stretch wiring),
+      then binds the geometry to the BN joints.
+
+The control cache avoids repeated get_controls_ik() scene scans within
+one build; it is cleared at the start of every build and cleanup.
 '''
 
 import maya.cmds as cmds
@@ -13,7 +34,7 @@ import importlib as il
 
 import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
-from rig_tail_control import get_controls_ik
+from rig_tail_control import get_controls_ik, spline_control_index
 from rig_tail_curve import get_spline_handle
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -331,13 +352,17 @@ def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
         cluster_handles.append(cluster_handle)
     logger.debug(f'Get cluster handles for spline constraint:\n{cluster_handles}')
 
+    # Constraint targets per cluster: W0=spline, W1=ik, W2=float.
+    # IK and Float controls map 1:1 to clusters; the spline target
+    # comes from the fixed bot/mid/top set via spline_control_index.
+    num_clusters = len(cluster_handles)
     spline_constraints = list()
     for i, clstr in enumerate(cluster_handles):
-        constrain_objs = list()
-        for ctrltyp in ['spline', 'ik', 'float']:
-            constrain_objs.append(ik_controls[ctrltyp][i])
-        constrain_objs.append(clstr)
-
+        spline_ctrl = ik_controls['spline'][spline_control_index(i, num_clusters)]
+        constrain_objs = [spline_ctrl,
+                          ik_controls['ik'][i],
+                          ik_controls['float'][i],
+                          clstr]
         cluster_constr = cmds.parentConstraint(constrain_objs)[0]
         spline_constraints.append(cluster_constr)
     logger.debug(f'constraints {spline_constraints}')
@@ -348,13 +373,10 @@ def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
 
 
 # IKFK MODE SWITCH =====================================================
-# The FK mode is matched by name in IKFK_MODES (case-insensitive) instead
-# of assuming it is the last entry: IK-only builds drop 'FK' from the
-# list (rt_cst.update_ikfk_modes), so the last mode is then 'Float'.
 
 def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
     ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
-    fk_mode = rt_cst.ikfk_mode_index('FK')
+    fk_mode = rt_cst.ikfk_fk_mode_index() # Get index of FK mode
     if fk_mode is None:
         logger.warning(f"{rigname}: No 'FK' mode in IKFK_MODES, skip FK switch")
         return
@@ -367,29 +389,29 @@ def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
 def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
     ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
-    fk_mode = rt_cst.ikfk_mode_index('FK')
+    fk_mode = rt_cst.ikfk_fk_mode_index() # Get index of FK mode
+    num_clusters = len(spline_constraints)
 
-    for i, ctrltyp in enumerate(['spline', 'ik', 'float']):
-
-        for j in range(rt_cst.NUM_CTRL_IK):
-            ctrl = ik_controls[ctrltyp][j]
-            ctrl_grp = ik_ctrlgrps[ctrltyp][j]
-            constraint = spline_constraints[j]
-
+    # Constraint weights: each cluster constraint has targets
+    # W0=spline, W1=ik, W2=float; only the active mode's target weighs in.
+    # The spline target per cluster comes from the fixed bot/mid/top set.
+    for j in range(num_clusters):
+        constraint = spline_constraints[j]
+        targets = [ik_controls['spline'][spline_control_index(j, num_clusters)],
+                   ik_controls['ik'][j],
+                   ik_controls['float'][j]]
+        for i, ctrl in enumerate(targets):
             for mode in range(len(rt_cst.IKFK_MODES)):
                 v = 1 if mode == i else 0
                 rt_mya.sdk(ikfk_attr, f'{constraint}.{ctrl}W{i}', dv=mode, v=v)
 
+    # Control visibility: each control set is only shown in its own mode
+    # (ik_ctrlgrps['spline'] includes the mid_rot group)
+    for i, ctrltyp in enumerate(['spline', 'ik', 'float']):
+        for ctrl_grp in ik_ctrlgrps[ctrltyp]:
             for mode in range(len(rt_cst.IKFK_MODES)):
                 v = 1 if (mode == i and mode != fk_mode) else 0
                 rt_mya.sdk(ikfk_attr, f'{ctrl_grp}.visibility', dv=mode, v=v)
-
-        if ctrltyp == 'spline':
-            mid_rot_ctrl = rt_nam.fstr(rigname, rt_cst.SPLINE_MID_ROT, rt_cst.TYPE_IK)
-            mid_rot_grp = f'{mid_rot_ctrl}_{rt_cst.GRP}'
-            for mode in range(len(rt_cst.IKFK_MODES)):
-                v = 1 if mode == 0 else 0
-                rt_mya.sdk(ikfk_attr, f'{mid_rot_grp}.visibility', dv=mode, v=v)
 
     for mode in range(len(rt_cst.IKFK_MODES)):
         v = 0 if mode == fk_mode else 1
@@ -405,6 +427,8 @@ def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
     upvec_bsegrp = ik_ctrlgrps['upvec'][0]
     upvec_endgrp = ik_ctrlgrps['upvec'][1]
 
+    # Base follows the first control of each set, end follows the last.
+    # spline[4] is the fixed 'top' control; ik/float vary with NUM_CTRL_IK.
     base_parents = [
         ik_controls['spline'][0],
         ik_controls['ik'][0],
@@ -412,8 +436,8 @@ def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
     ]
     end_parents = [
         ik_controls['spline'][4],
-        ik_controls['ik'][4],
-        ik_controls['float'][4]
+        ik_controls['ik'][-1],
+        ik_controls['float'][-1]
     ]
 
     base_constr = cmds.parentConstraint(base_parents, upvec_bsegrp, mo=1)[0]
@@ -423,7 +447,7 @@ def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
         end_constr: end_parents
     }
 
-    fk_mode = rt_cst.ikfk_mode_index('FK')
+    fk_mode = rt_cst.ikfk_fk_mode_index()
     for constr, parents in upvec_SDKs.items():
         for i, parent in enumerate(parents):
             for mode in range(len(rt_cst.IKFK_MODES)):

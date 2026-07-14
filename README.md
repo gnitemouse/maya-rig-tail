@@ -4,11 +4,17 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 
 ## Features
 
-- **Spline IK** - Smooth curve-based tail deformation
+- **Spline IK** - Smooth curve-based tail deformation with a fixed
+  bot/mid/top control structure
+- **IK & Float modes** - Chained or free-floating cluster controls
+  (count set by `NUM_CTRL_IK`)
 - **Variable FK** - Sliding FK controls with falloff rotation
-- **IK/FK Switching** - Seamless blend between modes
+  (count set by `NUM_CTRL_FK`)
+- **IK/FK Switching** - Seamless blend between modes; mode names are
+  customizable
 - **Stretch/Squash** - Optional volume preservation
 - **Wave & Dynamic FX** - Built-in procedural animation effects
+- **JSON Configs** - Save/load the whole setup through the UI
 
 ## Quick Start
 
@@ -86,11 +92,19 @@ Component naming can be changed through UI or in rig_tail_constants.py
 
 ## Configuration
 
-Edit `rig_tail_constants.py` to customize:
+Customize through the UI editors (Edit Rig Parts, Edit Naming, Edit
+Constants) or by editing `rig_tail_constants.py`:
 - Naming templates
-- Rig component names
+- Rig component names and root name
+- IKFK switch mode names (`IKFK_MODES_ALL`, positional:
+  SplineIK, IK, Float, FK - e.g. `['spline', 'ik', 'float', 'fk']`)
+- Number of controls (`NUM_CTRL_FK`, `NUM_CTRL_IK`); the SplineIK
+  bot/mid/top set stays fixed while IK/Float control counts vary
 - Effect settings (stretch, wave, curl, noise, loop)
 - Control colors and shapes
+
+All settings round-trip through a JSON config file with the UI's
+Load/Save Config buttons, so setups can be shared per show or user.
 
 ## License
 

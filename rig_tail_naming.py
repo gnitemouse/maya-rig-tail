@@ -11,6 +11,7 @@ Functions:
     compile_template_to_regex: Compile naming template to regex
     parse_placeholder: Parse placeholder content from template
     get_index_from_name: Extract numerical index from node name
+    strip_group_suffix: Strip trailing group label from a name
     titlecase: Convert text to title case
     name_contains_rigname_terms: Check if name matches rigname terms
     rename_shapes: Rename shape nodes to match transform
@@ -203,6 +204,27 @@ def get_index_from_name(node, first=False, underscore=True):
         return None
     token = matches[-1]
     return token if token == 'ee' else int(token)
+
+
+def strip_group_suffix(name):
+    """
+    Strip a trailing group label (rt_cst.GRP) and its separator from a
+    name, e.g. 'tail_root_grp' -> 'tail_root'. Names that do not end
+    with the group label are returned unchanged (whitespace-stripped).
+
+    Arguments:
+        name (str): Name to strip
+
+    Return:
+        str: Name without the trailing group label
+    """
+    name = name.strip()
+    grp = rt_cst.GRP
+    if grp and name != grp and name.endswith(grp):
+        stripped = name[:-len(grp)].rstrip('_- ')
+        if stripped:
+            return stripped
+    return name
 
 
 def titlecase(text, underscore=True):

@@ -56,6 +56,8 @@ def cleanup_rig(fk, ik):
     rt_con.clear_control_cache()
     # Validate cache
     rt_cache.validate_cache()
+    # Control count changes invalidate the node layout for every part
+    structure_changed = rt_cache.validate_cache_structure()
 
     # Delete SDK animCurves
     logger.debug(f"Cleaning up SDK curves")
@@ -71,7 +73,7 @@ def cleanup_rig(fk, ik):
         rt_mya.unbind_geometry(rigname)
 
         # Rebuild check
-        if rt_cst.FORCE_REBUILD or joints_changed:
+        if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
             cleanup_rigname(rigname, fk, ik)
         else:
             cleanup_connections(rigname, fk, ik)
@@ -145,16 +147,13 @@ def cleanup_rigname(rigname, fk, ik):
                 if jnt_parent and jnt_parent[0] != fkjnt_grp:
                     cmds.parent(jnt, world=True)
 
-        # Delete all SDK groups
-        for i, jnt in enumerate(joints):
-            NN = rt_nam.get_index_from_name(jnt)
-            for idx in range(rt_cst.NUM_CTRL_FK+1):
-                if idx < rt_cst.NUM_CTRL_FK:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
-                else:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
-                if cmds.objExists(sdk_grp):
-                    rt_mya.remove(sdk_grp)
+        # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end
+        # with the SDK label. Pattern matching (not exact counts) also
+        # removes groups left over from a previous NUM_CTRL_FK value.
+        sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
+        for sdk_grp in cmds.ls(sdk_pattern, type='transform'):
+            if cmds.objExists(sdk_grp):
+                rt_mya.remove(sdk_grp)
 
         # Re-parent FK joints in proper hierarchy
         for i in range(len(joints)-1, 0, -1):  # Reverse order
@@ -261,6 +260,24 @@ def cleanup_connections(rigname, fk, ik):
                     sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
                 if cmds.objExists(sdk_grp):
                     rt_mya.disconnect_all(sdk_grp, source=True)
+
+    # Delete FK utility node networks: the FK build (set_curveinfo_fk,
+    # falloff_rotation) recreates them from scratch every run, so
+    # keeping the old nodes would accumulate name-suffixed duplicates
+    if fk:
+        typ = rt_cst.TYPE_FK
+        fk_patterns = [
+            f'{typ}_{rigname}*_{rt_cst.COND}',
+            f'{typ}_{rigname}*_multiplyDivide',
+            f'{typ}_{rigname}*_plusMinusAverage',
+            f'{typ}_{rigname}*_multDoubleLinear',
+            f'{typ}_{rigname}*_pointMatrixMult',
+            f'{typ}_{rigname}*_setRange',
+            f'{typ}_{rigname}*_pointOnCurveInfo',
+        ]
+        for pattern in fk_patterns:
+            for node in cmds.ls(pattern) or []:
+                rt_mya.remove(node)
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
@@ -379,24 +396,55 @@ def setup_rig(fk, ik):
 
 def set_root(root):
     '''
-    Set the root name for the rig.
-    Renames existing root group if necessary.
+    Set the root name for the rig. A trailing group label is stripped
+    (e.g. tail_root_grp -> tail_root). When ROOT changes between
+    builds, the previous root group is renamed to the new name so the
+    rig is not split across two hierarchies.
 
     Arguments
-        root (str): New root name (with or without _grp suffix)
+        root (str): New root name (with or without group suffix)
     '''
-    if root:
-        rt_cst.ROOT = root
-        root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-        logger.info(f"Set ROOT '{rt_cst.ROOT}'")
-
-        if cmds.objExists(root) and root != root_grp:
-            cmds.rename(root, root_grp)
-        if cmds.objExists(root_grp):
-            if cmds.nodeType(root_grp) != 'transform':
-                rt_mya.remove(root_grp)
-    else:
+    if not root:
         logger.error(f"Invalid argument '{root}'.")
+        return
+
+    rt_cst.ROOT = rt_nam.strip_group_suffix(root)
+    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
+    logger.info(f"Set ROOT '{rt_cst.ROOT}'")
+
+    if cmds.objExists(root) and root != root_grp:
+        # User passed an existing group name: rename to template name
+        cmds.rename(root, root_grp)
+    elif not cmds.objExists(root_grp):
+        # ROOT changed since the rig was built: carry the existing
+        # root group over to the new name
+        prev_root_grp = find_existing_root_grp()
+        if prev_root_grp and prev_root_grp != root_grp:
+            logger.info(
+                f"ROOT changed: rename root group "
+                f"'{prev_root_grp}' -> '{root_grp}'")
+            cmds.rename(prev_root_grp, root_grp)
+    if cmds.objExists(root_grp):
+        if cmds.nodeType(root_grp) != 'transform':
+            rt_mya.remove(root_grp)
+
+def find_existing_root_grp():
+    '''
+    Locate the root group of a previous build regardless of its name:
+    the parent of the structure groups (geometry/skeleton/controls),
+    which only ever live directly under the root group.
+
+    Return
+        str or None: Existing root group, or None if no rig is built
+    '''
+    for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP,
+                     rt_cst.CONTROL_GRP):
+        grp = rt_nam.fstr('', template)
+        if cmds.objExists(grp):
+            parent = cmds.listRelatives(grp, p=True, typ='transform') or []
+            if parent:
+                return parent[0]
+    return None
 
 
 # JOINTS ===============================================================
@@ -562,6 +610,11 @@ def rename_components():
     Rename IK related controls and attributes from old naming convention.
     Handles legacy rig component names for compatibility.
 
+    Only nodes whose names carry a legacy marker are touched: several
+    replacements ('Handle' -> 'handle', 'Sml' -> '_sml', ...) would
+    otherwise mangle names that already follow the current convention
+    (e.g. clusterHandle, splineHandle).
+
     Warning: Uses hardcoded name replacements, check naming convention.
     '''
     replace_names = {
@@ -583,6 +636,23 @@ def rename_components():
         '__' : '_',
         'hierarchySwitch': 'switch'
         }
+    # Substrings that only appear in legacy names; nodes without one
+    # are already on the current convention and are left alone
+    legacy_markers = ('spineRig', 'splineIk', 'ikSplineCurve', 'fkSpline',
+                      'spineSpline', 'floatSpline', 'cntrlBase', 'cntrlMid',
+                      'rotMid', 'cntrlTop', 'hierarchySwitch')
+
+    def legacy_rename(node):
+        if not any(marker in node for marker in legacy_markers):
+            return
+        node_name = node
+        for old_name, new_name in replace_names.items():
+            node_name = node_name.replace(old_name, new_name)
+        # Renames can invalidate names listed earlier (e.g. shapes of a
+        # renamed transform), so re-check existence
+        if node != node_name and cmds.objExists(node):
+            logger.debug(f"Rename legacy node '{node}' -> '{node_name}'")
+            cmds.rename(node, node_name)
 
     dag_nodes = cmds.ls(dag=True)
     transforms = cmds.ls(dag_nodes, type='transform')
@@ -596,15 +666,11 @@ def rename_components():
                 rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
                 rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
 
-    # Rename DAG nodes
+    # Rename legacy DAG nodes
     for node in dag_nodes:
-        for old_name, new_name in replace_names.items():
-            node_name = node.replace(old_name, new_name)
-        if node != node_name: # Replace name
-            logger.debug(f"Rename DAG node '{node}' -> '{node_name}'")
-            cmds.rename(node, node_name)
+        legacy_rename(node)
 
-    # Rename utility nodes
+    # Rename legacy utility nodes
     non_dag_nodes = cmds.ls(dag=False)
     util_nodes = ['condition', 'multiplyDivide', 'plusMinusAverage',
                   'curveInfo', 'pointOnCurveInfo', 'blendTwoAttr',
@@ -612,8 +678,4 @@ def rename_components():
     for util_typ in util_nodes:
         util_node = cmds.ls(non_dag_nodes, type=util_typ)
         for node in util_node:
-            for old_name, new_name in replace_names.items():
-                node_name = node.replace(old_name, new_name)
-            if node != node_name:
-                logger.debug(f"Rename non-DAG node '{node}' -> '{node_name}'")
-                cmds.rename(node, node_name)
+            legacy_rename(node)

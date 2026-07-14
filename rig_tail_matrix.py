@@ -2,14 +2,35 @@
 rig_tail_matrix.py
 author: Daisy Jane @gnitemouse
 
-Pure matrix network builders for Rig Tail.
-Drives offsetParentMatrix directly with baseLocal * FX chain.
+Drives the BN (bind) joints from the FK/IK driver chains with pure
+matrix math. Each BN joint keeps translate/rotate/jointOrient zeroed
+and receives its whole transform through the offsetParentMatrix (OPM)
+plug - no constraints, no decomposition, no Euler conversions.
+
+Per BN joint the OPM is a product of up to three layers:
+
+    OPM = fx (curl*wave*noise) * baseLocal * squashInv(parent)
+
+    baseLocal - the driver joint's worldMatrix, blended between the FK
+        and IK chains (blendMatrix driven by the cog switch attribute
+        when both are built), multiplied by the inverse of the parent
+        driver's worldMatrix. This yields motion local to the parent;
+        the BN hierarchy itself supplies the rest.
+    fx        - composeMatrix pure rotations from rig_tail_anim,
+        multiplied in front so each joint rotates about its own pivot.
+    squashInv - inverse of the parent's squash scale. rig_tail_stretch
+        drives BN scaleY/Z, and a scaled parent would shear every OPM
+        child and compound down the chain; this term cancels it.
+
+Missing layers are skipped: with no FX and no squash, baseLocal drives
+the OPM directly. Rebuild-safe: nodes are looked up by name and
+reused, and stale connections from previous builds are broken.
 
 Functions:
-    build_matrix_offset_network: Build dynamic OPM network for BN chain
-    create_matrix_nodes_for_joint: Create matrix node network for single joint
-    _get_driver_joint: Get appropriate driver joint for index
-    _get_compose_output_attr: Detect composeMatrix output attribute (Maya version)
+    build_matrix_offset_network: Zero BN joints, build OPM network for chain
+    create_matrix_nodes_for_joint: Build the network for one BN joint
+    _get_driver_joint: Pick the FK or IK driver joint for an index
+    _get_compose_output_attr: composeMatrix output attr (Maya version)
     _get_parent_squash_inverse: Matrix plug cancelling parent BN squash scale
 '''
 
@@ -23,15 +44,13 @@ logger = logger_setup(__name__)
 
 def build_matrix_offset_network(rigname, fk, ik):
     '''
-    Build pure matrix offsetParentMatrix network for BN chain.
+    Build matrix offsetParentMatrix network for BN chain.
+    Driver's jointOrient is already in worldMatrix, no cancellation needed.
 
     Architecture:
         baseLocal = bn_parent.worldInverseMatrix * driver.worldMatrix
         finalLocal = baseLocal * fxCurl * fxWave * fxNoise
         finalLocal → bn.offsetParentMatrix
-
-    No decomposition, no Euler conversions, exact matrix math.
-    Driver's jointOrient is already in worldMatrix, no cancellation needed.
 
     Arguments:
         rigname (str): Name of rig part
@@ -39,7 +58,7 @@ def build_matrix_offset_network(rigname, fk, ik):
         ik (bool): If True, use IK joints as drivers (preferred when both True)
     '''
 
-    logger.info(f'{rigname}: Building pure matrix OPM network')
+    logger.info(f'{rigname}: Building matrix OPM network')
 
     if rigname not in rt_cst.JOINTS_BN:
         logger.warning(f'{rigname}: No BN joints found')
@@ -175,10 +194,9 @@ def _get_parent_squash_inverse(rigname, parent_index):
 
 def create_matrix_nodes_for_joint(
     rigname, bn_jnt, driver_jnt, index, cog_ctrl, ikfk_attr, fx_list,
-    fk=True, ik=True
-):
+    fk=True, ik=True):
     '''
-    Create pure matrix network for a single BN joint.
+    Create matrix network for a single BN joint.
 
     Network structure:
         1. IK/FK blend: fk_driver.world + ik_driver.world → blendMatrix
@@ -216,10 +234,9 @@ def create_matrix_nodes_for_joint(
     fk_driver = _get_driver_joint(rigname, index, fk=True, ik=False)
     ik_driver = _get_driver_joint(rigname, index, fk=False, ik=True)
 
-    # IK/FK blending only applies when both chains are built: the switch
-    # attribute on the cog only exists when IK is built, and single-chain
-    # builds have nothing to blend to (the other duplicate chain is unrigged)
-    fk_mode = rt_cst.ikfk_mode_index('FK')
+    # IK/FK blending only applies when both chains are built
+    # Switch attribute on the cog only exists when IK is built
+    fk_mode = rt_cst.ikfk_fk_mode_index()
     blending = (fk and ik and fk_mode is not None
                 and fk_driver and ik_driver and fk_driver != ik_driver)
     ikfk_remap = f'{rigname}_{NN:02d}_ikfk_remap_condition'
@@ -317,7 +334,7 @@ def create_matrix_nodes_for_joint(
                 cmds.removeMultiInstance(plug, b=True)
         cmds.connectAttr(f'{final_mult}.matrixSum', f'{bn_jnt}.offsetParentMatrix', f=1)
 
-    # Ensure local TRS stays at zero (critical for pure matrix approach)
+    # Ensure local TRS stays at zero (critical for matrix approach)
     for attr in ('translateX', 'translateY', 'translateZ',
                  'rotateX', 'rotateY', 'rotateZ'):
         cmds.setAttr(f'{bn_jnt}.{attr}', 0, l=0)

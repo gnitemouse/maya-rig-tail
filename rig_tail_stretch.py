@@ -2,7 +2,63 @@
 # rig_tail_stretch.py
 author: Daisy Jane @gnitemouse
 
-Squash and Stretch for Rig Tail
+Squash and stretch for the tail. The module controls two things:
+
+    Length    - joints spread apart or bunch up along the tail
+    Thickness - BN joints fatten or thin through scaleY/scaleZ
+
+How the values are computed:
+
+    1. Measure the tail curve.
+       A curveInfo node reads the curve's current arcLength. The rest
+       length is stored once as an 'initial_length' attribute on the
+       curveInfo, so rebuilding the rig while the tail is posed does not
+       adopt the stretched length as the new rest length.
+
+    2. Stretch ratio (length).
+       IK: current length / rest length, so joints follow the curve
+       when the IK controls pull it longer or shorter; the
+       preserveVolume slider fades this reactive part in and out.
+       FK: slider-driven only, the curve is not consulted. Either way
+       the 'stretch' slider (-10..10 on the base control, remapped to
+       +-0.5) is added on top, and the result is clamped to 0.1..2.0.
+       The ratio multiplies each joint's rest translateX - IK joints
+       directly, FK through the SDK offset group above each FK control.
+
+    3. Volume preservation (thickness).
+       Thickness = ratio ^ -0.5, like pulling taffy: stretching thins
+       the tail, compressing fattens it. The 'preserveVolume' slider
+       blends this on or off, and the 'squash' slider (-10..10,
+       remapped to +-0.5) is added on top. The result is divided by the
+       rig's global scale squared, so scaling the whole character does
+       not fatten the tail, then multiplied by the per-joint
+       'jntScaleYZ' sliders before driving each BN joint's scaleY/Z.
+
+Build/connect split: build_stretch() runs early in the build and only
+creates nodes - the sliders do not exist on the base control yet.
+rig_tail_connect later creates the attributes and calls
+connect_stretch_to_joints() to wire everything together. Until then
+the remap nodes sit with their inputs unconnected; that is expected.
+All nodes are looked up by name and reused, so re-runs refresh
+connections instead of duplicating the network.
+
+Related: BN children are positioned by offsetParentMatrix, so a
+parent's squash scale would shear them. rig_tail_matrix appends a
+squashInv term to each child's OPM to cancel it.
+
+Functions:
+    Build phase (called from rig_tail):
+        build_stretch: Create the full stretch/squash node network
+        set_curveinfo_stretch: curveInfo with stored rest length
+        fallback_curve_length: Joint-distance fallback when curve fails
+        remap_stretch_attr / create_stretch / create_squash /
+        create_world_scale / create_joint_mult: network pieces
+    Connect phase (called from rig_tail_connect):
+        add_stretch_attributes_to_basectrl: stretch/squash/preserveVolume
+        add_jntscale_attributes_to_basectrl: per-joint jntScaleYZ sliders
+        connect_stretch_to_joints: Wire sliders and outputs to joints
+    Spline IK:
+        build_advanced_twist: Spline IK advanced twist setup
 '''
 
 import maya.cmds as cmds
@@ -186,33 +242,45 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         return
     logger.debug(f'curvelen {curvelen} initial_len {initial_len:.3f}')
 
+    if initial_len <= 0:
+        # Degenerate rest length would make the reactive ratio divide
+        # by zero; fall back to a neutral rest length
+        logger.warning(f'{typ}_{rigname}: initial_len {initial_len} '
+                       'invalid, using 1.0')
+        initial_len = 1.0
+
     if typ == rt_cst.TYPE_IK:
         # IK: Reactive stretch based on current curve length
+        # (nodes are reused on re-runs; only connections are refreshed)
 
         # (multiplyDivide) reactive stretch ratio (current_len / initial_len)
         stretch_reactive = f'{typ}_{rigname}_stretch_reactive_multiplyDivide'
-        cmds.createNode('multiplyDivide', n=stretch_reactive, s=1, ss=1)
+        if not cmds.objExists(stretch_reactive):
+            cmds.createNode('multiplyDivide', n=stretch_reactive, s=1, ss=1)
         cmds.setAttr(f'{stretch_reactive}.operation', 2)  # divide
         cmds.connectAttr(crvlen, f'{stretch_reactive}.input1X', f=1)
         cmds.setAttr(f'{stretch_reactive}.input2X', initial_len)
 
         # (blendTwoAttr) Blend reactive stretch on/off with preserveVolume
         stretch_preservevol = f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr'
-        cmds.createNode('blendTwoAttr', n=stretch_preservevol, s=1, ss=1)
+        if not cmds.objExists(stretch_preservevol):
+            cmds.createNode('blendTwoAttr', n=stretch_preservevol, s=1, ss=1)
         cmds.setAttr(f'{stretch_preservevol}.input[0]', 1.0)  # No reactive
         cmds.connectAttr(f'{stretch_reactive}.outputX', f'{stretch_preservevol}.input[1]', f=1)
         # preserveVolume connection made later in connect phase
 
         # (plusMinusAverage) user stretch + reactive stretch
         stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
-        cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
+        if not cmds.objExists(stretch_pma):
+            cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
         cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
         cmds.connectAttr(f'{stretch_preservevol}.output', f'{stretch_pma}.input1D[0]', f=1)
         cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_pma}.input1D[1]', f=1)
 
         # (clamp) stretch_ratio - 0.1 to 2.0
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
-        cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
+        if not cmds.objExists(stretch_ratio):
+            cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
         cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
         cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
@@ -222,21 +290,24 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
 
         # (multiplyDivide) double user stretch
         stretch_mult = f'{typ}_{rigname}_stretch_double_multiplyDivide'
-        cmds.createNode('multiplyDivide', n=stretch_mult, s=1, ss=1)
+        if not cmds.objExists(stretch_mult):
+            cmds.createNode('multiplyDivide', n=stretch_mult, s=1, ss=1)
         cmds.setAttr(f'{stretch_mult}.operation', 1)  # multiply
         cmds.setAttr(f'{stretch_mult}.input1X', 2)
         cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_mult}.input2X', f=1)
 
         # (plusMinusAverage) user stretch range - 0 to 2
         stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
-        cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
+        if not cmds.objExists(stretch_pma):
+            cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
         cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
         cmds.setAttr(f'{stretch_pma}.input1D[0]', 1)  # Base ratio = 1
         cmds.connectAttr(f'{stretch_mult}.outputX', f'{stretch_pma}.input1D[1]', f=1)
 
         # (clamp) stretch_ratio
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
-        cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
+        if not cmds.objExists(stretch_ratio):
+            cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
         cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
         cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
@@ -325,6 +396,9 @@ def create_world_scale(rigname, squash_pma):
     if not cmds.objExists(scale_world):
         cmds.createNode('multiplyDivide', n=scale_world, s=1, ss=1)
         cmds.setAttr(f'{scale_world}.operation', 1)  # multiply
+        # Neutral output until the connect phase wires scale_grp in:
+        # squash_world divides by this, so it must not start at zero
+        cmds.setAttr(f'{scale_world}.input1X', 1)
         # Connections made later in connect phase
 
     # (multiplyDivide) squash_world - Divide squash by scale world squared
@@ -571,6 +645,10 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     initial_len = cmds.getAttr(f'{scale_crvinfo}.arcLength')
     if not cmds.attributeQuery('initial_length', node=scale_crvinfo, exists=True):
         cmds.addAttr(scale_crvinfo, ln='initial_length', at='float', dv=initial_len)
+    elif cmds.getAttr(f'{scale_crvinfo}.initial_length') <= 0 and initial_len > 0:
+        # A zero rest length (from a failed earlier build) would divide
+        # by zero downstream; refresh it from the current curve
+        cmds.setAttr(f'{scale_crvinfo}.initial_length', initial_len)
 
     if initial_len <= 0:
         logger.warning(f"Curve '{curve}' - initial_len is invalid {initial_len:.3f}")

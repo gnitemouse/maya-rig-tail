@@ -60,7 +60,7 @@ class RigTailUI(QtWidgets.QDialog):
 
         self.txt_display = QtWidgets.QTextEdit()
         self.txt_display.setReadOnly(True)
-        self.txt_display.setMaximumHeight(105)
+        self.txt_display.setMaximumHeight(120)
         self.txt_display.setStyleSheet('''
             QTextEdit {
                 background-color: #2b2b2b;
@@ -73,7 +73,7 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
-        self.txt_display.setToolTip('Summary of the configuration the next build will use.')
+        self.txt_display.setToolTip('Summary of build configuration')
         display_layout.setContentsMargins(8, 2, 8, 2)
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
@@ -135,6 +135,7 @@ class RigTailUI(QtWidgets.QDialog):
         self.txt_root.setToolTip(
             'Name of the rig root group (ROOT). A trailing group label '
             'is stripped, e.g. tail_root_grp -> tail_root.')
+        self.txt_root.editingFinished.connect(self.apply_root_name)
         self.txt_root.setStyleSheet('''
             QLineEdit {
                 background-color: #3a3a3a;
@@ -163,13 +164,10 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.chk_fk.setToolTip(
             'Build the FK chain: variable-FK sliding controls with '
-            'rotation falloff. At least one of FK/IK must stay checked.\n'
-            'Unchecking FK removes the FK mode from the IKFK switch '
-            '(IKFK_MODES); re-checking restores it.')
+            'rotation falloff. At least one of FK/IK must stay checked.')
         self.chk_ik.setToolTip(
             'Build the IK chain: spline IK with clusters, plus IK and '
-            'Float control modes. At least one of FK/IK must stay checked.\n'
-            'The IKFK switch attribute is only created when IK is built.')
+            'Float control modes. At least one of FK/IK must stay checked.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         build_layout.addWidget(build_label)
@@ -422,6 +420,17 @@ class RigTailUI(QtWidgets.QDialog):
         self.txt_display.setText(display_text)
         self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
 
+    def apply_root_name(self):
+        '''Commit the Root Name textbox to rt_cst.ROOT (stripping a
+        trailing group label) so the configuration summary and Save
+        Config always reflect what is typed.'''
+        root = self.txt_root.text().strip()
+        if root:
+            stripped = rt_nam.strip_group_suffix(root)
+            if stripped != rt_cst.ROOT:
+                rt_cst.ROOT = stripped
+                self.update_display()
+
     def on_build_mode_changed(self):
         '''
         Enforce build mode rules:
@@ -454,6 +463,9 @@ class RigTailUI(QtWidgets.QDialog):
     def load_config_path(self, filepath):
         '''Load the given config file and refresh the UI.'''
         if rt_cst.load_config(filepath):
+            # Reconcile the loaded mode list with the build checkboxes
+            rt_cst.update_ikfk_modes(self.chk_fk.isChecked(),
+                                     self.chk_ik.isChecked())
             self.load_current_values()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration loaded from:\n{filepath}')
@@ -482,6 +494,7 @@ class RigTailUI(QtWidgets.QDialog):
 
     def save_config(self):
         '''Export configuration to a user-chosen JSON config file.'''
+        self.apply_root_name()
         filepath, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, 'Save Config', self.config_start_path(),
             'JSON Files (*.json);;All Files (*)')
@@ -505,6 +518,11 @@ class RigTailUI(QtWidgets.QDialog):
         '''Open the naming template pop-up editor for the given section.'''
         dialog = NamingTemplateEditor(section, self)
         if dialog.exec() == QtWidgets.QDialog.Accepted:
+            if section == 'ikfk':
+                # Re-derive the active modes from the edited
+                # IKFK_MODES_ALL for the current build checkboxes
+                rt_cst.update_ikfk_modes(self.chk_fk.isChecked(),
+                                         self.chk_ik.isChecked())
             self.update_display()
 
     def open_constants_editor(self, section):
@@ -517,9 +535,10 @@ class RigTailUI(QtWidgets.QDialog):
         '''Apply the UI options to rig_tail_constants and build the rig.'''
         import rig_tail as rt
 
-        root = self.txt_root.text() or None
-        if root:
-            rt_cst.ROOT = root.split(rt_cst.GRP, 1)[0]
+        self.apply_root_name()
+        # Pass the raw text through; rt_set.set_root strips the group
+        # label and renames the previous root group in the scene
+        root = self.txt_root.text().strip() or None
 
         if not rt_cst.RIGPARTS:
             QtWidgets.QMessageBox.warning(self, 'Error', 'RIGPARTS is empty. Add rig parts first.')
@@ -727,10 +746,8 @@ class NamingTemplateEditor(QtWidgets.QDialog):
             note = QtWidgets.QLabel(
                 'List/tuple values are comma-separated.\n'
                 'IKFK_SWITCH is (longName, niceName, default index); its enum\n'
-                'string is generated from IKFK_MODES automatically.\n'
-                'Dividers are (longName, niceName, enumLabel).\n'
-                'Hover IKFK_MODES for what each mode does. FK is only\n'
-                'offered when the FK chain is built alongside IK.')
+                'string is generated from IKFK_MODES.\n'
+                'Dividers are (longName, niceName, enumLabel).\n')
             note.setStyleSheet('color: #999999; font-size: 10px;')
             layout.addWidget(note)
 
@@ -841,8 +858,10 @@ class NamingTemplateEditor(QtWidgets.QDialog):
         elif self.section == 'ikfk':
             return {
                 'IKFK': rt_cst.IKFK,
-                'IKFK_MODES': ', '.join(rt_cst.IKFK_MODES),
-                # Show (longName, niceName, dv); enum derives from IKFK_MODES
+                # Edit the full list; the active subset (IKFK_MODES) is
+                # re-derived from it for the current build options
+                'IKFK_MODES': ', '.join(rt_cst.IKFK_MODES_ALL),
+                # Show (longName, niceName, dv); enum derived from IKFK_MODES
                 'IKFK_SWITCH': ', '.join([rt_cst.IKFK_SWITCH[0],
                                           rt_cst.IKFK_SWITCH[1],
                                           str(rt_cst.IKFK_SWITCH[3])]),
@@ -865,9 +884,10 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                         'on the cog control (e.g. tail_ikfk).',
                 'IKFK_MODES': 'Modes offered by the IKFK switch:\n'
                               + mode_lines +
-                              '\nThe first three are matched positionally '
-                              '(SplineIK, IK, Float); FK is matched by name '
-                              'and only offered when FK is built with IK.',
+                              '\nModes are positional (1=SplineIK, 2=IK, '
+                              '3=Float, 4=FK), so they can be renamed '
+                              'freely. The FK mode is only offered when '
+                              'FK is built alongside IK.',
                 'IKFK_SWITCH': 'Switch attribute shown on every control: '
                                '(longName, niceName, default mode index).',
             }
@@ -894,11 +914,21 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                             self, 'Warning',
                             'IKFK_SWITCH default index must be an integer.')
                         return
-                    # Placeholder enum; rebuild_derived() fills it from
-                    # IKFK_MODES below
+                    # Placeholder enum; rebuild_derived() fills it from IKFK_MODES below
                     parsed[name] = (items[0], items[1], '', dv)
                 elif name in self.TUPLE_FIELDS:
                     parsed[name] = tuple(items)
+                elif name == 'IKFK_MODES':
+                    if len(items) not in (3, 4):
+                        QtWidgets.QMessageBox.warning(
+                            self, 'Warning',
+                            'IKFK_MODES needs 3 or 4 comma-separated '
+                            'names (SplineIK, IK, Float and optionally '
+                            'FK positions).')
+                        return
+                    # Commit to the full list; the active IKFK_MODES
+                    # subset is derived from it per build options
+                    parsed['IKFK_MODES_ALL'] = items
                 else:
                     parsed[name] = items
             else:
