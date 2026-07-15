@@ -2,27 +2,91 @@
 # rig_tail_test.py
 author: Daisy Jane @gnitemouse
 
-Debug test for matrix-based FX offset architecture.
-Updated for per-FX composeMatrix approach with parentInverseMatrix.
+Diagnostics for the matrix-based FX rig (per-FX composeMatrix + OPM
+architecture). Read-only test_*/check_* functions validate a built rig;
+fix_* helpers mutate and are opt-in.
+
+Dev-only -- this file is NOT shipped in the rigTail module. It runs
+from the repo root and adds rigTail/scripts to sys.path so the
+rig_tail_* modules import without installing the module first.
 
 Usage:
-import rig_tail_test as rt_test
-rt_test.test_matrix()           # Quick diagnostic
-rt_test.show_data_flow()        # Data flow diagram
-rt_test.test_alignment()        # Position alignment check
-rt_test.test_matrix_opm()       # OPM check
-rt_test.test_wave()             # Wave test
-rt_test.test_curl()             # Curl test
-rt_test.test_local_trs()        # Check BN joints are zeroed
-rt_test.test_time_evaluation()  # Test time
+    import rig_tail_test as rt_test
+    rt_test.run_all()               # every read-only check + PASS/FAIL summary
+    rt_test.test_matrix()           # FX matrix / OPM node wiring
+    rt_test.test_local_trs()        # BN joints have identity local TRS
+    rt_test.test_fx_order()         # FX multiplies before baseLocal
+    rt_test.test_alignment()        # BN vs IK/FK world-position alignment
+    rt_test.test_matrix_opm()       # offsetParentMatrix parent-space math
+    rt_test.show_data_flow()        # per-joint data-flow diagram
+    rt_test.test_wave() / rt_test.test_curl()
+    rt_test.test_time_evaluation()  # time-varying FX across frames
 '''
+import math
+import os
+import sys
+
+# Dev bootstrap: make the module scripts importable when running from the
+# repo root without installing the Maya module.
+_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'rigTail', 'scripts')
+if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_anim as rt_ani
-import math
+
+
+# TEST ORCHESTRATION =========================================
+
+def run_all(rigname='tail'):
+    '''
+    Run every read-only check and print a PASS/FAIL/RAN/ERROR summary.
+
+    Mutating helpers (fix_*) and verbose dumps (print_*/show_*/dump_*) are
+    excluded. Each check's return value is interpreted as:
+        True  -> PASS        False -> FAIL
+        None  -> RAN         (informational; no explicit verdict)
+        raise -> ERROR
+    Returns True only when no check FAILs or ERRORs.
+    '''
+    checks = [
+        test_local_trs,      # BN local TRS is identity
+        test_fx_order,       # FX before baseLocal in final_multMatrix
+        test_alignment,      # BN vs IK/FK positions
+        test_matrix_opm,     # OPM parent-space math
+        test_matrix,         # FX matrix node wiring
+        test_joint_orient,   # jointOrient / axis diagnostic
+        check_expression_flags,  # expression time dependency
+    ]
+
+    results = []
+    for fn in checks:
+        try:
+            outcome = fn(rigname)
+            status = 'PASS' if outcome is True else \
+                     'FAIL' if outcome is False else 'RAN'
+            detail = ''
+        except Exception as exc:
+            status, detail = 'ERROR', str(exc)
+        results.append((fn.__name__, status, detail))
+
+    print('\n' + '=' * 64)
+    print('  RUN_ALL SUMMARY  (rig: {0})'.format(rigname))
+    print('=' * 64)
+    for name, status, detail in results:
+        line = '  {0:<6} {1}'.format(status, name)
+        if detail:
+            line += '  -- {0}'.format(detail)
+        print(line)
+    ok = not any(s in ('FAIL', 'ERROR') for _, s, _ in results)
+    print('=' * 64)
+    print('  RESULT: {0}'.format('ALL CLEAR' if ok else 'ISSUES FOUND'))
+    print('=' * 64 + '\n')
+    return ok
 
 # FX MATRIX DIAGNOSTICS ======================================
 
@@ -336,13 +400,14 @@ def test_matrix(rigname='tail'):
 
 def test_local_trs(rigname='tail'):
     '''
-    Check that all BN joints have identity local TRS.
+    Check every BN joint has identity local TRS ([0,0,0]/[0,0,0]/[1,1,1]).
+    Returns True if all joints pass, False otherwise.
     '''
     print('\n=== LOCAL TRS CHECK ===\n')
 
     if rigname not in rt_cst.JOINTS_BN:
         print(f'× No BN joints for {rigname}')
-        return
+        return None
 
     joints = rt_cst.JOINTS_BN[rigname]
     all_good = True
@@ -373,6 +438,7 @@ def test_local_trs(rigname='tail'):
         print('\n❌ Some BN joints have non-zero local TRS')
         print('   Run: rt_test.fix_bn_local_trs(rigname) to fix')
     print()
+    return all_good
 
 
 def fix_bn_local_trs(rigname='tail'):
@@ -409,12 +475,15 @@ def test_fx_order(rigname='tail'):
         matrixIn[n]      = baseLocal_multMatrix.matrixSum
     Wrong order (zig-zag / lengthening):
         matrixIn[0]      = baseLocal, fx after
+
+    Returns True if every FX chain has the correct order, False if any is
+    wrong, or None when there is nothing to check.
     '''
     print('\n=== FX MULTIPLY ORDER CHECK ===\n')
 
     if rigname not in rt_cst.JOINTS_BN:
         print(f'x No BN joints for {rigname}')
-        return
+        return None
 
     fx_list = []
     if rt_cst.EFFECTS.get('curl'):
@@ -426,7 +495,7 @@ def test_fx_order(rigname='tail'):
 
     if not fx_list:
         print('  No FX enabled, nothing to check')
-        return
+        return None
 
     joints = rt_cst.JOINTS_BN[rigname]
     bad = 0
@@ -464,6 +533,7 @@ def test_fx_order(rigname='tail'):
     else:
         print(f'  ERROR {bad} joints have baseLocal ahead of FX (causes zig-zag)')
     print()
+    return bad == 0
 
 
 def test_ikfk_drive(rigname='tail', joint_index=3):
@@ -552,8 +622,14 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
 
 
 def test_matrix_opm(rigname='tail', count=0):
+    '''
+    Validate each BN joint's offsetParentMatrix against the expected
+    parent-space matrix (parent_world.inverse() * ik_world) for joints 1-3.
+    Returns True if every translation error is within tolerance, else False.
+    '''
     print(f'\n=== MANUAL MATRIX CHECK: (COUNT: {count}) ===\n')
 
+    max_error = 0.0
     for joint_idx in range(1,4):
         ik_jnt = f'IK_{rigname}_{joint_idx:02d}_jnt'
         bn_jnt = f'BN_{rigname}_{joint_idx:02d}_jnt'
@@ -577,6 +653,7 @@ def test_matrix_opm(rigname='tail', count=0):
         expected_trans = t(expected_local)
         actual_trans = t(opm)
         trans_error = sum((expected_trans[i] - actual_trans[i])**2 for i in range(3)) ** 0.5
+        max_error = max(max_error, trans_error)
 
         if trans_error > 0.001:
             print('❌ offsetParentMatrix mismatch')
@@ -588,15 +665,19 @@ def test_matrix_opm(rigname='tail', count=0):
         print(f'Actual   OPM translation: {[round(v, 4) for v in actual_trans]}')
         print(f'Translation error: {trans_error:.6f}\n')
 
+    return max_error <= 0.001
+
 def test_alignment(rigname='tail', count=0):
     '''
-    Detailed position alignment check between BN and IK/FK.
+    Compare BN world positions against their IK (or FK) reference joints.
+    Returns True when the worst misalignment is under 0.1 units, False when
+    it exceeds that, or None when there is nothing to compare.
     '''
     print(f'\n=== ALIGNMENT CHECK (COUNT: {count}) ===\n')
 
     if rigname not in rt_cst.JOINTS_BN:
         print(f'× No BN joints for {rigname}')
-        return
+        return None
 
     bn_joints = rt_cst.JOINTS_BN[rigname]
     ik_joints = rt_cst.JOINTS_IK[rigname]
@@ -605,7 +686,7 @@ def test_alignment(rigname='tail', count=0):
 
     if not ik_joints and not fk_joints:
         print('× No IK or FK joints to compare')
-        return
+        return None
 
     ref_joints = ik_joints if ik_joints else fk_joints
     ref_type = 'IK' if ik_joints else 'FK'
@@ -640,6 +721,7 @@ def test_alignment(rigname='tail', count=0):
             print('❌ Joints are misaligned BEFORE matrix wiring!')
             print('   This means BN joints were not duplicated from IK/FK correctly.')
     print()
+    return max_dist < 0.1
 
 def show_data_flow(rigname='tail', joint_idx=0):
     '''

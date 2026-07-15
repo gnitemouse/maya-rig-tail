@@ -15,6 +15,37 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 - **Wave/Curl FX** - Built-in procedural animation effects
 - **JSON Configs** - Save/load custom configuration through UI
 
+## Install
+
+The tool ships as a ready-to-use Maya module. The repo layout is:
+
+```
+install.py       drag-and-drop installer
+rigTail.mod      module descriptor
+rigTail/
+    scripts/     rig_tail*.py + logger_config.py
+    icons/       octopus.png, octopus_200.png
+```
+
+**Drag-and-drop (recommended)**
+
+Drag `install.py` from a file browser into the Maya viewport. It copies
+`rigTail/` and `rigTail.mod` into
+`~/Documents/maya/modules/` and adds a **TailRig** button to the active
+shelf. Works immediately -- no restart, no `userSetup.py` edits. Keep
+`install.py` next to `rigTail/` and `rigTail.mod` when you drag
+it, since it copies them.
+
+**Manual**
+
+Copy `rigTail/` and `rigTail.mod` into
+`~/Documents/maya/modules/` (create the `modules` folder if needed), then
+restart Maya. Launch from the Script Editor with `import rig_tail;
+rig_tail.main()`, or make a shelf button that runs the same two lines.
+
+**Uninstall** - delete `rigTail.mod` and the `rigTail` folder
+from `~/Documents/maya/modules/`, and remove the shelf button.
+
 ## Quick Start
 
 ```python
@@ -105,6 +136,12 @@ Constants) or by editing `rig_tail_constants.py`:
 
 All settings round-trip through a JSON config file with the UI's
 Load/Save Config buttons, so setups can be shared per show or user.
+
+## Credits
+
+Shelf icon: [Octopus](https://icons8.com/icons/set/octopus) icon by
+[Icons8](https://icons8.com). Free use requires this link; keep it if you
+ship the icon, or replace `icons/octopus*.png` with your own art.
 
 ## License
 
