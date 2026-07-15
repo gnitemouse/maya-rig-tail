@@ -145,4 +145,7 @@ ship the icon, or replace `icons/octopus*.png` with your own art.
 
 ## License
 
-Internal use only. © Daisy Jane @gnitemouse
+Released under the [MIT License](LICENSE) — free to use, modify, and
+redistribute, provided the copyright notice and license text are retained.
+
+© 2026 Daisy Jane (@gnitemouse)
