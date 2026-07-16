@@ -747,7 +747,10 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
 
 def bind_geometry(rigname):
     '''
-    Search for geometry matching rigname and bind to BN joints.
+    Search for geometry named after the rig part and bind to BN joints.
+    Binds every match, so multi-mesh parts work: rigname 'tail' binds
+    'tail_geo', 'tail_01_geo', and 'tail_02_geo'. Skips meshes that
+    belong to other parts ('R_tail_geo' is not bound by 'tail').
     Skips if no geometry found.
 
     Arguments:
@@ -767,11 +770,16 @@ def bind_geometry(rigname):
         logger.debug(f'No geometry under {geometry_grp}, skip bind')
         return
 
+    bound = []
     for geo in geos:
         if rt_nam.name_contains_rigname_terms(rigname, geo, terms=r'mesh|geo|geometry'):
             if is_geometry(geo):
-                bind_skincluster(rt_cst.JOINTS_BN[rigname], geo, f'{rigname}_skinCluster')
-                return
+                geo_leaf = geo.split('|')[-1]
+                bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
+                                 f'{geo_leaf}_skinCluster')
+                bound.append(geo_leaf)
+    if not bound:
+        logger.debug(f'{rigname}: No geometry named after rig part, skip bind')
 
 
 def unbind_geometry(rigname):

@@ -95,6 +95,8 @@ def get_rigname(node, template):
 def compile_template_to_regex(template):
     """
     Compile naming template to regex pattern for matching.
+    Known placeholders (TYPE, NN/nn, type labels such as JNT/GRP/CTRL)
+    are resolved to their exact values; only {rigname} is captured.
 
     Arguments:
         template (str): Naming template with placeholders
@@ -115,11 +117,28 @@ def compile_template_to_regex(template):
             if leading:
                 parts.append(re.escape(leading))
 
-            # Capture rigname, wildcard everything else
+            # Capture rigname; resolve every other placeholder to its
+            # exact value so the neighboring tokens anchor the capture:
+            # NN/nn are indices (digits or 'ee'), TYPE is one of the
+            # joint type labels, and labels like JNT/GRP/CTRL resolve
+            # to their rt_cst constants. This keeps multi-token
+            # rignames unambiguous without greedy captures:
+            # 'BN_C_tail_00_jnt' -> 'C_tail', never 'C' or 'C_tail_00'.
             if name == 'rigname':
-                parts.append(r'(?P<rigname>[^_]+)')
+                parts.append(r'(?P<rigname>.+?)')
+            elif name in ('NN', 'nn'):
+                parts.append(r'(?:\d+|ee)')
+            elif name == 'TYPE':
+                types = [rt_cst.TYPE_BN, rt_cst.TYPE_IK,
+                         rt_cst.TYPE_FK, rt_cst.TYPE_FX]
+                parts.append('(?:' + '|'.join(re.escape(t) for t in types) + ')')
             else:
-                parts.append(r'.+?')
+                const = getattr(rt_cst, name, None)
+                if isinstance(const, str) and const:
+                    parts.append(re.escape(const))
+                else:
+                    # Unknown placeholder (e.g. TAG): wildcard
+                    parts.append(r'.+?')
 
             # Insert trailing literal
             if trailing:
@@ -247,26 +266,34 @@ def titlecase(text, underscore=True):
 
 def name_contains_rigname_terms(rigname, name, terms=r'mesh|geo|geometry'):
     """
-    Check if name contains rigname and specified terms.
+    Check if name is exactly rigname plus a terms token, in either
+    order, with optional numeric index tokens in between or after
+    (separated by underscore, dash, or space).
+
+    Matching is anchored to the whole name, so rig parts that are
+    substrings of one another cannot collide: rigname 'tail' matches
+    'tail_geo', 'tail_01_geo', or 'geo_tail', but not 'R_tail_geo'
+    (that mesh belongs to rig part 'R_tail').
 
     Arguments:
-        rigname (str): Rigname to search for
-        name (str): Full name to check
+        rigname (str): Rigname to match
+        name (str): Name to check (a DAG path is reduced to its leaf)
         terms (str): Regex pattern of terms to match
 
     Return:
         bool: True if name matches pattern
     """
-    # Valid whitespace: underscore, dash, space
-    sep = r'[_\-\s]*'
-    # Regex Pattern: one part must match rigname exactly,
-    # other part matches terms (case insensitive), and
-    # both can appear in any order
+    # Valid separators: underscore, dash, space
+    sep = r'[_\-\s]+'
+    # Optional numeric index tokens, e.g. tail_01_geo, tail_geo_01
+    idx = rf'(?:{sep}\d+)*'
+    leaf = name.split('|')[-1]
+    rig = re.escape(rigname)
     pattern = (
-        rf'(?i)(?=.*\b{re.escape(rigname)}{sep}({terms})\b)'
-        rf'|(?=.*\b({terms}){sep}{re.escape(rigname)}\b)'
+        rf'(?i)^{rig}{idx}{sep}(?:{terms}){idx}$'
+        rf'|^(?:{terms}){idx}{sep}{rig}{idx}$'
     )
-    return re.search(pattern, name) is not None
+    return re.match(pattern, leaf) is not None
 
 
 def rename_shapes(node, typ='ctrl', prefix='', suffix='Shape'):

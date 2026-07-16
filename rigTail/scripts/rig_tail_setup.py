@@ -374,6 +374,16 @@ def setup_rig(fk, ik):
         if group == geometry_grp:
             meshes = rt_mya.get_geometry_from_scene()
             for geo in meshes:
+                # Refuse to create duplicate sibling names: Maya would
+                # auto-rename the incoming node, and the clashing shape
+                # names ('rivetsShape') break later short-name lookups
+                leaf = geo.split('|')[-1]
+                if cmds.objExists(f'{geometry_grp}|{leaf}'):
+                    logger.warning(
+                        f"Skip parenting '{geo}' under '{geometry_grp}': "
+                        f"a child named '{leaf}' already exists there. "
+                        f"Rename or delete one of the duplicates.")
+                    continue
                 rt_mya.parent_to(geo, geometry_grp)
         elif group == control_grp:
             controls = rt_mya.get_controls_from_scene()
@@ -462,9 +472,13 @@ def set_joints_auto():
         start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
 
         if not cmds.objExists(start_jnt):
-            # Fallback: search for any joint with rigname
+            # Fallback: search for any BN joint whose name resolves to
+            # exactly this rigname via the naming template, so 'tail'
+            # never grabs 'BN_R_tail_00_jnt' (that belongs to 'R_tail')
             all_joints = cmds.ls(type='joint')
-            matching = [j for j in all_joints if rigname in j and rt_cst.TYPE_BN in j]
+            matching = [j for j in all_joints
+                        if rt_cst.TYPE_BN in j and
+                        rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname]
             if matching:
                 start_jnt = matching[0]
                 logger.info(f"{rigname}: Found start joint '{start_jnt}'")
@@ -610,8 +624,9 @@ def rigpart_has_joints(rigname):
     '''
     True if the scene contains BN joints for `rigname`, using the same
     detection as set_joints_auto (exact BN start joint, or any BN joint
-    whose name carries the rigname). Used to validate/warn about RIGPARTS
-    entries that would have nothing to build.
+    whose name resolves to exactly this rigname via the naming
+    template). Used to validate/warn about RIGPARTS entries that would
+    have nothing to build.
 
     Arguments
         rigname (str): Rig part name to check
@@ -623,7 +638,9 @@ def rigpart_has_joints(rigname):
     if cmds.objExists(start_jnt):
         return True
     all_joints = cmds.ls(type='joint') or []
-    return any(rigname in j and rt_cst.TYPE_BN in j for j in all_joints)
+    return any(rt_cst.TYPE_BN in j and
+               rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname
+               for j in all_joints)
 
 
 def rename_rigpart(old, new):

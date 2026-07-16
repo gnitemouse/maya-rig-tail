@@ -458,11 +458,26 @@ class RigTailUI(QtWidgets.QDialog):
     def apply_root_name(self):
         '''Commit the Root Name textbox to rt_cst.ROOT (stripping a
         trailing group label) so the configuration summary and Save
-        Config always reflect what is typed.'''
+        Config always reflect what is typed. A name already used by an
+        unrelated scene node is refused: the build would adopt that
+        node as the rig root group. The root group of a previous build
+        is still allowed, so renaming ROOT across rebuilds keeps
+        working.'''
         root = self.txt_root.text().strip()
         if root:
             stripped = rt_nam.strip_group_suffix(root)
             if stripped != rt_cst.ROOT:
+                import rig_tail_setup as rt_set
+                if cmds.objExists(stripped) and \
+                        stripped != rt_set.find_existing_root_grp():
+                    QtWidgets.QMessageBox.warning(
+                        self, 'Invalid Root Name',
+                        f"'{stripped}' is already a node in the scene. "
+                        "The build would take over that node as the rig "
+                        "root group. Choose a name not used by an "
+                        "existing node.")
+                    self.txt_root.setText(rt_cst.ROOT)
+                    return
                 rt_cst.ROOT = stripped
                 self.update_display()
 
