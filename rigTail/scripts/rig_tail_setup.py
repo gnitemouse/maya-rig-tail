@@ -162,20 +162,24 @@ def cleanup_rigname(rigname, fk, ik):
                 rt_mya.parent_to(joints[i], joints[i-1])
 
     # 5. Delete utility nodes (conditions, multiply, math nodes)
+    # Every utility node is named '{rigname}_<descriptor>_<nodetype>',
+    # so anchor the underscore after rigname: '{rigname}_*' cannot
+    # bleed into another part whose name merely extends this one
+    # ('tail' cleanup must not delete 'tail2' nodes)
     logger.debug(f"{rigname}: Cleaning up utility nodes")
     for typ in types:
         node_patterns = [
-            f'{typ}_{rigname}*_condition',
-            f'{typ}_{rigname}*_multiplyDivide',
-            f'{typ}_{rigname}*_plusMinusAverage',
-            f'{typ}_{rigname}*_multDoubleLinear',
-            f'{typ}_{rigname}*_pointMatrixMult',
-            f'{typ}_{rigname}*_blendTwoAttr',
-            f'{typ}_{rigname}*_clamp',
-            f'{typ}_{rigname}*_setRange',
-            f'{typ}_{rigname}*_choice',
-            f'{typ}_{rigname}*_curveInfo',
-            f'{typ}_{rigname}*_pointOnCurveInfo'
+            f'{typ}_{rigname}_*condition',
+            f'{typ}_{rigname}_*multiplyDivide',
+            f'{typ}_{rigname}_*plusMinusAverage',
+            f'{typ}_{rigname}_*multDoubleLinear',
+            f'{typ}_{rigname}_*pointMatrixMult',
+            f'{typ}_{rigname}_*blendTwoAttr',
+            f'{typ}_{rigname}_*clamp',
+            f'{typ}_{rigname}_*setRange',
+            f'{typ}_{rigname}_*choice',
+            f'{typ}_{rigname}_*curveInfo',
+            f'{typ}_{rigname}_*pointOnCurveInfo'
         ]
         for pattern in node_patterns:
             nodes = cmds.ls(pattern) or []
@@ -267,14 +271,16 @@ def cleanup_connections(rigname, fk, ik):
     # keeping the old nodes would accumulate name-suffixed duplicates
     if fk:
         typ = rt_cst.TYPE_FK
+        # Underscore anchored after rigname so 'tail' cannot delete
+        # 'tail2' nodes (see cleanup_rigname)
         fk_patterns = [
-            f'{typ}_{rigname}*_{rt_cst.COND}',
-            f'{typ}_{rigname}*_multiplyDivide',
-            f'{typ}_{rigname}*_plusMinusAverage',
-            f'{typ}_{rigname}*_multDoubleLinear',
-            f'{typ}_{rigname}*_pointMatrixMult',
-            f'{typ}_{rigname}*_setRange',
-            f'{typ}_{rigname}*_pointOnCurveInfo',
+            f'{typ}_{rigname}_*{rt_cst.COND}',
+            f'{typ}_{rigname}_*multiplyDivide',
+            f'{typ}_{rigname}_*plusMinusAverage',
+            f'{typ}_{rigname}_*multDoubleLinear',
+            f'{typ}_{rigname}_*pointMatrixMult',
+            f'{typ}_{rigname}_*setRange',
+            f'{typ}_{rigname}_*pointOnCurveInfo',
         ]
         for pattern in fk_patterns:
             for node in cmds.ls(pattern) or []:
@@ -319,10 +325,15 @@ def cleanup_anim_effects(rigname, fk, ik):
 
 def cleanup_dangling_unit_conversions():
     '''
-    Sweep unitConversion nodes orphaned by deleting SDK animCurves or
+    Sweep conversion nodes orphaned by deleting SDK animCurves or
     expressions, otherwise they accumulate with every rebuild.
+    timeToUnitConversion / unitToTimeConversion are separate node types
+    from unitConversion (created for time-attribute connections) and
+    need sweeping too.
     '''
-    for uc in cmds.ls(type='unitConversion') or []:
+    conversions = cmds.ls(type=['unitConversion', 'timeToUnitConversion',
+                                'unitToTimeConversion']) or []
+    for uc in conversions:
         if not cmds.listConnections(f'{uc}.input', s=True, d=False) \
                 or not cmds.listConnections(f'{uc}.output', s=False, d=True):
             cmds.delete(uc)
@@ -343,6 +354,9 @@ def setup_rig(fk, ik):
     '''
     logger.info('-----------------------------------------------------')
     logger.info('Setup rig components')
+
+    # The matrix OPM network needs matrixNodes; load it up front
+    rt_mya.ensure_plugins()
 
     # Sync IKFK_MODES with the build options before the switch attribute
     # is created (connect_cog): IK-only builds must not offer 'FK'
@@ -402,6 +416,10 @@ def setup_rig(fk, ik):
     rt_con.connect_root(fk, ik)
     rt_con.connect_cog(fk, ik)
     for rigname in rt_cst.RIGPARTS:
+        # Parts without joints were skipped by set_joints/set_joints_auto
+        if rigname not in rt_cst.JOINTS_BN:
+            logger.warning(f"{rigname}: No joints set, skipping setup")
+            continue
         rt_ctl.create_basectrl(rigname)
         rt_con.connect_basectrl(rigname, fk, ik)
 

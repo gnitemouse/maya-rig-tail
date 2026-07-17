@@ -101,6 +101,10 @@ def build_rig_tail(fk, ik):
         ik (bool): Build IK components
     '''
     for rigname in rt_cst.RIGPARTS:
+        # Parts without joints were skipped during setup
+        if rigname not in rt_cst.JOINTS_BN:
+            logger.warning(f"{rigname}: No joints set, skipping build")
+            continue
         if fk:
             rig_tail_fk(rigname)
         if ik:

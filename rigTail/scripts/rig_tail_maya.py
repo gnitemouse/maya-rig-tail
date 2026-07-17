@@ -51,6 +51,28 @@ import re
 logger = logger_setup(__name__)
 
 
+# PLUGINS ==============================================================
+
+def ensure_plugins(plugins=('matrixNodes',)):
+    """
+    Load plugins the rig build depends on. When a node type's plugin is
+    unloaded (common in mayapy/batch sessions), cmds.createNode does
+    not error -- it silently creates a useless 'unknown' placeholder
+    node with no attributes -- so required plugins must be loaded
+    before any nodes are created.
+
+    Arguments:
+        plugins (tuple): Plugin names to load
+    """
+    for plugin in plugins:
+        if not cmds.pluginInfo(plugin, q=True, loaded=True):
+            try:
+                cmds.loadPlugin(plugin, quiet=True)
+                logger.info(f"Loaded required plugin '{plugin}'")
+            except RuntimeError as err:
+                logger.warning(f"Could not load plugin '{plugin}': {err}")
+
+
 # OBJECT EXISTENCE AND DELETION ========================================
 
 def obj_exists(node):
@@ -204,7 +226,9 @@ def is_control(node):
         if not cmds.listConnections(node, d=False, t='skinCluster'):
             return True
     elif cmds.objectType(node, i='transform'):
-        shapes = cmds.listRelatives(node, s=True) or []
+        # Full paths: short shape names are ambiguous when the scene
+        # contains duplicate node names
+        shapes = cmds.listRelatives(node, s=True, f=True) or []
         for shp in shapes:
             if cmds.objectType(shp, i='nurbsCurve'):
                 if not cmds.listConnections(shp, d=False, t='skinCluster'):
@@ -225,7 +249,10 @@ def is_geometry(node):
     if cmds.objectType(node, i='mesh'):
         return True
     elif cmds.objectType(node, i='transform'):
-        shapes = cmds.listRelatives(node, s=True) or []
+        # Full paths: short shape names are ambiguous when the scene
+        # contains duplicate node names ('rivetsShape' under two
+        # different 'rivets' transforms)
+        shapes = cmds.listRelatives(node, s=True, f=True) or []
         for shp in shapes:
             if cmds.objectType(shp, i='mesh'):
                 return True
@@ -276,27 +303,36 @@ def disconnect_all(node, source=True, destination=True, attrs=None):
     if not cmds.objExists(node):
         return
 
+    def disconnect(src, dst):
+        # One undisconnectable pair (locked plug, connection into an
+        # unknown node such as Node Editor bookkeeping) must not abort
+        # the whole cleanup
+        try:
+            cmds.disconnectAttr(src, dst)
+        except RuntimeError as err:
+            logger.debug(f"Skip disconnect '{src}' -> '{dst}': {err}")
+
     if source:
         if attrs:
             for attr in attrs:
                 conns = cmds.listConnections(f'{node}.{attr}', s=True, d=False, p=True, c=True) or []
                 for i in range(0, len(conns), 2):
-                    cmds.disconnectAttr(conns[i + 1], conns[i])
+                    disconnect(conns[i + 1], conns[i])
         else:
             conns = cmds.listConnections(node, s=True, d=False, p=True, c=True) or []
             for i in range(0, len(conns), 2):
-                cmds.disconnectAttr(conns[i + 1], conns[i])
+                disconnect(conns[i + 1], conns[i])
 
     if destination:
         if attrs:
             for attr in attrs:
                 conns = cmds.listConnections(f'{node}.{attr}', s=False, d=True, p=True, c=True) or []
                 for i in range(0, len(conns), 2):
-                    cmds.disconnectAttr(conns[i], conns[i + 1])
+                    disconnect(conns[i], conns[i + 1])
         else:
             conns = cmds.listConnections(node, s=False, d=True, p=True, c=True) or []
             for i in range(0, len(conns), 2):
-                cmds.disconnectAttr(conns[i], conns[i + 1])
+                disconnect(conns[i], conns[i + 1])
 
 
 def ensure_connect(src, dst):
@@ -745,12 +781,43 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
 
 # GEOMETRY BINDING =====================================================
 
+def geometry_matches_rigname(rigname, geo, warn=False):
+    '''
+    Check if a geometry name belongs to the rig part. Preferred naming
+    is '<rigname>_geo' (with optional numeric indices: 'tail_01_geo');
+    a bare '<rigname>' / '<rigname>_01' also matches, optionally with
+    a warning that it does not follow the naming convention. Names of
+    other parts never match ('R_tail_geo' does not belong to 'tail').
+
+    Arguments:
+        rigname (str): Rig component name
+        geo (str): Geometry transform name
+        warn (bool): Warn when the name lacks a geo/mesh term
+
+    Return:
+        bool: True if geo belongs to the rig part
+    '''
+    if rt_nam.name_contains_rigname_terms(rigname, geo,
+                                          terms=r'mesh|geo|geometry'):
+        return True
+    if rt_nam.name_matches_rigname(rigname, geo):
+        if warn:
+            logger.warning(
+                f"Geometry '{geo}' matches rig part '{rigname}' but not "
+                f"the expected naming convention '<rigname>_geo'. "
+                f"Binding it anyway; consider renaming.")
+        return True
+    return False
+
+
 def bind_geometry(rigname):
     '''
     Search for geometry named after the rig part and bind to BN joints.
     Binds every match, so multi-mesh parts work: rigname 'tail' binds
-    'tail_geo', 'tail_01_geo', and 'tail_02_geo'. Skips meshes that
-    belong to other parts ('R_tail_geo' is not bound by 'tail').
+    'tail_geo', 'tail_01_geo', and 'tail_02_geo'. Meshes named after
+    the part but missing the geo term ('tail', 'tail_01') are bound
+    with a naming warning. Skips meshes that belong to other parts
+    ('R_tail_geo' is not bound by 'tail').
     Skips if no geometry found.
 
     Arguments:
@@ -772,7 +839,7 @@ def bind_geometry(rigname):
 
     bound = []
     for geo in geos:
-        if rt_nam.name_contains_rigname_terms(rigname, geo, terms=r'mesh|geo|geometry'):
+        if geometry_matches_rigname(rigname, geo, warn=True):
             if is_geometry(geo):
                 geo_leaf = geo.split('|')[-1]
                 bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
@@ -794,7 +861,7 @@ def unbind_geometry(rigname):
     if cmds.objExists(geometry_grp):
         geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1) or []
         for geo in geos:
-            if rt_nam.name_contains_rigname_terms(rigname, geo, terms=r'mesh|geo|geometry'):
+            if geometry_matches_rigname(rigname, geo):
                 if is_geometry(geo):
                     unbind_skincluster(geo)
 
@@ -814,6 +881,24 @@ def unbind_geometry_all():
         for geo in geos:
             if is_geometry(geo):
                 unbind_skincluster(geo)
+
+
+def _delete_orphan_bindposes(poses):
+    '''
+    Delete bindPose (dagPose) nodes no longer used by any skinCluster.
+    Called after unbinding: Maya creates a bindPose per bind and never
+    removes it, so rebuilds accumulate one orphan per rebind.
+
+    Arguments:
+        poses (list): Candidate dagPose node names
+    '''
+    for pose in poses:
+        if not cmds.objExists(pose):
+            continue
+        users = cmds.listConnections(f'{pose}.message', s=False, d=True,
+                                     t='skinCluster') or []
+        if not users:
+            cmds.delete(pose)
 
 
 def bind_skincluster(joints, node, name):
@@ -854,7 +939,10 @@ def bind_skincluster(joints, node, name):
         else:
             # Different joints or failed query, need to unbind first
             logger.info(f'Removing old skinCluster {existing_skin[0]} (different joints or invalid)')
+            poses = cmds.listConnections(f'{existing_skin[0]}.bindPose',
+                                         s=True, d=False) or []
             cmds.delete(existing_skin[0])
+            _delete_orphan_bindposes(poses)
 
     # Create skinCluster - Bind method is closest distance
     return cmds.skinCluster(joints, node, n=name, nw=1, bm=0, sm=0, mi=4, tsb=True)
@@ -870,7 +958,9 @@ def unbind_skincluster(node, delete_history=True):
     '''
     if not cmds.objExists(node):
         return
-    shapes = cmds.listRelatives(node, s=1, ni=1) or []
+    # Full paths: short shape names are ambiguous when the scene
+    # contains duplicate node names
+    shapes = cmds.listRelatives(node, s=1, ni=1, f=1) or []
     if not shapes:
         logger.warning(f"No shapes found for '{node}'")
         return
@@ -879,10 +969,13 @@ def unbind_skincluster(node, delete_history=True):
         # Get skinClusters connected to shape
         skinclusters = cmds.listConnections(shape, d=0, t='skinCluster') or []
         for skincluster in skinclusters:
+            poses = cmds.listConnections(f'{skincluster}.bindPose',
+                                         s=True, d=False) or []
             try:
                 cmds.skinCluster(node, e=1, ub=1)
             except Exception as err:
                 logger.warning(f"Failed to unbind '{skincluster}' from '{node}': {err}")
+            _delete_orphan_bindposes(poses)
 
     if delete_history:
         cmds.delete(node, ch=1)

@@ -264,6 +264,25 @@ def titlecase(text, underscore=True):
     return ' '.join(word.title() for word in words)
 
 
+def name_matches_rigname(rigname, name):
+    """
+    Check if name is exactly the rigname, optionally followed by
+    numeric index tokens: rigname 'tail' matches 'tail', 'tail_01',
+    but not 'R_tail', 'tail_geo', or 'detail'.
+
+    Arguments:
+        rigname (str): Rigname to match
+        name (str): Name to check (a DAG path is reduced to its leaf)
+
+    Return:
+        bool: True if name matches
+    """
+    sep = r'[_\-\s]+'
+    idx = rf'(?:{sep}\d+)*'
+    leaf = name.split('|')[-1]
+    return re.match(rf'(?i)^{re.escape(rigname)}{idx}$', leaf) is not None
+
+
 def name_contains_rigname_terms(rigname, name, terms=r'mesh|geo|geometry'):
     """
     Check if name is exactly rigname plus a terms token, in either

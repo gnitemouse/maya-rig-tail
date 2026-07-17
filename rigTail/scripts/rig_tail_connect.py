@@ -75,6 +75,10 @@ def connect_rig_tail(fk, ik):
     clear_control_cache()
 
     for rigname in rt_cst.RIGPARTS:
+        # Parts without joints were skipped during setup and build
+        if rigname not in rt_cst.JOINTS_BN:
+            logger.warning(f"{rigname}: No joints set, skipping connect")
+            continue
         connect_fk(rigname, fk, ik)
         connect_ik(rigname, fk, ik)
         # rt_test.dump_chain()
@@ -132,10 +136,19 @@ def connect_root(fk, ik):
     if cmds.objExists(geometry_grp):
         rt_mya.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
                            en='Unlocked:Wireframe:Locked', dv=0)
-        cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
-        cmds.connectAttr(f'{root_ctrl}.export_geo',
-                         f'{geometry_grp}.overrideDisplayType', f=1)
-        cmds.setAttr(f'{root_ctrl}.export_geo', 2)
+        # Display overrides are cosmetic: when the geometry group's
+        # overrideEnabled is locked or already driven (e.g. the group
+        # is in a display layer), leave the existing setup in place
+        # instead of failing the build
+        if cmds.getAttr(f'{geometry_grp}.overrideEnabled', settable=True):
+            cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
+            cmds.connectAttr(f'{root_ctrl}.export_geo',
+                             f'{geometry_grp}.overrideDisplayType', f=1)
+            cmds.setAttr(f'{root_ctrl}.export_geo', 2)
+        else:
+            logger.warning(
+                f"'{geometry_grp}.overrideEnabled' is locked or driven "
+                f"(display layer?); skipping export_geo display override.")
 
 def connect_cog(fk, ik):
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
