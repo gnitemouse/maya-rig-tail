@@ -51,8 +51,16 @@ Rig component {rigname}s can be changed under RIGPARTS in rig_tail_constants.py
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup, raise_build_error
 import importlib as il
+
+# logger_config is reloaded before it is imported from, so editing it does
+# not need a Maya restart. Every other module does 'from logger_config
+# import ...' at its own module level and reads whatever is cached, so a
+# stale copy here would make all of them import names that no longer
+# match the file on disk.
+import logger_config
+il.reload(logger_config)
+from logger_config import logger_setup, abort_build
 
 import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
@@ -124,7 +132,7 @@ def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
     '''
     logger.info('-----------------------------------------------------')
     logger.info(f"{rigname}: Build FK tail")
-    logger.debug(f'joints {rt_cst.JOINTS_FK[rigname]}')
+    logger.trace(f'joints {rt_cst.JOINTS_FK[rigname]}')
 
     joints = rt_cst.JOINTS_FK[rigname]
     jnt_pos = rt_jnt.get_joint_position_from_list(joints)
@@ -158,7 +166,7 @@ def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
        rt_fk.falloff_rotation(rigname, n, joints, sdk_groups[n])
 
     # Bind curve
-    logger.info(f"Bind Curve '{curve_fk}' to FK joints")
+    logger.debug(f"Bind Curve '{curve_fk}' to FK joints")
     rt_mya.bind_skincluster(joints, curve_fk, f'{curve_fk}_skinCluster')
 
     # Build stretch
@@ -171,7 +179,7 @@ def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     '''
     logger.info('-----------------------------------------------------')
     logger.info(f"{rigname}: Build IK tail")
-    logger.debug(f'joints {rt_cst.JOINTS_IK[rigname]}')
+    logger.trace(f'joints {rt_cst.JOINTS_IK[rigname]}')
 
     joints = rt_cst.JOINTS_IK[rigname]
     jnt_pos = rt_jnt.get_joint_position_from_list(joints)
@@ -259,7 +267,7 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     '''
     selected = cmds.ls(sl=True)
     if not selected:
-        raise_build_error(logger, 'Select joint to rig tail')
+        abort_build(logger, 'Select joint to rig tail')
 
     rt_set.set_root(root)
     for jnt in selected:

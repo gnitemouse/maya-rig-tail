@@ -53,12 +53,12 @@ def validate_cache():
             rt_cst.JOINTS_IK.pop(rigname, None)
             rt_cst.JOINTS_BN.pop(rigname, None)
 
-        logger.info(f'RIGPARTS changed. Removed: {removed}, Added: {added}')
+        logger.debug(f'RIGPARTS changed. Removed: {removed}, Added: {added}')
         rt_cst.LAST_BUILD['rigparts'] = rt_cst.RIGPARTS.copy()
 
     # Check if ROOT changed
     if rt_cst.ROOT != rt_cst.LAST_BUILD['root']:
-        logger.info(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{rt_cst.ROOT}'")
+        logger.debug(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{rt_cst.ROOT}'")
         rt_cst.LAST_BUILD['root'] = rt_cst.ROOT
 
 
@@ -90,7 +90,7 @@ def validate_cache_structure():
                or prev_ik != rt_cst.NUM_CTRL_IK
                or prev_indiv != rt_cst.INDIV_FK)
     if changed:
-        logger.info(f'Structure changed: NUM_CTRL_FK '
+        logger.debug(f'Structure changed: NUM_CTRL_FK '
                     f'{prev_fk} -> {rt_cst.NUM_CTRL_FK}, NUM_CTRL_IK '
                     f'{prev_ik} -> {rt_cst.NUM_CTRL_IK}, INDIV_FK '
                     f'{prev_indiv} -> {rt_cst.INDIV_FK}. Full rebuild.')
@@ -133,13 +133,13 @@ def validate_cache_joints(rigname, tol=None):
     rt_cst.LAST_BUILD.setdefault('joints_pos', {})[rigname] = current_pos
 
     if stored_pos is None or len(stored_pos) != len(current_pos):
-        logger.info(f'{rigname}: No stored joint positions, rebuild needed')
+        logger.debug(f'{rigname}: No stored joint positions, rebuild needed')
         return True
 
     for jnt, old, new in zip(rt_cst.JOINTS_BN[rigname], stored_pos, current_pos):
         dist = math.dist(old, new)
         if dist > tol:
-            logger.info(f"{rigname}: '{jnt}' moved {dist:.4f} (tol {tol})")
+            logger.debug(f"{rigname}: '{jnt}' moved {dist:.4f} (tol {tol})")
             return True
 
     return False  # Joints unchanged

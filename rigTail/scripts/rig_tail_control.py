@@ -115,7 +115,7 @@ def create_basectrl(rigname, aim_axis=None):
             f"'{aim_axis}'. Check that '{joints[0]}' and the joints after "
             f'it are not all at the same position.')
     rot_offset = rt_cst.ROT_AXIS_DICT[aim_axis]
-    logger.debug(f"{rigname}: aim_axis '{aim_axis}' rot_offset '{rot_offset}'")
+    logger.trace(f"{rigname}: aim_axis '{aim_axis}' rot_offset '{rot_offset}'")
     cmds.setAttr(f'{basectrl_grp}.rotate', rot_offset[0], rot_offset[1], rot_offset[2])
     rt_mya.opm(basectrl_grp)
     return basectrl, basectrl_grp
@@ -252,12 +252,12 @@ def build_control_shapes(control, size=1, nr=(1,0,0), color='darkcyan',
         return control
 
     if preserve:
-        logger.debug(f"Control exists '{control}', preserving shapes")
+        logger.trace(f"Control exists '{control}', preserving shapes")
         return control
     if not shape:
         return control  # Shapeless control, nothing to rebuild
 
-    logger.debug(f"Control exists '{control}', rebuilding shapes in place")
+    logger.trace(f"Control exists '{control}', rebuilding shapes in place")
     tmp = create_control_shape(f'{control}_shapeswap_tmp', size, nr=nr,
                                color=color, shape=shape)
     rt_mya.swap_shapes(control, tmp)
@@ -294,7 +294,7 @@ def create_control(control, group=None, match_to=None, parent=None,
         control (str): Control name
         group (str): Group name
     '''
-    logger.debug(f'{control}, {match_to}, {parent}, {size}, {nr}, {color}, {shape}, {preserve}')
+    logger.trace(f'{control}, {match_to}, {parent}, {size}, {nr}, {color}, {shape}, {preserve}')
     # Create control group
     groupname = group if group else f'{control}_{rt_cst.GRP}'
     group = rt_mya.create_group(groupname)
@@ -343,7 +343,7 @@ def create_control_match_list(rigname, matchlist, template_ctrl, template_grp=No
         controls (list): List of control names
         groups (list): List of control group names
     '''
-    logger.debug(f'{rigname},\n{matchlist},\n{template_ctrl}, {template_grp}, {typ},\n{parent}, {nest_controls}, {size}, {color}, {shape}')
+    logger.trace(f'{rigname},\n{matchlist},\n{template_ctrl}, {template_grp}, {typ},\n{parent}, {nest_controls}, {size}, {color}, {shape}')
     controls = list()
     groups = list()
     for i, obj in enumerate(matchlist):
@@ -374,7 +374,7 @@ def create_controls_fk(rigname, joints, jnt_pos):
     Return
         varfk_ctrls (list): List of Variable FK control names
     '''
-    logger.info(f"{rigname}: Create FK controls")
+    logger.debug(f"{rigname}: Create FK controls")
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
     fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
@@ -448,7 +448,7 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
         ik_ctrlgrps (dict): Dict of control types -> control group lists
             Keys: 'ik', 'float', 'spline', 'upvec'
     '''
-    logger.info(f"{rigname}: Create IK controls")
+    logger.debug(f"{rigname}: Create IK controls")
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     all_cluster_handles = [x[1] for x in clusters]
@@ -458,7 +458,7 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
     else:
         cluster_handles = all_cluster_handles
         cluster_handles_upv = [all_cluster_handles[0], all_cluster_handles[-1]]
-    logger.debug(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
+    logger.trace(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
 
     # Create spline controls
     controls_ik, groups_ik = create_spline_controls_ik(
@@ -502,7 +502,7 @@ def create_spline_controls_ik(rigname, cluster_handles, orient_world, scale=1):
         controls (list): List of IK control names
         groups (list): List of IK control group names
     '''
-    logger.info(f"{rigname}: Create IK spline controls - IK")
+    logger.debug(f"{rigname}: Create IK spline controls - IK")
     controls, groups = create_control_match_list(rigname,
                                                  cluster_handles,
                                                  template_ctrl=rt_cst.SPLINE_IK_CTRL,
@@ -531,7 +531,7 @@ def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1
         controls (list): List of Float control names
         groups (list): List of Float control group names
     '''
-    logger.info(f"{rigname}: Create IK spline controls - Float")
+    logger.debug(f"{rigname}: Create IK spline controls - Float")
     controls, groups = create_control_match_list(rigname,
                                                  cluster_handles,
                                                  template_ctrl=rt_cst.SPLINE_FLOAT_CTRL,
@@ -580,8 +580,8 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
         controls (list): List of Spline control names (length 6)
         groups (list): List of Spline control group names (length 6)
     '''
-    logger.info(f"{rigname}: Create IK Spline controls - SplineIK")
-    logger.debug(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
+    logger.debug(f"{rigname}: Create IK Spline controls - SplineIK")
+    logger.trace(f'Cluster Handles: {len(cluster_handles)} {cluster_handles}')
     num_clusters = len(cluster_handles)
 
     def match_target(frac):
@@ -823,7 +823,7 @@ def add_fk_attributes_to_controls(controls, joints):
         controls (list): List of Variable FK control names
         joints (list): List of joints for calculating position
     '''
-    logger.debug('Add FK control attributes')
+    logger.trace('Add FK control attributes')
     for ctrl in controls:
         # Attribute: Original Position
         ctrlpos = get_control_position(ctrl, joints)
@@ -863,7 +863,7 @@ def add_fk_attributes_to_controls(controls, joints):
                          at='float', min=0, max=len(joints)-1)
         cmds.setAttr(f'{ctrl}.num_joints', cb=True, l=False)
 
-        logger.debug(f"Added attributes to FK control '{ctrl}'")
+        logger.trace(f"Added attributes to FK control '{ctrl}'")
 
 def set_attributes_visibility_fk(fk_controls):
     '''
@@ -874,7 +874,7 @@ def set_attributes_visibility_fk(fk_controls):
         controls (list): List of FK control names
     '''
     for ctrl in fk_controls:
-        logger.debug(f"Set FK control attribute visibility for {ctrl}")
+        logger.trace(f"Set FK control attribute visibility for {ctrl}")
         # Hide translate
         for axis in 'XYZ':
             if cmds.attributeQuery(f'translate{axis}', n=ctrl, ex=1):
@@ -901,7 +901,7 @@ def set_attributes_visibility_ik(ik_controls):
     '''
     for mode, controls in ik_controls.items():
         for ctrl in controls:
-            logger.debug(f"Set IK control attribute visibility for {ctrl}")
+            logger.trace(f"Set IK control attribute visibility for {ctrl}")
             # Show translate
             for axis in 'XYZ':
                 if cmds.attributeQuery(f'translate{axis}', n=ctrl, ex=1):
@@ -939,7 +939,7 @@ def get_control_position(control, joints):
     end = joints[-1]
     fullv = rt_mat.get_vec_length(joints[0], end)
     length = rt_mat.get_vec_length(control, end)
-    logger.debug(f"ctrl '{control}' - length {length} fullv {fullv}")
+    logger.trace(f"ctrl '{control}' - length {length} fullv {fullv}")
     if length == 0:
         v = 0
     elif fullv == 0:
@@ -948,7 +948,7 @@ def get_control_position(control, joints):
     else:
         v = length/fullv
 
-    logger.debug(f'{control} V: {v}')
+    logger.trace(f'{control} V: {v}')
     return v
 
 def parent_group_controls(controls, groups, reverse=False, long=False):

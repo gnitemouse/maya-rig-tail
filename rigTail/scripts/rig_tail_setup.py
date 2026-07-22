@@ -61,7 +61,7 @@ def cleanup_rig(fk, ik):
     structure_changed = rt_cache.validate_cache_structure()
 
     # Delete SDK animCurves
-    logger.debug(f"Cleaning up SDK curves")
+    logger.trace(f"Cleaning up SDK curves")
     anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
     for anim_curve in anim_curves:
         cmds.delete(anim_curve)
@@ -84,13 +84,13 @@ def cleanup_rigname(rigname, fk, ik):
     Cleanup components for a single RIGPART (rigname).
     Can be called independently for targeted cleanup.
     '''
-    logger.info(f"{rigname}: Cleanup rig part")
+    logger.debug(f"{rigname}: Cleanup rig part")
     types = ['', rt_cst.TYPE_BN, rt_cst.TYPE_IK, rt_cst.TYPE_FK, rt_cst.TYPE_FX]
     basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     # 1. Disconnect skeleton, delete joint constraints
-    logger.debug(f"{rigname}: Cleaning up skeleton constraints")
+    logger.trace(f"{rigname}: Cleaning up skeleton constraints")
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX]:
         if rigname in joints:
             for jnt in joints[rigname]:
@@ -115,7 +115,7 @@ def cleanup_rigname(rigname, fk, ik):
                 rt_mya.reset_transforms(node, unlock=True)
 
     # 3. Delete skinClusters from curves
-    logger.debug(f"{rigname}: Cleaning up skinClusters")
+    logger.trace(f"{rigname}: Cleaning up skinClusters")
     if fk:
         curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
         rt_mya.unbind_skincluster(curve_fk)
@@ -126,7 +126,7 @@ def cleanup_rigname(rigname, fk, ik):
         rt_mya.unbind_skincluster(curve_ik_spline)
 
     # 4. Delete existing controls and control groups
-    logger.debug(f"{rigname} Cleaning up controls and groups")
+    logger.trace(f"{rigname} Cleaning up controls and groups")
     rt_mya.remove(basectrl_grp)
     rt_mya.remove(basectrl)
 
@@ -136,7 +136,7 @@ def cleanup_rigname(rigname, fk, ik):
 
     # Remove SDK groups for FK
     if fk and rigname in rt_cst.JOINTS_FK:
-        logger.debug(f'{rigname}: Cleaning up FK SDK groups')
+        logger.trace(f'{rigname}: Cleaning up FK SDK groups')
         # First, restore FK joint hierarchy by removing SDK groups
         joints = rt_cst.JOINTS_FK[rigname]
         fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
@@ -166,7 +166,7 @@ def cleanup_rigname(rigname, fk, ik):
     # so anchor the underscore after rigname: '{rigname}_*' cannot
     # bleed into another part whose name merely extends this one
     # ('tail' cleanup must not delete 'tail2' nodes)
-    logger.debug(f"{rigname}: Cleaning up utility nodes")
+    logger.trace(f"{rigname}: Cleaning up utility nodes")
     for typ in types:
         node_patterns = [
             f'{typ}_{rigname}_*condition',
@@ -187,7 +187,7 @@ def cleanup_rigname(rigname, fk, ik):
                 rt_mya.remove(node)
 
     # 7. Delete curves, clusters, ikHandles
-    logger.debug(f"{rigname}: Cleaning up curves and clusters")
+    logger.trace(f"{rigname}: Cleaning up curves and clusters")
     if fk:
         curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
         spline_grp_fk = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_FK)
@@ -242,7 +242,7 @@ def cleanup_connections(rigname, fk, ik):
     '''
     Clean up connections. Only disconnect, don't delete nodes.
     '''
-    logger.info(f'{rigname}: Cleanup connections')
+    logger.debug(f'{rigname}: Cleanup connections')
 
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
         if rigname in joints:
@@ -299,7 +299,7 @@ def cleanup_anim_effects(rigname, fk, ik):
         fk (bool): Clean FK effects
         ik (bool): Clean IK effects
     '''
-    logger.debug(f'{rigname}: Cleanup animation effects')
+    logger.trace(f'{rigname}: Cleanup animation effects')
     # Delete animation node patterns (expressions first)
     typ = rt_cst.TYPE_FX
     node_patterns = [
@@ -361,7 +361,7 @@ def setup_rig(fk, ik):
     # Sync IKFK_MODES with the build options before the switch attribute
     # is created (connect_cog): IK-only builds must not offer 'FK'
     if rt_cst.update_ikfk_modes(fk, ik):
-        logger.info(f'IKFK_MODES updated for build options: {rt_cst.IKFK_MODES}')
+        logger.debug(f'IKFK_MODES updated for build options: {rt_cst.IKFK_MODES}')
 
     root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
@@ -408,7 +408,7 @@ def setup_rig(fk, ik):
             for joint in joints:
                 rt_mya.parent_to(joint, skeleton_grp)
         else:
-            logger.debug(f"Group exists '{group}'")
+            logger.trace(f"Group exists '{group}'")
 
     if ik: # Replace names
         rename_components()
@@ -439,7 +439,7 @@ def set_root(root):
 
     rt_cst.ROOT = rt_nam.strip_group_suffix(root)
     root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    logger.info(f"Set ROOT '{rt_cst.ROOT}'")
+    logger.debug(f"Set ROOT '{rt_cst.ROOT}'")
 
     if cmds.objExists(root) and root != root_grp:
         # User passed an existing group name: rename to template name
@@ -449,7 +449,7 @@ def set_root(root):
         # root group over to the new name
         prev_root_grp = find_existing_root_grp()
         if prev_root_grp and prev_root_grp != root_grp:
-            logger.info(
+            logger.debug(
                 f"ROOT changed: rename root group "
                 f"'{prev_root_grp}' -> '{root_grp}'")
             cmds.rename(prev_root_grp, root_grp)
@@ -483,7 +483,7 @@ def set_joints_auto():
     Auto-detect joints for all RIGPARTS.
     Search scene for joints matching naming convention.
     '''
-    logger.info('Auto-detect joints for all RIGPARTS')
+    logger.debug('Auto-detect joints for all RIGPARTS')
 
     for rigname in rt_cst.RIGPARTS:
         # Try to find start joint using naming convention
@@ -499,7 +499,7 @@ def set_joints_auto():
                         rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname]
             if matching:
                 start_jnt = matching[0]
-                logger.info(f"{rigname}: Found start joint '{start_jnt}'")
+                logger.debug(f"{rigname}: Found start joint '{start_jnt}'")
             else:
                 logger.warning(f"{rigname}: No joints found, skipping")
                 continue
@@ -529,7 +529,7 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
         if rigname in joints:
             # Verify all cached joints still exist
             if not all(cmds.objExists(j) for j in joints[rigname]):
-                logger.debug(f'{rigname}: Cached {types[i]} joints invalid, rebuilding')
+                logger.trace(f'{rigname}: Cached {types[i]} joints invalid, rebuilding')
                 cache_valid = False
                 del joints[rigname]
         else:
@@ -537,13 +537,13 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
 
     # If all caches valid, skip rebuild
     if cache_valid:
-        logger.info(f"{rigname}: Using cached joints (all valid)")
+        logger.debug(f"{rigname}: Using cached joints (all valid)")
         return
 
     # Detect or validate start joint
     if not start_jnt:
         start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, 0)
-        logger.info(f"{rigname}: Auto-detect start_jnt: {start_jnt}")
+        logger.debug(f"{rigname}: Auto-detect start_jnt: {start_jnt}")
 
     if not cmds.objExists(start_jnt):
         logger.error(f"{rigname}: start_jnt '{start_jnt}' does not exist")
@@ -552,17 +552,17 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
         logger.error(f"{rigname}: end_jnt '{end_jnt}' does not exist")
         return
 
-    logger.info(f"{rigname}: Setting joints - start:{start_jnt} end:{end_jnt}")
+    logger.debug(f"{rigname}: Setting joints - start:{start_jnt} end:{end_jnt}")
 
     joint_chain = rt_jnt.get_joint_chain(start_jnt, end_jnt)
     if not joint_chain:
         logger.error(f"{rigname}: No joints found")
         return
-    logger.debug(f'Joint Chain: {joint_chain}')
+    logger.trace(f'Joint Chain: {joint_chain}')
 
     # Create/rename joints - always create BN
     rt_cst.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, rt_cst.TYPE_BN)
-    logger.info(f'{rigname}: Processed {rt_cst.TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
+    logger.debug(f'{rigname}: Processed {rt_cst.TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
     # Create IK/FK joints here since setup runs before build
     rt_cst.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_FK)
     rt_cst.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_IK)
@@ -581,7 +581,7 @@ def create_rename_joints(rigname, joints, typ):
         - delete existing target chain
         - rename duplicated joints
     '''
-    logger.debug(f"rigname:'{rigname}' joints:'{typ}'")
+    logger.trace(f"rigname:'{rigname}' joints:'{typ}'")
 
     # BN: rename in place
     if typ == rt_cst.TYPE_BN:
@@ -634,9 +634,9 @@ def rename(source, target):
     '''
     if cmds.objExists(source):
         cmds.rename(source, target)
-        logger.info(f"Renamed '{source}' -> '{target}'")
+        logger.debug(f"Renamed '{source}' -> '{target}'")
     else:
-        logger.debug(f"Cancel rename '{source}' -> '{target}'. Source '{source}' does not exist.")
+        logger.trace(f"Cancel rename '{source}' -> '{target}'. Source '{source}' does not exist.")
 
 def rigpart_has_joints(rigname):
     '''
@@ -731,7 +731,7 @@ def rename_rigpart(old, new):
         return False, f'Rename failed and was reverted: {e}'
 
     _migrate_rigpart_state(old, new, old_token)
-    logger.info(f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)")
+    logger.debug(f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)")
     return True, f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)."
 
 
@@ -798,7 +798,7 @@ def rename_components():
         # Renames can invalidate names listed earlier (e.g. shapes of a
         # renamed transform), so re-check existence
         if node != node_name and cmds.objExists(node):
-            logger.debug(f"Rename legacy node '{node}' -> '{node_name}'")
+            logger.trace(f"Rename legacy node '{node}' -> '{node_name}'")
             cmds.rename(node, node_name)
 
     dag_nodes = cmds.ls(dag=True)

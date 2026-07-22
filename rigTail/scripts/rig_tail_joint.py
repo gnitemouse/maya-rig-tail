@@ -113,8 +113,8 @@ def is_equal_joint(joint1, joint2, tolerance=0.1):
     # Get rotation
     jnt1_ro = cmds.xform(joint1, q=1, ws=1, ro=1)
     jnt2_ro = cmds.xform(joint2, q=1, ws=1, ro=1)
-    logger.debug(f"{joint1} tr{jnt1_tr} ro{jnt1_ro}")
-    logger.debug(f"{joint2} tr{jnt2_tr} ro{jnt2_ro}")
+    logger.trace(f"{joint1} tr{jnt1_tr} ro{jnt1_ro}")
+    logger.trace(f"{joint2} tr{jnt2_tr} ro{jnt2_ro}")
 
     if not all(abs(t1 - t2) < tolerance for t1, t2 in zip(jnt1_tr, jnt2_tr)):
         return False
@@ -131,7 +131,7 @@ def set_joint_attributes(joints):
     Arguments:
         joints (list): List of joint names
     """
-    logger.debug('Label joint positions')
+    logger.trace('Label joint positions')
     if not joints:
         logger.error('No joints provided')
         return
@@ -140,7 +140,7 @@ def set_joint_attributes(joints):
     fullv = rt_math.get_vec_length(joints[0], end)
     for jnt in joints:
         length = rt_math.get_vec_length(jnt, end)
-        logger.debug(f"joint '{jnt}' length {length} fullv {fullv}")
+        logger.trace(f"joint '{jnt}' length {length} fullv {fullv}")
         if length == 0:
             v = 0
         elif fullv == 0:

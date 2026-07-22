@@ -43,7 +43,7 @@ Functions:
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-from logger_config import logger_setup, raise_build_error
+from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import re
@@ -68,7 +68,7 @@ def ensure_plugins(plugins=('matrixNodes',)):
         if not cmds.pluginInfo(plugin, q=True, loaded=True):
             try:
                 cmds.loadPlugin(plugin, quiet=True)
-                logger.info(f"Loaded required plugin '{plugin}'")
+                logger.debug(f"Loaded required plugin '{plugin}'")
             except RuntimeError as err:
                 logger.warning(f"Could not load plugin '{plugin}': {err}")
 
@@ -310,7 +310,7 @@ def disconnect_all(node, source=True, destination=True, attrs=None):
         try:
             cmds.disconnectAttr(src, dst)
         except RuntimeError as err:
-            logger.debug(f"Skip disconnect '{src}' -> '{dst}': {err}")
+            logger.trace(f"Skip disconnect '{src}' -> '{dst}': {err}")
 
     if source:
         if attrs:
@@ -379,7 +379,7 @@ def opm(node):
         node (str): Node to bake transforms
     """
     if has_non_default_locked_attributes(node):
-        raise_build_error(logger, f'Node {node} has at least one non default locked attribute(s)')
+        abort_build(logger, f'Node {node} has at least one non default locked attribute(s)')
 
     local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
     offset_parent_matrix = om.MMatrix(cmds.getAttr(f"{node}.offsetParentMatrix"))
@@ -442,7 +442,7 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
         else:
             cmds.matchTransform(source, target, pos=pos, rot=rot, scl=scl)
 
-    logger.debug(f"'{source}'->'{target}'")
+    logger.trace(f"'{source}'->'{target}'")
     if unlock:
         disconnect_all(source, source=True)
     if moc:
@@ -631,7 +631,7 @@ def swap_shapes(target, source):
         cmds.parent(shape, target, r=True, s=True)
 
     shapes = cmds.listRelatives(target, s=True, f=True) or []
-    logger.debug(f"swapped {len(shapes)} shape(s) onto '{target}'")
+    logger.trace(f"swapped {len(shapes)} shape(s) onto '{target}'")
     return shapes
 
 
@@ -737,7 +737,7 @@ def get_num_cv(curve):
     num_cv = spans + degree
     if form == 2:
         num_cv -= degree
-    logger.debug(f"numcv:{num_cv} spans:{spans} degree:{degree} form:{form}")
+    logger.trace(f"numcv:{num_cv} spans:{spans} degree:{degree} form:{form}")
     return num_cv, spans, degree
 
 
@@ -845,7 +845,7 @@ def attribute_is_proxy(node, attr):
     except (AttributeError, RuntimeError):
         # isProxyAttribute is Maya 2019+. On older versions report False
         # so the attribute is edited in place, matching previous behaviour
-        logger.debug(f"cannot query proxy state of '{node}.{attr}'")
+        logger.trace(f"cannot query proxy state of '{node}.{attr}'")
         return False
 
 def remove_attribute(node, attr):
@@ -893,7 +893,7 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
         dv (int): Default value
         pxy (str): Proxy attribute
     """
-    logger.debug(f"plug:'{plug}' ln:'{ln}' nn:'{nn}' en:'{en}' pxy:'{pxy}'")
+    logger.trace(f"plug:'{plug}' ln:'{ln}' nn:'{nn}' en:'{en}' pxy:'{pxy}'")
     re_divider = re.search(r'(?i)[^-_\s]+(?=[-_\s]*divider)', ln)
     if '.' in plug:
         node, node_attr = plug.split('.', 1)
@@ -908,7 +908,7 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
         plug = f"{node}.{ln}"
         node_attr = ln
     if exists and not attribute_is_reusable(node, node_attr, pxy):
-        logger.debug(f"cannot edit '{plug}' into wanted definition, rebuilding")
+        logger.trace(f"cannot edit '{plug}' into wanted definition, rebuilding")
         exists = not remove_attribute(node, node_attr)
         if exists and pxy:
             # Undeletable (static) attribute in the way of a proxy. Editing
@@ -929,7 +929,7 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
             cmds.addAttr(plug, nn=nn, at='enum', e=1, en=en, dv=dv, k=1)
         else:
             cmds.addAttr(plug, nn=nn, at='enum', e=1, en='Hide:Show', dv=dv, k=1)
-        logger.debug(f'edited attribute {plug}')
+        logger.trace(f'edited attribute {plug}')
     else:
         if re_divider:
             if en:
@@ -943,7 +943,7 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
             cmds.addAttr(node, ln=ln, nn=nn, at='enum', en=en, dv=dv, k=1)
         else:
             cmds.addAttr(node, ln=ln, nn=nn, at='enum', en='Hide:Show', dv=dv, k=1)
-        logger.debug(f"added attribute {node}.{ln}")
+        logger.trace(f"added attribute {node}.{ln}")
 
 
 # GEOMETRY BINDING =====================================================
@@ -996,7 +996,7 @@ def bind_geometry(rigname):
 
     geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
     if not cmds.objExists(geometry_grp):
-        logger.debug(f'Geometry group not found, skip bind')
+        logger.trace(f'Geometry group not found, skip bind')
         return
 
     # Full paths: descendant short names are frequently ambiguous under a
@@ -1004,7 +1004,7 @@ def bind_geometry(rigname):
     # and an ambiguous name binds the skinCluster to the wrong mesh
     geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
     if not geos:
-        logger.debug(f'No geometry under {geometry_grp}, skip bind')
+        logger.trace(f'No geometry under {geometry_grp}, skip bind')
         return
 
     bound = []
@@ -1016,7 +1016,7 @@ def bind_geometry(rigname):
                                  f'{geo_leaf}_skinCluster')
                 bound.append(geo_leaf)
     if not bound:
-        logger.debug(f'{rigname}: No geometry named after rig part, skip bind')
+        logger.trace(f'{rigname}: No geometry named after rig part, skip bind')
 
 
 def unbind_geometry(rigname):
@@ -1026,7 +1026,7 @@ def unbind_geometry(rigname):
     Arguments:
         rigname (str): Rig component name
     '''
-    logger.debug(f"{rigname}: Unbind geometry")
+    logger.trace(f"{rigname}: Unbind geometry")
     geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
     if cmds.objExists(geometry_grp):
         # Full paths: descendant short names are frequently ambiguous
@@ -1043,7 +1043,7 @@ def unbind_geometry_all():
     '''
     Get geometry and unbind all skinclusters.
     '''
-    logger.debug(f"Unbind geometry")
+    logger.trace(f"Unbind geometry")
     geos = get_geometry_from_scene()
     for geo in geos:
         if is_geometry(geo):
@@ -1100,21 +1100,21 @@ def bind_skincluster(joints, node, name):
     if not cmds.objExists(node):
         logger.warning(f'Node does not exist: {node}')
         return None
-    logger.debug(f"Bind skinCluster '{name}' to object '{node}'")
+    logger.trace(f"Bind skinCluster '{name}' to object '{node}'")
 
     # Check if skinCluster already exists
     existing_skin = cmds.ls(cmds.listHistory(node), type='skinCluster')
     if existing_skin:
-        logger.debug(f'SkinCluster already exists on {node}: {existing_skin[0]}')
+        logger.trace(f'SkinCluster already exists on {node}: {existing_skin[0]}')
 
         # Check if it's the same joints
         existing_influences = cmds.skinCluster(existing_skin[0], q=True, inf=True)
         if existing_influences is not None and set(existing_influences) == set(joints):
-            logger.info(f'Reusing existing skinCluster: {existing_skin[0]}')
+            logger.debug(f'Reusing existing skinCluster: {existing_skin[0]}')
             return existing_skin[0]
         else:
             # Different joints or failed query, need to unbind first
-            logger.info(f'Removing old skinCluster {existing_skin[0]} (different joints or invalid)')
+            logger.debug(f'Removing old skinCluster {existing_skin[0]} (different joints or invalid)')
             poses = cmds.listConnections(f'{existing_skin[0]}.bindPose',
                                          s=True, d=False) or []
             cmds.delete(existing_skin[0])

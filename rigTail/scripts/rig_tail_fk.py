@@ -20,7 +20,7 @@ Credits:
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup, raise_build_error
+from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -52,7 +52,7 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
         curve (str): NURBS curve along joint chain
         controls (list): List of Variable FK control names
     '''
-    logger.debug(f"{rigname}: Add control curveInfo")
+    logger.trace(f"{rigname}: Add control curveInfo")
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     curveinfo = rt_mya.create_curveinfo(rigname, curve, rt_cst.TYPE_FK)
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
@@ -72,7 +72,7 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
         if ctrlgrp:
             ctrlgrp = ctrlgrp[0]
         else:
-            raise_build_error(logger, f'Could not get parent of control {ctrl}.')
+            abort_build(logger, f'Could not get parent of control {ctrl}.')
 
         # multDoubleLinear: Scale control position to range(0,1)
         ctrlpos = f'{ctrl_name}_control_position_multDoubleLinear'
@@ -133,7 +133,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
         sdks (list): SDK groups corresponding to this control's layer
     '''
     ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', n+1)
-    logger.debug(f"Setup Falloff Rotations for '{ctrl}'")
+    logger.trace(f"Setup Falloff Rotations for '{ctrl}'")
     control = f'{typ}_{rigname}_{n+1:02d}'
 
     if len(sdks) != len(joints):
@@ -319,7 +319,7 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
     Return
         fkjnt_grp (str): Top group containing entire FK joint chain with SDK groups
     '''
-    logger.debug(f'{rigname}: Create {rt_cst.NUM_CTRL_FK + 1} SDK groups above '
+    logger.trace(f'{rigname}: Create {rt_cst.NUM_CTRL_FK + 1} SDK groups above '
                  f'each of {len(joints)} {typ} joints '
                  f"('{joints[0]}' .. '{joints[-1]}')")
     basejnt = joints[0]
@@ -328,17 +328,17 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
     first_sdk_grp = None
 
     if cmds.objExists(fkjnt_grp):
-        logger.debug(f"fkjnt_grp exists:'{fkjnt_grp}' basectrl:'{basectrl}'")
+        logger.trace(f"fkjnt_grp exists:'{fkjnt_grp}' basectrl:'{basectrl}'")
         rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
     else:
         # Check if first_sdk_grp has a parent that could be fkjnt_grp
         first_sdk_parent = cmds.listRelatives(first_sdk_grp, p=True, typ='transform')
         if first_sdk_parent:
-            logger.debug(f"fkjnt_grp found:'{first_sdk_parent[0]}' basectrl:'{basectrl}'")
+            logger.trace(f"fkjnt_grp found:'{first_sdk_parent[0]}' basectrl:'{basectrl}'")
             fkjnt_grp = cmds.rename(first_sdk_parent[0], fkjnt_grp)
             rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
         else:
-            logger.debug(f"Create new fkjnt_grp:'{fkjnt_grp}' basectrl:'{basectrl}'")
+            logger.trace(f"Create new fkjnt_grp:'{fkjnt_grp}' basectrl:'{basectrl}'")
             rt_mya.create_group(fkjnt_grp)
             rt_mya.match_transform(fkjnt_grp, basectrl, moc=0)
 
@@ -409,7 +409,7 @@ def get_sdk_groups(joints):
             ...
             sdk_list[NUM_CTRL_FK] = [control SDK group for each joint]
     '''
-    logger.debug('Get lists of SDK groups for all joints')
+    logger.trace('Get lists of SDK groups for all joints')
     sdk_list = [list() for n in range(rt_cst.NUM_CTRL_FK+1)]
     for jnt in joints:
         child = jnt
@@ -418,7 +418,7 @@ def get_sdk_groups(joints):
             if parent:
                 parent = parent[0]
             else:
-                raise_build_error(logger, f'{child} has no parent SDK group.')
+                abort_build(logger, f'{child} has no parent SDK group.')
             sdk_list[num].append(parent)
             child = parent
     return sdk_list
@@ -443,7 +443,7 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         tmp_grp = cmds.group(em=True, n=f'{jnt}_tmp')
         cmds.matchTransform(tmp_grp, jnt)
         rt_mya.parent_to(jnt, tmp_grp, a=1) # Unparent joint
-        logger.debug(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
+        logger.trace(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
 
         # Move first_sdk_grp under joint's parent
         rt_mya.parent_to(first_sdk_grp, jnt_parent)

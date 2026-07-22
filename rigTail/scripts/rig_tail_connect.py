@@ -97,7 +97,7 @@ def connect_root(fk, ik):
     rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
     skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP)
     clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
-    logger.info(f'Connect root \'{root_ctrl}\'')
+    logger.debug(f'Connect root \'{root_ctrl}\'')
     rt_mya.parent_to(root_ctrl, control_grp)
 
     if fk and ik:
@@ -153,7 +153,7 @@ def connect_root(fk, ik):
 def connect_cog(fk, ik):
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    logger.info(f'Connect cog \'{cog_ctrl}\'')
+    logger.debug(f'Connect cog \'{cog_ctrl}\'')
     rt_mya.parent_to(cog_ctrl, root_ctrl)
 
     if ik:
@@ -163,7 +163,7 @@ def connect_basectrl(rigname, fk, ik):
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
     basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    logger.info(f'{rigname}: Connect basectrl \'{basectrl}\'')
+    logger.debug(f'{rigname}: Connect basectrl \'{basectrl}\'')
 
     rt_mya.parent_to(basectrl_grp, cog_ctrl)
 
@@ -183,7 +183,7 @@ def connect_basectrl(rigname, fk, ik):
 def connect_fk(rigname, fk, ik):
     if not fk:
         return
-    logger.info(f'{rigname}: Connect FK')
+    logger.debug(f'{rigname}: Connect FK')
 
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
     fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
@@ -231,7 +231,7 @@ def connect_spline_fk(rigname):
 def connect_ik(rigname, fk, ik):
     if not ik:
         return
-    logger.info(f'{rigname}: Connect IK')
+    logger.debug(f'{rigname}: Connect IK')
 
     ik_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK)
     ikjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_IK)
@@ -256,7 +256,7 @@ def connect_ik(rigname, fk, ik):
 
 def connect_spline_ik(rigname):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
-    logger.debug(f'ik_controls {ik_controls} ik_ctrlgrps {ik_ctrlgrps}')
+    logger.trace(f'ik_controls {ik_controls} ik_ctrlgrps {ik_ctrlgrps}')
 
     spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_IK)
     driver_curve = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
@@ -282,13 +282,13 @@ def connect_spline_ik(rigname):
 # CONNECT EFFECTS =====================================================
 
 def connect_effects(rigname, fk, ik):
-    logger.info(f'{rigname}: Connect animation effects')
+    logger.debug(f'{rigname}: Connect animation effects')
 
     if rt_cst.EFFECTS['stretchy']:
         connect_stretch(rigname, fk, ik)
 
 def connect_stretch(rigname, fk, ik):
-    logger.info(f'{rigname}: Connect stretch')
+    logger.debug(f'{rigname}: Connect stretch')
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
     stretch_remap = f'{rigname}_stretch_remap_multiplyDivide'
@@ -360,14 +360,14 @@ def add_proxy_attributes_to_controls(rigname, control, typ):
 # CONSTRAINTS ==========================================================
 
 def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
-    logger.debug(f"{rigname}: Constrain clusters to spline controls")
+    logger.trace(f"{rigname}: Constrain clusters to spline controls")
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
 
     cluster_handles = list()
     for NN in range(1, rt_cst.NUM_CTRL_IK+1):
         cluster_handle = rt_nam.fstr(rigname, rt_cst.CLUSTER_HANDLE, typ, NN)
         cluster_handles.append(cluster_handle)
-    logger.debug(f'Get cluster handles for spline constraint:\n{cluster_handles}')
+    logger.trace(f'Get cluster handles for spline constraint:\n{cluster_handles}')
 
     # Constraint targets per cluster: W0=spline, W1=ik, W2=float.
     # IK and Float controls map 1:1 to clusters; the spline target
@@ -382,7 +382,7 @@ def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
                           clstr]
         cluster_constr = cmds.parentConstraint(constrain_objs)[0]
         spline_constraints.append(cluster_constr)
-    logger.debug(f'constraints {spline_constraints}')
+    logger.trace(f'constraints {spline_constraints}')
 
     cmds.parentConstraint(ik_controls['spline'][0], ik_controls['spline'][4], ik_ctrlgrps['spline'][2], mo=1)
 
@@ -435,7 +435,7 @@ def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
         rt_mya.sdk(ikfk_attr, f'{ikjnt_grp}.visibility', dv=mode, v=v)
 
 def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
-    logger.debug(f"{rigname}: Space switching for upvec")
+    logger.trace(f"{rigname}: Space switching for upvec")
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
     ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
 

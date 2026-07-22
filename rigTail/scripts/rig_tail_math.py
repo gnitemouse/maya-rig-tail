@@ -19,7 +19,7 @@ Functions:
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-from logger_config import logger_setup, raise_build_error
+from logger_config import logger_setup, abort_build
 import math
 
 logger = logger_setup(__name__)
@@ -150,7 +150,7 @@ def get_local_orientation(nodes, tol=1e-5):
     sign = '+' if dots[max_axis] > 0 else '-'
 
     result = f'{sign}{max_axis}'
-    logger.debug(f'Joint chain direction: {result}')
+    logger.trace(f'Joint chain direction: {result}')
     return result
 
 
@@ -254,4 +254,4 @@ def axis_vector_colinearity(node, vec):
     elif maxi == z:
         return 'z'
     else:
-        raise_build_error(logger, 'Failed to compute axis vector colinearity.')
+        abort_build(logger, 'Failed to compute axis vector colinearity.')

@@ -58,7 +58,7 @@ def build_matrix_offset_network(rigname, fk, ik):
         ik (bool): If True, use IK joints as drivers (preferred when both True)
     '''
 
-    logger.info(f'{rigname}: Building matrix OPM network')
+    logger.debug(f'{rigname}: Building matrix OPM network')
 
     if rigname not in rt_cst.JOINTS_BN:
         logger.warning(f'{rigname}: No BN joints found')
@@ -77,7 +77,7 @@ def build_matrix_offset_network(rigname, fk, ik):
     if rt_cst.EFFECTS.get('noise'):
         fx_list.append('noise')
 
-    logger.info(f'{rigname}: Zeroing OPM and local TRS on {len(joints)} BN joints')
+    logger.debug(f'{rigname}: Zeroing OPM and local TRS on {len(joints)} BN joints')
 
     # Zero everything before building network (no bind-time baking)
     identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -90,7 +90,7 @@ def build_matrix_offset_network(rigname, fk, ik):
         if cmds.attributeQuery('jointOrient', node=bn_jnt, exists=True):
             cmds.setAttr(f'{bn_jnt}.jointOrient', 0, 0, 0)
 
-    logger.info(f'{rigname}: Building runtime matrix networks')
+    logger.debug(f'{rigname}: Building runtime matrix networks')
 
     for i, bn_jnt in enumerate(joints):
         driver_jnt = _get_driver_joint(rigname, i, fk, ik)
@@ -102,7 +102,7 @@ def build_matrix_offset_network(rigname, fk, ik):
         else:
             logger.warning(f'{rigname}: No driver for {bn_jnt} at index {i}')
 
-    logger.info(
+    logger.debug(
         f'{rigname}: Matrix OPM network complete '
         f'({len(joints)} joints, {len(fx_list)} FX layers)'
     )

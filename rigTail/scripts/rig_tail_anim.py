@@ -70,7 +70,7 @@ def build_anim_effects(rigname, fk, ik):
         fk (bool): Connect FK anim effects
         ik (bool): Connect IK anim effects
     '''
-    logger.info(f'{rigname}: Build Animation Effects (Matrix-Per-FX)')
+    logger.debug(f'{rigname}: Build Animation Effects (Matrix-Per-FX)')
 
     if rigname not in rt_cst.JOINTS_BN:
         logger.warning(f'{rigname}: No BN joints found')
@@ -91,7 +91,7 @@ def build_anim_effects(rigname, fk, ik):
         build_noise(rigname, basectrl, joints, loop_time)
 
 def add_anim_attributes_to_basectrl(rigname, basectrl):
-    logger.info(f'{rigname}: Add animation effect attributes to basectrl')
+    logger.debug(f'{rigname}: Add animation effect attributes to basectrl')
 
     if rt_cst.effects_enabled():
         rt_mya.add_attribute_enum(basectrl, rt_cst.ANIM_DIVIDER[0], rt_cst.ANIM_DIVIDER[1], rt_cst.ANIM_DIVIDER[2])
@@ -143,7 +143,7 @@ def build_loop(rigname, basectrl):
     Returns:
         str: Output attr plug for loop time (e.g.'node.loop_time')
     '''
-    logger.debug(f'{rigname}: Loop System (Modulo Time)')
+    logger.trace(f'{rigname}: Loop System (Modulo Time)')
     modulo_expr = f'{rigname}_loop_time_expression'
     loop_time = f'{rigname}_loop_time'
 
@@ -167,7 +167,7 @@ if ($loop_enabled > 0.5) {{
 
     delete_expression(modulo_expr)
     cmds.expression(n=modulo_expr, s=expr_code, o='', ae=1, uc='all')
-    logger.info(f'{rigname}: Loop expression built: {modulo_expr}')
+    logger.debug(f'{rigname}: Loop expression built: {modulo_expr}')
     return f'{loop_time}.loop_time'
 
 
@@ -187,7 +187,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
         joints (list): List of BN joints (joint 00 will be skipped in matrix network)
         loop_time (str): Optional loop time output plug
     '''
-    logger.debug(f'{rigname}: Wave Animation Effect')
+    logger.trace(f'{rigname}: Wave Animation Effect')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for wave')
         return
@@ -211,7 +211,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
             compose_node = f'{rigname}_{NN:02d}_wave_composeMatrix'
 
             if not cmds.objExists(compose_node):
-                logger.debug(f'{compose_node} does not exist, skipping wave expression')
+                logger.trace(f'{compose_node} does not exist, skipping wave expression')
                 continue
 
 
@@ -245,7 +245,7 @@ float $out = $val * $amp * $w;
             delete_expression(expr)
             cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
 
-    logger.info(f'{rigname}: Wave effect built')
+    logger.debug(f'{rigname}: Wave effect built')
 
 
 # CURL =================================================================
@@ -266,7 +266,7 @@ def build_curl(rigname, basectrl, joints):
         basectrl (str): Base control with curl attributes
         joints (list): List of BN joints (joint 00 will be skipped)
     '''
-    logger.debug(f'{rigname}: Curl Animation Effect')
+    logger.trace(f'{rigname}: Curl Animation Effect')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for curl')
         return
@@ -311,9 +311,9 @@ def build_curl(rigname, basectrl, joints):
 
             if cmds.objExists(compose_node):
                 ensure_connect(f'{curl_mult}.outputX', f'{compose_node}.inputRotate{rot_axis}')
-                logger.debug(f'Connected curl{rot_axis} to {compose_node}')
+                logger.trace(f'Connected curl{rot_axis} to {compose_node}')
 
-    logger.info(f'{rigname}: Curl effect built')
+    logger.debug(f'{rigname}: Curl effect built')
 
 
 # NOISE ================================================================
@@ -331,7 +331,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
     - Deterministic per-joint/axis seed for stable but different motion per joint/axis
     - When loop_time is provided, uses integer harmonic counts so the animation loops exactly
     '''
-    logger.debug(f'{rigname}: Noise Effect (wavy, loopable)')
+    logger.trace(f'{rigname}: Noise Effect (wavy, loopable)')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for noise')
         return
@@ -357,7 +357,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
             axis_seed = axis_offsets[axis]
 
             if not cmds.objExists(compose_node):
-                logger.debug(f'{compose_node} does not exist, skipping noise expression')
+                logger.trace(f'{compose_node} does not exist, skipping noise expression')
                 continue
 
             expr_code = f'''
@@ -419,4 +419,4 @@ float $out = $noise * $amp * $fall;
             delete_expression(expr)
             cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
 
-    logger.info(f'{rigname}: Noise effect built')
+    logger.debug(f'{rigname}: Noise effect built')

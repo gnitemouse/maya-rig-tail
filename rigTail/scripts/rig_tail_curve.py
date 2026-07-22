@@ -38,8 +38,8 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
         curve (str): Name of created curve, or None if creation failed
     '''
     curve = rt_nam.fstr(rigname, rt_cst.CURVE, typ, TAG=tag)
-    logger.info(f"{rigname}: Create curve '{curve}'")
-    logger.debug(f'jnt_pos len{len(jnt_pos)} {jnt_pos}')
+    logger.debug(f"{rigname}: Create curve '{curve}'")
+    logger.trace(f'jnt_pos len{len(jnt_pos)} {jnt_pos}')
 
     # Rebuild-safe: reuse the existing curve untouched. This path is only
     # reached when joints are unchanged (cleanup_connections); recreating
@@ -47,7 +47,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     # connections. A real joint change goes through cleanup_rigname, which
     # deletes the curve first.
     if cmds.objExists(curve):
-        logger.debug(f"Curve '{curve}' exists, reusing")
+        logger.trace(f"Curve '{curve}' exists, reusing")
         return curve
 
     # Validate input
@@ -86,7 +86,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     rt_mya.parent_to(curve, spline_grp)
 
     num_cv = cmds.getAttr(f'{curve}.controlPoints', size=True)
-    logger.debug(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
+    logger.trace(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
     return curve
 
 def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
@@ -112,7 +112,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         solver_curve (str): Curve used by ikHandle (minimal CV set)
         typ (str): Type identifier (TYPE_IK)
     '''
-    logger.debug(f"Connect driver curve '{driver_curve}' to solver curve '{solver_curve}'")
+    logger.trace(f"Connect driver curve '{driver_curve}' to solver curve '{solver_curve}'")
 
     # Get curve shape nodes for connections
     driver_shape = cmds.listRelatives(driver_curve, s=1, ni=1)[0]
@@ -132,9 +132,9 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
     driver_max_param = cmds.getAttr(f'{driver_curve}.maxValue')
     driver_param_range = driver_max_param - driver_min_param
 
-    logger.debug(f'Solver CVs: {solver_num_cv}, Driver CVs: {driver_num_cv}')
-    logger.debug(f'Solver param range: {solver_min_param:.3f} to {solver_max_param:.3f}')
-    logger.debug(f'Driver param range: {driver_min_param:.3f} to {driver_max_param:.3f}')
+    logger.trace(f'Solver CVs: {solver_num_cv}, Driver CVs: {driver_num_cv}')
+    logger.trace(f'Solver param range: {solver_min_param:.3f} to {solver_max_param:.3f}')
+    logger.trace(f'Driver param range: {driver_min_param:.3f} to {driver_max_param:.3f}')
 
     # Create pointOnCurveInfo nodes for each solver curve CV (reuse existing)
     for cv_i in range(solver_num_cv):
@@ -154,7 +154,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
             driver_param = driver_min_param + (driver_param_range * t)
 
         cmds.setAttr(f'{poci}.parameter', driver_param)
-        logger.debug(f'CV {cv_i}: parameter {driver_param:.3f}')
+        logger.trace(f'CV {cv_i}: parameter {driver_param:.3f}')
 
         # Connect position to solver curve CV
         rt_mya.ensure_connect(f'{poci}.positionX',
@@ -164,7 +164,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         rt_mya.ensure_connect(f'{poci}.positionZ',
                               f'{solver_shape}.controlPoints[{cv_i}].zValue')
 
-    logger.debug(f'Created {solver_num_cv} pointOnCurveInfo connections')
+    logger.trace(f'Created {solver_num_cv} pointOnCurveInfo connections')
 
     # Store driver curve reference on solver curve for cleanup and debugging
     if not cmds.attributeQuery('driver_curve', n=solver_curve, ex=1):
@@ -214,7 +214,7 @@ def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
 
     # Get curve CV information
     num_cv, _spans, _degree = rt_mya.get_num_cv(spline_list[2])
-    logger.debug(f"ikHandle curve '{spline_list[2]}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
+    logger.trace(f"ikHandle curve '{spline_list[2]}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
     # Replace ikHandle's curve with our solver curve
     # Get shape nodes
@@ -295,7 +295,7 @@ def get_spline_handle(rigname, joints=None):
             logger.warning(f'IK handle joint mismatch')
             return []
 
-    logger.debug(f'({spline_handle}, {effector}, {curve})')
+    logger.trace(f'({spline_handle}, {effector}, {curve})')
     return (spline_handle, effector, curve)
 
 def search_spline_handle(rigname, joints=None, typ=rt_cst.TYPE_IK):
@@ -329,7 +329,7 @@ def search_spline_handle(rigname, joints=None, typ=rt_cst.TYPE_IK):
                 spline_list = [ikhandle,
                                cmds.ikHandle(ikhandle, q=1, ee=1),
                                cmds.ikHandle(ikhandle, q=1, c=1).split('|')[-2]]
-                logger.debug(f'Found ikHandle {spline_list}')
+                logger.trace(f'Found ikHandle {spline_list}')
                 return spline_list
         return None
     else: # Find ikHandle by name
@@ -384,14 +384,14 @@ def create_cluster(cluster_names, curve, cv_i):
     cluster_node, cluster_handle = cluster_names
 
     if cmds.objExists(cluster_node):
-        logger.debug(f'Cluster exists: {cluster_node}')
+        logger.trace(f'Cluster exists: {cluster_node}')
         return [cluster_node, cluster_handle]
     else:
         if isinstance(cv_i, int):
             cv_target = f'{curve}.cv[{cv_i}]'
         else:
             cv_target = cv_i
-        logger.debug(f'Creating cluster: {cluster_node} on {cv_target}')
+        logger.trace(f'Creating cluster: {cluster_node} on {cv_target}')
         cluster = cmds.cluster(cv_target, n=cluster_node, rel=False)
         return cluster
 
@@ -421,7 +421,7 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
         logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
         return []
 
-    logger.info(f"Create clusters on curve '{curve}'")
+    logger.debug(f"Create clusters on curve '{curve}'")
     clusters = list()
 
     # Clean up old clusters, including their handle transforms:
@@ -439,7 +439,7 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
 
     # Get curve CV information
     num_cv, _spans, _degree = rt_mya.get_num_cv(curve)
-    logger.debug(f"Curve '{curve}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
+    logger.trace(f"Curve '{curve}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
     # Create clusters based on type
     if typ == rt_cst.TYPE_FK:
@@ -474,8 +474,8 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     for cluster_node, cluster_handle in clusters:
         rt_mya.parent_to(cluster_handle, cluster_grp)
         cmds.setAttr(f'{cluster_handle}.displayHandle', show_handle)
-        logger.debug(f'[{cluster_node}, {cluster_handle}],')
+        logger.trace(f'[{cluster_node}, {cluster_handle}],')
 
-    logger.debug(f'Created {len(clusters)} clusters for {typ}')
+    logger.trace(f'Created {len(clusters)} clusters for {typ}')
     cmds.select(clear=True)
     return clusters

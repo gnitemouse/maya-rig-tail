@@ -42,7 +42,7 @@ Functions:
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup, raise_build_error
+from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
@@ -72,12 +72,12 @@ def build_stretch(rigname, curve, joints, typ):
         joints (str list): List of joint names
         typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
     '''
-    logger.info(f"{typ}_{rigname}: Build Stretch")
+    logger.debug(f"{typ}_{rigname}: Build Stretch")
 
     # Create curveInfo for measurement
     curvelen = set_curveinfo_stretch(rigname, curve, typ)
     if not curvelen:
-        logger.error('Failed to create scale curveInfo')
+        abort_build(logger, 'Failed to create scale curveInfo')
         return
 
     # Create remap nodes (will be connected in connect phase)
@@ -115,7 +115,7 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
         fk (bool): Connect FK stretch
         ik (bool): Connect IK stretch
     '''
-    logger.debug(f'{rigname}: Connect stretch to joints')
+    logger.trace(f'{rigname}: Connect stretch to joints')
 
     # Connect preserveVolume attribute to squash blend
     squash_blend = f'{rigname}_squash_volume_blendTwoAttr'
@@ -192,7 +192,7 @@ def remap_stretch_attr(rigname):
         cmds.setAttr(f'{squash_remap}.operation', 1)  # multiply
         cmds.setAttr(f'{squash_remap}.input2X', 0.05)
 
-    logger.debug(f"Created remap nodes '{stretch_remap}' '{squash_remap}'")
+    logger.trace(f"Created remap nodes '{stretch_remap}' '{squash_remap}'")
     return stretch_remap, squash_remap
 
 def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
@@ -218,9 +218,9 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         crvlen = f'{curvelen}.outValue'
         initial_len = cmds.getAttr(f'{curvelen}.outputMax')
     else:
-        logger.error(f'Unrecognized curvelen {curvelen}')
+        abort_build(logger, f'Unrecognized curvelen {curvelen}')
         return
-    logger.debug(f'curvelen {curvelen} initial_len {initial_len:.3f}')
+    logger.trace(f'curvelen {curvelen} initial_len {initial_len:.3f}')
 
     if initial_len <= 0:
         # Degenerate rest length would make the reactive ratio divide
@@ -293,7 +293,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
 
     else:
-        raise_build_error(logger, f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+        abort_build(logger, f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
 
     return stretch_ratio
 
@@ -318,7 +318,7 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
     elif cmds.nodeType(curvelen) == 'remapValue':
         crvlen = f'{curvelen}.outValue'
     else:
-        raise_build_error(logger, f'Unrecognized curvelen {curvelen}')
+        abort_build(logger, f'Unrecognized curvelen {curvelen}')
 
     # (multiplyDivide) squash_vol - Inverse sqrt for volume preservation
     # Shared between FK and IK builds; the IK stretch ratio wins when both
@@ -348,7 +348,7 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
         cmds.connectAttr(f'{squash_blend}.output', f'{squash_pma}.input1D[0]', f=1)
         cmds.connectAttr(f'{squash_remap}.outputX', f'{squash_pma}.input1D[1]', f=1)
 
-    logger.debug(f"Created squash nodes '{squash_vol}' '{squash_blend}' '{squash_pma}'")
+    logger.trace(f"Created squash nodes '{squash_vol}' '{squash_blend}' '{squash_pma}'")
     return squash_blend, squash_pma
 
 def create_world_scale(rigname, squash_pma):
@@ -389,7 +389,7 @@ def create_world_scale(rigname, squash_pma):
         cmds.connectAttr(f'{squash_pma}.output1D', f'{squash_world}.input1X', f=1)
         cmds.connectAttr(f'{scale_world}.outputX', f'{squash_world}.input2X', f=1)
 
-    logger.debug(f"Created world scale nodes '{scale_world}' '{squash_world}'")
+    logger.trace(f"Created world scale nodes '{scale_world}' '{squash_world}'")
     return scale_world, squash_world
 
 def create_joint_mult(rigname, joints, typ):
@@ -409,7 +409,7 @@ def create_joint_mult(rigname, joints, typ):
         stretch_jnt_mult (str list): Stretch joint multiplier nodes
         squash_jnt_mult (str list): Squash joint multiplier nodes
     '''
-    logger.debug(f"{rigname}: Create joint multiply nodes")
+    logger.trace(f"{rigname}: Create joint multiply nodes")
     # Stretch multiply nodes
     stretch_jnt_mult = list()
     if typ == rt_cst.TYPE_IK:
@@ -457,7 +457,7 @@ def connect_preserve_volume(rigname, basectrl, squash_blend):
         basectrl (str): Name of basectrl
         squash_blend (str): Volume preservation blend (reactive squash)
     '''
-    logger.debug(f"{rigname}: Connect preserveVolume to blend")
+    logger.trace(f"{rigname}: Connect preserveVolume to blend")
     if not cmds.attributeQuery('preserveVolume', n=basectrl, ex=1):
         logger.warning(f'preserveVolume attribute not found on {basectrl}')
         return
@@ -483,10 +483,10 @@ def connect_world_scale(rigname, basectrl, scale_world):
         basectrl (str): Name of basectrl
         scale_world (str): World scale volume based on scale_grp
     '''
-    logger.debug(f"{rigname}: Connect world scale")
+    logger.trace(f"{rigname}: Connect world scale")
     scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     if not cmds.objExists(scale_grp):
-        raise_build_error(logger, f'Scale group not found: {scale_grp}')
+        abort_build(logger, f'Scale group not found: {scale_grp}')
 
     # Constrain scale group to basectrl
     scale_constr = rt_mya.get_constraint(scale_grp, typ='scaleConstraint')
@@ -508,9 +508,9 @@ def connect_joint_squash(rigname, basectrl, squash_world):
         basectrl (str): Name of basectrl
         squash_world (str): World scale compensation node
     '''
-    logger.debug(f"{rigname}: Connect joint squash")
+    logger.trace(f"{rigname}: Connect joint squash")
     if not cmds.objExists(squash_world):
-        raise_build_error(logger, f'Missing squash world node: {squash_world}')
+        abort_build(logger, f'Missing squash world node: {squash_world}')
 
     for i, jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
         jnt_mult = f'{rigname}_squash_{i:02d}_multiplyDivide'
@@ -544,9 +544,9 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
         stretch_ratio (str): Stretch ratio multiplier
         typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
     '''
-    logger.debug(f"{rigname}: Connect IK stretch to joints")
+    logger.trace(f"{rigname}: Connect IK stretch to joints")
     if not cmds.objExists(stretch_ratio):
-        raise_build_error(logger, f'Stretch ratio node not found: {stretch_ratio}')
+        abort_build(logger, f'Stretch ratio node not found: {stretch_ratio}')
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
@@ -569,10 +569,10 @@ def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
         stretch_ratio (str): Stretch ratio multiplier
         typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
     '''
-    logger.debug(f"{rigname}: Connect FK stretch to SDK groups")
+    logger.trace(f"{rigname}: Connect FK stretch to SDK groups")
 
     if not cmds.objExists(stretch_ratio):
-        raise_build_error(logger, f'Stretch ratio node not found: {stretch_ratio}')
+        abort_build(logger, f'Stretch ratio node not found: {stretch_ratio}')
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
@@ -608,7 +608,7 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
         scale_curveinfo (str): Scaling curveInfo node
     '''
     if not cmds.objExists(curve):
-        raise_build_error(logger, f'Curve {curve} does not exist')
+        abort_build(logger, f'Curve {curve} does not exist')
 
     # Create curveInfo on curve (reused on re-run)
     scale_crvinfo = f'{typ}_{rigname}_scale_curveInfo'
@@ -633,7 +633,7 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
     if initial_len <= 0:
         logger.warning(f"Curve '{curve}' - initial_len is invalid {initial_len:.3f}")
     else:
-        logger.debug(f"Curve '{curve}' - initial_len {initial_len:.3f}")
+        logger.trace(f"Curve '{curve}' - initial_len {initial_len:.3f}")
 
     return scale_crvinfo
 
@@ -655,7 +655,7 @@ def fallback_curve_length(rigname, typ):
     elif typ == rt_cst.TYPE_IK:
         joints = rt_cst.JOINTS_IK[rigname]
     else:
-        logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+        abort_build(logger, f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
         return None
 
     # Create remapValue node that outputs total joint chain length

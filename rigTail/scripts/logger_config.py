@@ -21,7 +21,7 @@ Levels, from least to most detail:
 
 Severity does not control flow. A message says how bad something is; it
 never decides whether the build stops. Code that cannot meaningfully
-continue calls raise_build_error(), which reports and then raises
+continue calls abort_build(), which reports and then raises
 RigTailBuildError for a caller to catch.
 
 This split matters because the two are independent: 'geometry override
@@ -118,7 +118,7 @@ def reset_levels():
             logging.getLogger(name).setLevel(logging.NOTSET)
 
 
-def raise_build_error(logger, message):
+def abort_build(logger, message):
     """
     Report that the build cannot continue, then stop it.
 
