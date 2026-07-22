@@ -43,7 +43,7 @@ Functions:
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-from logger_config import logger_setup
+from logger_config import logger_setup, raise_build_error
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import re
@@ -379,7 +379,7 @@ def opm(node):
         node (str): Node to bake transforms
     """
     if has_non_default_locked_attributes(node):
-        logger.error(f'Node {node} has at least one non default locked attribute(s)')
+        raise_build_error(logger, f'Node {node} has at least one non default locked attribute(s)')
 
     local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
     offset_parent_matrix = om.MMatrix(cmds.getAttr(f"{node}.offsetParentMatrix"))

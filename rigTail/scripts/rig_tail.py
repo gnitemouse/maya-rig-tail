@@ -51,7 +51,7 @@ Rig component {rigname}s can be changed under RIGPARTS in rig_tail_constants.py
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup
+from logger_config import logger_setup, raise_build_error
 import importlib as il
 
 import rig_tail_constants as rt_cst
@@ -259,7 +259,7 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     '''
     selected = cmds.ls(sl=True)
     if not selected:
-        logger.error('Select joint to rig tail')
+        raise_build_error(logger, 'Select joint to rig tail')
 
     rt_set.set_root(root)
     for jnt in selected:

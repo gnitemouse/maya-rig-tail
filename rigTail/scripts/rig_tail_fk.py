@@ -20,23 +20,12 @@ Credits:
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup
+from logger_config import logger_setup, raise_build_error
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
-
-# PROBE: build-stage diagnostics. rig_tail_test lives outside the module
-# path, so fall back to a no-op rather than let a diagnostic import
-# decide whether the rig can be built.
-try:
-    import rig_tail_test as rt_test
-except Exception:
-    class _NoProbe:
-        @staticmethod
-        def probe(*args, **kwargs):
-            pass
-    rt_test = _NoProbe()
+import rig_tail_test as rt_test   # PROBE: build-stage diagnostics
 
 logger = logger_setup(__name__)
 
@@ -83,7 +72,7 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
         if ctrlgrp:
             ctrlgrp = ctrlgrp[0]
         else:
-            logger.error(f'Could not get parent of control {ctrl}.')
+            raise_build_error(logger, f'Could not get parent of control {ctrl}.')
 
         # multDoubleLinear: Scale control position to range(0,1)
         ctrlpos = f'{ctrl_name}_control_position_multDoubleLinear'
@@ -429,7 +418,7 @@ def get_sdk_groups(joints):
             if parent:
                 parent = parent[0]
             else:
-                logger.error(f'{child} has no parent SDK group.')
+                raise_build_error(logger, f'{child} has no parent SDK group.')
             sdk_list[num].append(parent)
             child = parent
     return sdk_list

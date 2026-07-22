@@ -19,7 +19,7 @@ Functions:
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-from logger_config import logger_setup
+from logger_config import logger_setup, raise_build_error
 import math
 
 logger = logger_setup(__name__)
@@ -254,4 +254,4 @@ def axis_vector_colinearity(node, vec):
     elif maxi == z:
         return 'z'
     else:
-        logger.error('Failed to compute axis vector colinearity.')
+        raise_build_error(logger, 'Failed to compute axis vector colinearity.')

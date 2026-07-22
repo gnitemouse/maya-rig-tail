@@ -6,9 +6,10 @@ Diagnostics for the matrix-based FX rig (per-FX composeMatrix + OPM
 architecture). Read-only test_*/check_* functions validate a built rig;
 fix_* helpers mutate and are opt-in.
 
-Dev-only -- this file is NOT shipped in the rigTail module. It runs
-from the repo root and adds rigTail/scripts to sys.path so the
-rig_tail_* modules import without installing the module first.
+Ships with the rigTail module, alongside the rig_tail_* scripts it
+diagnoses. Keeping it here means there is one copy on sys.path: a second
+copy in ~/Documents/maya/scripts shadows this one, because Maya adds the
+user script directories ahead of module script directories.
 
 Usage:
     import rig_tail_test as rt_test
@@ -23,15 +24,6 @@ Usage:
     rt_test.test_time_evaluation()  # time-varying FX across frames
 '''
 import math
-import os
-import sys
-
-# Dev bootstrap: make the module scripts importable when running from the
-# repo root without installing the Maya module.
-_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'rigTail', 'scripts')
-if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om

@@ -42,7 +42,7 @@ Functions:
 '''
 
 import maya.cmds as cmds
-from logger_config import logger_setup
+from logger_config import logger_setup, raise_build_error
 import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
@@ -293,7 +293,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
 
     else:
-        logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+        raise_build_error(logger, f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
 
     return stretch_ratio
 
@@ -318,7 +318,7 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
     elif cmds.nodeType(curvelen) == 'remapValue':
         crvlen = f'{curvelen}.outValue'
     else:
-        logger.error(f'Unrecognized curvelen {curvelen}')
+        raise_build_error(logger, f'Unrecognized curvelen {curvelen}')
 
     # (multiplyDivide) squash_vol - Inverse sqrt for volume preservation
     # Shared between FK and IK builds; the IK stretch ratio wins when both
@@ -486,7 +486,7 @@ def connect_world_scale(rigname, basectrl, scale_world):
     logger.debug(f"{rigname}: Connect world scale")
     scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
     if not cmds.objExists(scale_grp):
-        logger.error(f'Scale group not found: {scale_grp}')
+        raise_build_error(logger, f'Scale group not found: {scale_grp}')
 
     # Constrain scale group to basectrl
     scale_constr = rt_mya.get_constraint(scale_grp, typ='scaleConstraint')
@@ -510,7 +510,7 @@ def connect_joint_squash(rigname, basectrl, squash_world):
     '''
     logger.debug(f"{rigname}: Connect joint squash")
     if not cmds.objExists(squash_world):
-        logger.error(f'Missing squash world node: {squash_world}')
+        raise_build_error(logger, f'Missing squash world node: {squash_world}')
 
     for i, jnt in enumerate(rt_cst.JOINTS_BN[rigname]):
         jnt_mult = f'{rigname}_squash_{i:02d}_multiplyDivide'
@@ -546,7 +546,7 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
     '''
     logger.debug(f"{rigname}: Connect IK stretch to joints")
     if not cmds.objExists(stretch_ratio):
-        logger.error(f'Stretch ratio node not found: {stretch_ratio}')
+        raise_build_error(logger, f'Stretch ratio node not found: {stretch_ratio}')
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
@@ -572,7 +572,7 @@ def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
     logger.debug(f"{rigname}: Connect FK stretch to SDK groups")
 
     if not cmds.objExists(stretch_ratio):
-        logger.error(f'Stretch ratio node not found: {stretch_ratio}')
+        raise_build_error(logger, f'Stretch ratio node not found: {stretch_ratio}')
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
@@ -608,7 +608,7 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
         scale_curveinfo (str): Scaling curveInfo node
     '''
     if not cmds.objExists(curve):
-        logger.error(f'Curve {curve} does not exist')
+        raise_build_error(logger, f'Curve {curve} does not exist')
 
     # Create curveInfo on curve (reused on re-run)
     scale_crvinfo = f'{typ}_{rigname}_scale_curveInfo'

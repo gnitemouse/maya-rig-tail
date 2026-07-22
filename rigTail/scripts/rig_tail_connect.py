@@ -43,16 +43,7 @@ import rig_tail_joint as rt_jnt
 from rig_tail_matrix import build_matrix_offset_network
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
-# rig_tail_test is dev-only and not shipped in the module, so a missing
-# copy must not stop rig_tail_connect from importing
-try:
-    import rig_tail_test as rt_test
-except Exception:
-    class _NoProbe:
-        @staticmethod
-        def probe(*args, **kwargs):
-            pass
-    rt_test = _NoProbe()
+import rig_tail_test as rt_test
 import re
 
 il.reload(rt_test)
