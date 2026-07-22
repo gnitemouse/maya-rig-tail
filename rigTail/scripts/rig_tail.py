@@ -99,12 +99,6 @@ il.reload(rt_test)
 
 logger = logger_setup(__name__)
 
-# Rig part the build-stage probes report on, or None for all of RIGPARTS.
-# The probe calls are marked '# PROBE' and are safe to delete; they only
-# read the scene. Set to None or a different part while investigating.
-# See rig_tail_test.probe() for how to read the output.
-PROBE_PART = 'C_fintail'
-
 
 # BUILD ================================================================
 
@@ -249,15 +243,10 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
     '''
     rt_set.set_root(root)
     rt_set.set_joints_auto()
-    rt_test.probe('1 after set_joints', PROBE_PART)      # PROBE
     rt_set.cleanup_rig(fk, ik)
-    rt_test.probe('2 after cleanup', PROBE_PART)         # PROBE
     rt_set.setup_rig(fk, ik)
-    rt_test.probe('3 after setup', PROBE_PART)           # PROBE
     build_rig_tail(fk, ik)
-    rt_test.probe('4 after build', PROBE_PART)           # PROBE
     rt_con.connect_rig_tail(fk, ik)
-    rt_test.probe('5 after connect', PROBE_PART)         # PROBE
 
 def rig_tail_selected(root=None, fk=True, ik=True):
     '''

@@ -25,7 +25,6 @@ import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
-import rig_tail_test as rt_test   # PROBE: build-stage diagnostics
 
 logger = logger_setup(__name__)
 
@@ -342,7 +341,6 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
             rt_mya.create_group(fkjnt_grp)
             rt_mya.match_transform(fkjnt_grp, basectrl, moc=0)
 
-    rt_test.probe(f'  sdk a: before groups ({typ})', rigname)   # PROBE
 
     # Create SDK groups for each joint (in reverse order for proper parenting)
     for jnt in reversed(joints):
@@ -385,13 +383,11 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
 
         put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp)
 
-    rt_test.probe(f'  sdk b: after groups ({typ})', rigname)    # PROBE
 
     # Move first_sdk_grp under fkjnt_grp
     rt_mya.parent_to(first_sdk_grp, fkjnt_grp)
     rt_mya.opm(first_sdk_grp)
 
-    rt_test.probe(f'  sdk c: after opm ({typ})', rigname)       # PROBE
     return fkjnt_grp
 
 def get_sdk_groups(joints):

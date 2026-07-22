@@ -633,6 +633,12 @@ class RigTailUI(QtWidgets.QDialog):
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
             QtWidgets.QMessageBox.information(self, 'Success', 'Rig built successfully!')
+            # Close on success only: a failed build leaves the window up so
+            # the settings that produced it can be corrected and retried.
+            # Every setting was written to rig_tail_constants above, and the
+            # window reads them back on construction, so closing loses
+            # nothing (see show_ui).
+            self.close()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to build rig:\n{str(e)}')
 
@@ -1228,7 +1234,26 @@ def get_maya_window():
     return wrapInstance(int(ptr), QtWidgets.QWidget)
 
 def show_ui():
-    '''Show the Tail Rig Builder, closing any previous instance.'''
+    '''
+    Show the Tail Rig Builder, closing any previous instance.
+
+    Settings are not held by the window. Every editor writes straight to
+    rig_tail_constants, and the window reads them back when it is built,
+    so closing and reopening keeps the current values and whichever
+    config file was loaded.
+
+    What does reset them is reloading rig_tail_constants, since that
+    re-executes the module and runs load_config() again. Reopening with
+
+        rig_tail.main()          (or rig_tail_ui.show_ui())
+
+    keeps the session's settings; the usual development snippet
+
+        il.reload(rig_tail); rig_tail.main()
+
+    reloads every module, constants included, and starts from the config
+    file or the module defaults.
+    '''
     global rig_tail_window
     try:
         rig_tail_window.close()
