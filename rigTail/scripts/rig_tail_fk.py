@@ -451,6 +451,13 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         rt_mya.reset_opm(first_sdk_grp)
         rt_mya.reset_transforms(first_sdk_grp)
         cmds.matchTransform(first_sdk_grp, jnt)
+        # Bake the joint's rest transform into offsetParentMatrix, which
+        # leaves local rotate at zero. falloff_rotation connects the
+        # variable-FK output to this group's rotate, so a rest
+        # orientation left there would be overwritten the moment that
+        # connection is made - silently flattening any chain whose joints
+        # are not already aligned with their parent.
+        rt_mya.opm(first_sdk_grp)
 
         # Move joint under last_sdk_grp
         rt_mya.parent_to(jnt, last_sdk_grp, a=1)
