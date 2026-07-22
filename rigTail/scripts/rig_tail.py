@@ -80,7 +80,12 @@ import rig_tail_connect as rt_con
 import rig_tail_ui as rt_ui
 import rig_tail_test as rt_test
 
-il.reload(rt_cst)
+# rig_tail_constants is deliberately NOT reloaded. It is the only module
+# holding session state: the settings edited in the UI, the loaded config
+# path, and the joint/rest caches all live there as module globals.
+# Reloading it re-executes the module and re-runs load_config(), which
+# silently discards everything the user set this session. Reload it by
+# hand (il.reload(rt_cst)) after editing naming templates or defaults.
 il.reload(rt_jnt)
 il.reload(rt_mat)
 il.reload(rt_mtx)
