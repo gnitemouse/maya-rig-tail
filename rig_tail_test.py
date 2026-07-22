@@ -40,6 +40,121 @@ import rig_tail_naming as rt_nam
 import rig_tail_anim as rt_ani
 
 
+# STAGE PROBE ================================================
+#
+# Find the build stage where a joint chain loses its shape.
+#
+# 'bend' is the total angle the chain turns through, summed over every
+# pair of consecutive bones. A chain that follows a curve has a bend of
+# tens of degrees; a chain that has been flattened into a straight line
+# reads 0. Print it at each stage of a build and the stage where the
+# number collapses is the stage that broke it.
+#
+# The per-joint lines then say WHERE the shape is currently held -
+# jointOrient, rotate, or offsetParentMatrix - so a stage that zeroes one
+# without baking it into another is visible directly.
+#
+# Read-only, and every call is wrapped so a probe can never break a build.
+
+IDENTITY_MTX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+
+def chain_bend(joints):
+    '''
+    Total angle (degrees) a joint chain turns through.
+
+    Arguments:
+        joints (list): Joint chain, base to tip
+
+    Return:
+        tuple: (total bend, largest single bend, number of bones measured)
+    '''
+    pts = [cmds.xform(j, q=1, ws=1, t=1) for j in joints if cmds.objExists(j)]
+    vecs = []
+    for i in range(len(pts) - 1):
+        v = [pts[i + 1][k] - pts[i][k] for k in range(3)]
+        length = math.sqrt(sum(c * c for c in v))
+        if length > 1e-9:                    # skip coincident joints
+            vecs.append([c / length for c in v])
+    angles = []
+    for i in range(len(vecs) - 1):
+        dot = sum(vecs[i][k] * vecs[i + 1][k] for k in range(3))
+        angles.append(math.degrees(math.acos(max(-1.0, min(1.0, dot)))))
+    return sum(angles), (max(angles) if angles else 0.0), len(vecs)
+
+
+def probe(stage='', rigname=None, count=4):
+    '''
+    Print the shape of every rig part's joint chains at one build stage.
+
+    Call at several points in a build and compare the bend column across
+    stages. Example, with the FK chain collapsing during the build phase:
+
+        [PROBE] after set_joints   C_fintail  BN bend=29.3  FK bend=29.3  IK bend=29.3
+        [PROBE] after build        C_fintail  BN bend=29.3  FK bend= 0.0  IK bend=29.3
+
+    Arguments:
+        stage (str): Label for this call site, printed on every line
+        rigname (str): Single rig part, or None for all of RIGPARTS
+        count (int): How many joints to detail per chain (0 for none)
+    '''
+    try:
+        parts = [rigname] if rigname else list(rt_cst.RIGPARTS)
+        for part in parts:
+            chains = [('BN', rt_cst.JOINTS_BN.get(part, [])),
+                      ('FK', rt_cst.JOINTS_FK.get(part, [])),
+                      ('IK', rt_cst.JOINTS_IK.get(part, []))]
+            summary = []
+            for label, joints in chains:
+                if not joints:
+                    summary.append(f'{label} -')
+                    continue
+                total, worst, bones = chain_bend(joints)
+                summary.append(f'{label} bend={total:6.1f} (max {worst:5.1f}, {bones} bones)')
+            print(f"[PROBE] {stage:<24} {part:<12} {'  '.join(summary)}")
+
+            if not count:
+                continue
+            for label, joints in chains:
+                if label == 'BN':
+                    continue          # BN is the reference, detail the drivers
+                for jnt in joints[:count]:
+                    print(f'[PROBE]     {probe_joint(jnt)}')
+    except Exception as exc:              # a probe must never break a build
+        print(f'[PROBE] {stage}: probe failed, {exc!r}')
+
+
+def probe_joint(jnt):
+    '''
+    One-line description of where a joint's transform is currently held.
+
+    Arguments:
+        jnt (str): Joint name
+
+    Return:
+        str: Joint name with jointOrient, rotate, translate, whether its
+            offsetParentMatrix is identity, and its parent
+    '''
+    if not cmds.objExists(jnt):
+        return f'{jnt}  MISSING'
+
+    def fmt(values):
+        return '(' + ', '.join(f'{v:7.2f}' for v in values) + ')'
+
+    jo = (cmds.getAttr(f'{jnt}.jointOrient')[0]
+          if cmds.attributeQuery('jointOrient', node=jnt, exists=True)
+          else (0.0, 0.0, 0.0))
+    rot = cmds.getAttr(f'{jnt}.rotate')[0]
+    tr = cmds.getAttr(f'{jnt}.translate')[0]
+    opm = cmds.getAttr(f'{jnt}.offsetParentMatrix')
+    opm_state = ('identity'
+                 if all(abs(a - b) < 1e-6 for a, b in zip(opm, IDENTITY_MTX))
+                 else 'SET')
+    parent = cmds.listRelatives(jnt, p=True) or ['(world)']
+    return (f'{jnt:<26} jo={fmt(jo)} r={fmt(rot)} t={fmt(tr)} '
+            f'opm={opm_state:<8} parent={parent[0]}')
+
+
 # TEST ORCHESTRATION =========================================
 
 def run_all(rigname='tail'):
