@@ -87,27 +87,48 @@ def get_axis_orientation(nodes, secondary_axis=False):
             return '+y'
 
 
-def get_local_orientation(nodes):
+def get_local_orientation(nodes, tol=1e-5):
     """
-    Determine which local axis the joint chain extends along.
-    Compares first joint's aim to second joint.
+    Determine which local axis of the first node the chain extends along.
+
+    Compares the first node against the nearest following node that is
+    actually offset from it, rather than against nodes[1] unconditionally:
+    joint chains often stack several joints on the same point (a driven
+    chain evaluates to its rest pose, an unbuilt chain may sit entirely at
+    its root), and a zero-length vector cannot name an axis.
+
+    Returns None rather than guessing when no node in the list is offset
+    from the first. Callers must treat that as "this chain has no
+    direction" - falling back to a default axis there silently orients the
+    whole rig component off a made-up value.
 
     Arguments:
         nodes (list): List of objects (minimum 2)
+        tol (float): Minimum distance for a node to count as offset
 
     Return:
-        str: '+x', '+y', '+z', '-x', '-y', or '-z'
+        str: '+x', '+y', '+z', '-x', '-y', or '-z', or None if the chain
+            direction cannot be determined
     """
     if len(nodes) < 2:
         logger.warning('Need at least 2 nodes to determine chain direction')
-        return '+x'
+        return None
 
-    # Get world positions
+    # First node that is actually offset from the root of the chain
     pos1 = cmds.xform(nodes[0], q=1, ws=1, t=1)
-    pos2 = cmds.xform(nodes[1], q=1, ws=1, t=1)
+    world_vec = None
+    for node in nodes[1:]:
+        pos2 = cmds.xform(node, q=1, ws=1, t=1)
+        vec = [pos2[i] - pos1[i] for i in range(3)]
+        mag = math.sqrt(sum(v * v for v in vec))
+        if mag > tol:
+            world_vec = [v / mag for v in vec]
+            break
 
-    # Get world space direction vector
-    world_vec = [pos2[i] - pos1[i] for i in range(3)]
+    if world_vec is None:
+        logger.error(f"'{nodes[0]}': every node within {tol} of the first, "
+                     f'cannot determine chain direction')
+        return None
 
     # Get joint's world matrix
     matrix = cmds.xform(nodes[0], q=1, ws=1, m=1)
@@ -117,21 +138,14 @@ def get_local_orientation(nodes):
     local_y = [matrix[4], matrix[5], matrix[6]]
     local_z = [matrix[8], matrix[9], matrix[10]]
 
-    # Normalize world_vec
-    mag = math.sqrt(sum(v * v for v in world_vec))
-    if mag > 0:
-        world_vec = [v / mag for v in world_vec]
-
     # Dot product to find which local axis aligns with world direction
     def dot(a, b):
         return sum(a[i] * b[i] for i in range(3))
 
-    dot_x = dot(world_vec, local_x)
-    dot_y = dot(world_vec, local_y)
-    dot_z = dot(world_vec, local_z)
-
     # Find max alignment
-    dots = {'x': dot_x, 'y': dot_y, 'z': dot_z}
+    dots = {'x': dot(world_vec, local_x),
+            'y': dot(world_vec, local_y),
+            'z': dot(world_vec, local_z)}
     max_axis = max(dots, key=lambda k: abs(dots[k]))
     sign = '+' if dots[max_axis] > 0 else '-'
 

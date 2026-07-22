@@ -106,7 +106,7 @@ COND = 'condition'
 CST = 'constraint'
 
 # Naming Template: controls, joints
-ROOT_CTRL = '{ROOT}_{CTRL}'
+ROOT_CTRL = 'root_{CTRL}'
 COG_CTRL = 'cog_{CTRL}'
 BASECTRL_GRP = '{TYPE}_{rigname}_base_{CTRL}_{GRP}'
 BASECTRL = '{TYPE}_{rigname}_base_{CTRL}'
@@ -258,14 +258,53 @@ SPLINE_TOP_SZ = 1.6
 SPLINE_CONTROLS_SZ = [SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_SZ,
                       SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ, SPLINE_MID_ROT_SZ]
 
+# Constants: preserve control shapes on rebuild, per control type.
+# True keeps an existing control's curves exactly as they are - size, CV
+# edits and colour - so hand-tuned shapes survive a re-rig. The matching
+# _SZ constant then has no effect on that control type.
+#
+# Only shapes are inherited. The control's attributes and connections are
+# rebuilt either way, so a preserved control cannot carry a previous rig's
+# wiring into the new one.
+#
+# Ignored when the control does not exist yet (nothing to preserve, so it
+# is built from the constants), and ignored on a full teardown, where the
+# control layout itself changes and old shapes no longer correspond.
+#
+# root and cog default to True: they sit above the rig parts and are
+# usually built once for the whole character, not per tail.
+PRESERVE_CTRL = {
+    'root': True,
+    'cog': True,
+    'base': False,
+    'varfk': False,
+    'fk': False,
+    'ik': False,
+    'float': False,
+    'spline': False,
+    'upvec': False
+    }
+
 
 # OTHER ================================================================
 
+# Base control orientation offsets, keyed by the joint chain's LOCAL aim
+# axis (from get_local_orientation) - the local axis of the first joint
+# that points down the chain.
+#
+# Each value is the euler rotation that turns the base control group's
+# local +Y onto that aim axis, so +Y always runs down the tail and the
+# control circle (normal -Y) always sits perpendicular to it, whichever
+# way the tail happens to point in world space.
+#
+# The x/y entries are pure Z rotations so the joint's own Z axis carries
+# through untouched. That matters because orient_control_aims() reads the
+# base control's Z as the world-up for every IK/Float/Spline control.
 ROT_AXIS_DICT = {
-    '+x': (0, -90, 90),
-    '-x': (0, 90, 90),
+    '+x': (0, 0, -90),
+    '-x': (0, 0, 90),
     '+y': (0, 0, 0),
-    '-y': (0, 180, 0),
+    '-y': (0, 0, 180),
     '+z': (90, 0, 0),
     '-z': (-90, 0, 0)
     }
@@ -414,6 +453,9 @@ def get_user_editable_config():
         'NUM_CTRL_FK': NUM_CTRL_FK,
         'NUM_CTRL_IK': NUM_CTRL_IK,
 
+        # Constants: preserve control shapes
+        'PRESERVE_CTRL': PRESERVE_CTRL,
+
         # Constants: control size
         'ROOT_CTRL_SZ': ROOT_CTRL_SZ,
         'COG_CTRL_SZ': COG_CTRL_SZ,
@@ -472,7 +514,7 @@ def load_config(filepath=None):
     global RIG_SYSTEMS_GRP, CLUSTERS_GRP, SCALE_GRP
     global IKFK, IKFK_MODES_ALL, IKFK_MODES, IKFK_SWITCH, IKFK_DIVIDER
     global STRETCH_DIVIDER, ANIM_DIVIDER, TWIST_DIVIDER, SCALE_DIVIDER
-    global NUM_CTRL_FK, NUM_CTRL_IK
+    global NUM_CTRL_FK, NUM_CTRL_IK, PRESERVE_CTRL
     global ROOT_CTRL_SZ, COG_CTRL_SZ, BASE_CTRL_SZ, VARFK_CTRL_SZ, FK_CTRL_SZ, IK_CTRL_SZ
     global SPLINE_UPV_SZ, SPLINE_BOT_SZ, SPLINE_BOT_SML_SZ, SPLINE_MID_ROT_SZ
     global SPLINE_MID_SZ, SPLINE_TOP_SML_SZ, SPLINE_TOP_SZ
@@ -577,6 +619,11 @@ def load_config(filepath=None):
         # Constants
         NUM_CTRL_FK = config.get('NUM_CTRL_FK', NUM_CTRL_FK)
         NUM_CTRL_IK = config.get('NUM_CTRL_IK', NUM_CTRL_IK)
+
+        # Merged, not replaced: a config written before a control type was
+        # added still leaves that type at its default rather than dropping
+        # the key and failing the lookup at build time
+        PRESERVE_CTRL = {**PRESERVE_CTRL, **config.get('PRESERVE_CTRL', {})}
 
         ROOT_CTRL_SZ = config.get('ROOT_CTRL_SZ', ROOT_CTRL_SZ)
         COG_CTRL_SZ = config.get('COG_CTRL_SZ', COG_CTRL_SZ)

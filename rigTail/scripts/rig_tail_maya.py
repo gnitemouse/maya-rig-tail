@@ -446,24 +446,32 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
     if unlock:
         disconnect_all(source, source=True)
     if moc:
-        src_children = cmds.listRelatives(source, typ='transform') or []
+        # Children are tracked by UUID and their path re-read before each
+        # use. No name survives this stretch reliably: reparenting renames
+        # on a name clash and the ungroup below moves the node again, so a
+        # stored name can come back pointing at a different node, or none
+        src_children = cmds.listRelatives(source, typ='transform', f=True) or []
+        child_uids = cmds.ls(src_children, uuid=True) if src_children else []
         tmp_grp = cmds.group(em=True, n=f"{source}_tmp")
         apply_transform(tmp_grp, target, pos, rot, scl)
 
-        for child in src_children:
-            if unlock and 'Constraint' not in child:
+        for uid in child_uids:
+            child = cmds.ls(uid, long=True)[0]
+            if unlock and 'Constraint' not in child.split('|')[-1]:
                 disconnect_all(child, source=True)
             cmds.parent(child, tmp_grp, a=1)
 
         apply_transform(tmp_grp, target, pos, rot, scl)
         opm(source)
 
-        for child in src_children:
-            cmds.parent(child, source, a=1)
+        for uid in child_uids:
+            cmds.parent(cmds.ls(uid, long=True)[0], source, a=1)
+            child = cmds.ls(uid, long=True)[0]
             if cmds.objectType(child, i='joint'):
-                transf = cmds.listRelatives(child, p=True, typ='transform')[0]
+                transf = cmds.listRelatives(child, p=True, typ='transform', f=True)[0]
                 if 'transform' in transf:
                     cmds.ungroup(transf)
+                    child = cmds.ls(uid, long=True)[0]
             opm(child)
         cmds.delete(tmp_grp)
     else:
@@ -569,6 +577,62 @@ def set_group_visibility(group, visibility=1):
             if cmds.attributeQuery(f"{attribute}{axis}", n=group, ex=1):
                 cmds.setAttr(f"{group}.{attribute}{axis}", k=0, cb=0, l=1)
     set_visibility(group, visibility, k=0, cb=1, l=0)
+
+
+def swap_shapes(target, source):
+    """
+    Replace target's shape nodes with source's.
+
+    The target transform is never deleted, so anything parented under it
+    stays parented. That matters because the alternative - deleting the
+    transform and rebuilding it - has to detach the children first and
+    re-find them afterwards, and a node cannot be re-found reliably by
+    name: parenting to the world renames on a name clash, and duplicate
+    short names elsewhere in the scene resolve to the wrong node.
+
+    Every shape moves, so a control built from several shapes (a sphere
+    is three circles) transfers whole.
+
+    Full DAG paths are used throughout, and an ambiguous target or source
+    is an error rather than a guess: short shape names collide easily, and
+    the source is usually a temporary copy of the target.
+
+    Arguments:
+        target (str): Transform receiving the shapes
+        source (str): Transform whose shapes are moved onto target
+
+    Return:
+        list: Full paths of the target's shapes after the swap
+    """
+    target_paths = cmds.ls(target, long=True, type='transform') or []
+    source_paths = cmds.ls(source, long=True, type='transform') or []
+    if len(target_paths) != 1:
+        logger.error(f"'{target}' matches {len(target_paths)} transforms, "
+                     f'cannot swap shapes')
+        return []
+    if len(source_paths) != 1:
+        logger.error(f"'{source}' matches {len(source_paths)} transforms, "
+                     f'cannot swap shapes')
+        return []
+    target, source = target_paths[0], source_paths[0]
+
+    new_shapes = cmds.listRelatives(source, s=True, f=True) or []
+    if not new_shapes:
+        logger.error(f"'{source}' has no shapes to move onto '{target}'")
+        return []
+
+    # Old shapes go first so the incoming ones cannot collide by name
+    old_shapes = cmds.listRelatives(target, s=True, f=True) or []
+    if old_shapes:
+        cmds.delete(old_shapes)
+    for shape in new_shapes:
+        # -r keeps the shape's local CVs, so it draws in the target's
+        # space exactly as it did in the source's
+        cmds.parent(shape, target, r=True, s=True)
+
+    shapes = cmds.listRelatives(target, s=True, f=True) or []
+    logger.debug(f"swapped {len(shapes)} shape(s) onto '{target}'")
+    return shapes
 
 
 # CREATE NODES =========================================================
@@ -725,9 +789,101 @@ def sdk(driver, driven, dv, v):
 
 # ATTRIBUTES ===========================================================
 
+def attribute_is_reusable(node, attr, pxy=None):
+    """
+    Whether an existing attribute can be updated in place by addAttr -e.
+
+    Two definitions cannot be reached by editing, so the attribute has to
+    be deleted and rebuilt instead:
+
+    1. Proxy state. There is no addAttr -e flag to set or clear
+       'usedAsProxy'. An attribute left over from an earlier rig can still
+       be flagged as a proxy after its master was deleted, which leaves it
+       stuck at its default value and silently freezes everything the
+       attribute drives. Editing it cannot repair that, and an attribute
+       asked to become a proxy cannot gain the flag by editing either.
+    2. Type. An existing attribute of another type (a float ikfk switch
+       from a hand-built rig, say) cannot be edited into an enum.
+
+    Arguments:
+        node (str): Node name
+        attr (str): Attribute long name (must exist on node)
+        pxy (str): Proxy source plug, when the attribute should be a proxy
+
+    Return:
+        bool: True if addAttr -e can express the wanted definition
+    """
+    if pxy:
+        # Rebuild to attach a fresh proxy link to the wanted master
+        return False
+    if attribute_is_proxy(node, attr):
+        return False  # Rebuild to shed the flag; -e cannot clear it
+    try:
+        return cmds.getAttr(f'{node}.{attr}', type=1) == 'enum'
+    except RuntimeError:
+        return False  # Unreadable type (message, compound): rebuild
+
+def attribute_is_proxy(node, attr):
+    """
+    Whether an attribute carries Maya's 'usedAsProxy' flag.
+
+    Read through the API because addAttr exposes usedAsProxy on create
+    only, so there is no command-level query for it.
+
+    Arguments:
+        node (str): Node name
+        attr (str): Attribute long name (must exist on node)
+
+    Return:
+        bool: True if the attribute is flagged as a proxy
+    """
+    sel = om.MSelectionList()
+    sel.add(node)
+    mfn = om.MFnDependencyNode(sel.getDependNode(0))
+    try:
+        return om.MFnAttribute(mfn.attribute(attr)).isProxyAttribute
+    except (AttributeError, RuntimeError):
+        # isProxyAttribute is Maya 2019+. On older versions report False
+        # so the attribute is edited in place, matching previous behaviour
+        logger.debug(f"cannot query proxy state of '{node}.{attr}'")
+        return False
+
+def remove_attribute(node, attr):
+    """
+    Delete a dynamic attribute, unlocking it and its incoming connection
+    first so the delete cannot fail on a locked or driven attribute.
+
+    Static attributes are never touched.
+
+    Arguments:
+        node (str): Node name
+        attr (str): Attribute long name
+
+    Return:
+        bool: True if the attribute was deleted
+    """
+    plug = f'{node}.{attr}'
+    if attr not in (cmds.listAttr(node, ud=1) or []):
+        logger.warning(f"'{plug}' is not a dynamic attribute, not deleting")
+        return False
+    try:
+        cmds.setAttr(plug, l=0)
+    except RuntimeError:
+        pass
+    for src in cmds.listConnections(plug, s=1, d=0, p=1) or []:
+        cmds.disconnectAttr(src, plug)
+    cmds.deleteAttr(plug)
+    return True
+
 def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
     """
     Add Enum attribute to node.
+
+    An attribute that already exists is updated in place where possible.
+    When the existing definition cannot be edited into the wanted one
+    (see attribute_is_reusable) it is deleted and rebuilt, so a rebuild
+    over a previously rigged scene always ends with the attribute this
+    function was asked for rather than a leftover from the old rig.
 
     Arguments:
         plug (str): Node plug (e.g., control.attribute)
@@ -744,20 +900,31 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
     else:
         node, node_attr = plug, ln
         plug = f"{node}.{ln}"
-    if cmds.attributeQuery(node_attr, n=node, ex=1):
-        if node_attr != ln:
-            cmds.setAttr(plug, l=0)
-            cmds.renameAttr(plug, ln)
-            plug = f"{node}.{ln}"
+
+    exists = bool(cmds.attributeQuery(node_attr, n=node, ex=1))
+    if exists and node_attr != ln:
+        cmds.setAttr(plug, l=0)
+        cmds.renameAttr(plug, ln)
+        plug = f"{node}.{ln}"
+        node_attr = ln
+    if exists and not attribute_is_reusable(node, node_attr, pxy):
+        logger.debug(f"cannot edit '{plug}' into wanted definition, rebuilding")
+        exists = not remove_attribute(node, node_attr)
+        if exists and pxy:
+            # Undeletable (static) attribute in the way of a proxy. Editing
+            # it cannot produce a proxy, so say so instead of leaving a
+            # plain enum that looks right and drives nothing.
+            logger.error(f"'{plug}' cannot be replaced by a proxy of "
+                         f"'{pxy}'; leaving it unchanged")
+            return
+
+    if exists:
         if re_divider:
             if en:
                 cmds.addAttr(plug, nn=nn, at='enum', e=1, en=en)
             else:
                 cmds.addAttr(plug, nn='----------', at='enum', e=1, en=nn)
             cmds.setAttr(plug, cb=1, l=1)
-        elif pxy:
-            cmds.deleteAttr(plug)
-            cmds.addAttr(node, ln=ln, nn=nn, at='enum', pxy=pxy, k=1)
         elif en:
             cmds.addAttr(plug, nn=nn, at='enum', e=1, en=en, dv=dv, k=1)
         else:
@@ -832,7 +999,10 @@ def bind_geometry(rigname):
         logger.debug(f'Geometry group not found, skip bind')
         return
 
-    geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1) or []
+    # Full paths: descendant short names are frequently ambiguous under a
+    # geometry group (L_fin|body and R_fin|body both come back as 'body'),
+    # and an ambiguous name binds the skinCluster to the wrong mesh
+    geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
     if not geos:
         logger.debug(f'No geometry under {geometry_grp}, skip bind')
         return
@@ -859,7 +1029,10 @@ def unbind_geometry(rigname):
     logger.debug(f"{rigname}: Unbind geometry")
     geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
     if cmds.objExists(geometry_grp):
-        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1) or []
+        # Full paths: descendant short names are frequently ambiguous
+        # under a geometry group (L_fin|body and R_fin|body both come
+        # back as 'body'), and an ambiguous name hits the wrong mesh
+        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
         for geo in geos:
             if geometry_matches_rigname(rigname, geo):
                 if is_geometry(geo):
@@ -877,7 +1050,10 @@ def unbind_geometry_all():
             unbind_skincluster(geo)
     geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
     if cmds.objExists(geometry_grp):
-        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1) or []
+        # Full paths: descendant short names are frequently ambiguous
+        # under a geometry group (L_fin|body and R_fin|body both come
+        # back as 'body'), and an ambiguous name hits the wrong mesh
+        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
         for geo in geos:
             if is_geometry(geo):
                 unbind_skincluster(geo)

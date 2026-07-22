@@ -1050,18 +1050,71 @@ class ConstantsEditor(QtWidgets.QDialog):
     control sizes ('size').
     '''
 
+    # Which PRESERVE_CTRL control types each size constant governs.
+    # Several sizes share a type (every spline control is sized from its
+    # own constant but preserved as one set, and IK_CTRL_SZ builds both
+    # the IK and Float sets), so their checkboxes are kept in sync.
+    PRESERVE_KEYS = {
+        'ROOT_CTRL_SZ': ['root'],
+        'COG_CTRL_SZ': ['cog'],
+        'BASE_CTRL_SZ': ['base'],
+        'VARFK_CTRL_SZ': ['varfk'],
+        'FK_CTRL_SZ': ['fk'],
+        'IK_CTRL_SZ': ['ik', 'float'],
+        'SPLINE_UPV_SZ': ['upvec'],
+        'SPLINE_BOT_SZ': ['spline'],
+        'SPLINE_BOT_SML_SZ': ['spline'],
+        'SPLINE_MID_ROT_SZ': ['spline'],
+        'SPLINE_MID_SZ': ['spline'],
+        'SPLINE_TOP_SML_SZ': ['spline'],
+        'SPLINE_TOP_SZ': ['spline'],
+    }
+
     def __init__(self, section, parent=None):
         super().__init__(parent)
         self.section = section
         self.setWindowTitle(f'Edit Constants: {section.title()}')
-        self.setMinimumSize(400, 400)
+        self.setMinimumSize(480, 440)
         self.fields = {}
+        self.preserve_fields = {}
         self.setup_ui()
+
+    def on_preserve_toggled(self, name, checked):
+        '''
+        Grey out the size this checkbox governs, and keep checkboxes that
+        share a control type in step so the same flag cannot be shown
+        checked on one row and unchecked on another.
+        '''
+        spinbox = self.fields.get(name)
+        if spinbox:
+            spinbox.setEnabled(not checked)
+
+        keys = set(self.PRESERVE_KEYS.get(name, []))
+        for other, box in self.preserve_fields.items():
+            if other == name or not keys & set(self.PRESERVE_KEYS.get(other, [])):
+                continue
+            if box.isChecked() != checked:
+                box.blockSignals(True)
+                box.setChecked(checked)
+                box.blockSignals(False)
+                other_spin = self.fields.get(other)
+                if other_spin:
+                    other_spin.setEnabled(not checked)
 
     def setup_ui(self):
         '''Build one spinbox per constant in this section.'''
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
+
+        if self.section == 'size':
+            note = QtWidgets.QLabel(
+                'Preserve keeps an existing control\'s curves as they are, '
+                'so hand-tuned shapes survive a rebuild. The size next to it '
+                'then has no effect and is greyed out. Controls that do not '
+                'exist yet are always built from the size.')
+            note.setWordWrap(True)
+            note.setStyleSheet('color: #999999; padding-bottom: 6px;')
+            layout.addWidget(note)
 
         form_layout = QtWidgets.QFormLayout()
         form_layout.setSpacing(8)
@@ -1087,9 +1140,35 @@ class ConstantsEditor(QtWidgets.QDialog):
                     border-radius: 4px;
                     padding: 6px;
                 }
+                QSpinBox:disabled, QDoubleSpinBox:disabled {
+                    background-color: #333333;
+                    color: #666666;
+                    border: 1px solid #444444;
+                }
             ''')
             self.fields[name] = spinbox
-            form_layout.addRow(f'{name}:', spinbox)
+
+            keys = self.PRESERVE_KEYS.get(name) if self.section == 'size' else None
+            if not keys:
+                form_layout.addRow(f'{name}:', spinbox)
+                continue
+
+            checkbox = QtWidgets.QCheckBox('Preserve')
+            checkbox.setChecked(bool(rt_cst.PRESERVE_CTRL.get(keys[0], False)))
+            checkbox.setToolTip(
+                f"Keep existing shapes for: {', '.join(keys)}.\n"
+                f'{name} is ignored while this is checked.')
+            checkbox.toggled.connect(
+                lambda checked, n=name: self.on_preserve_toggled(n, checked))
+            spinbox.setEnabled(not checkbox.isChecked())
+            self.preserve_fields[name] = checkbox
+
+            row = QtWidgets.QWidget()
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(spinbox, 1)
+            row_layout.addWidget(checkbox)
+            form_layout.addRow(f'{name}:', row)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1132,9 +1211,14 @@ class ConstantsEditor(QtWidgets.QDialog):
         return {}
 
     def accept(self):
-        '''Commit all spinbox values to rig_tail_constants.'''
+        '''Commit all spinbox values and Preserve flags to rig_tail_constants.'''
         for name, spinbox in self.fields.items():
             setattr(rt_cst, name, spinbox.value())
+        # Written into the existing dict so any control type without a
+        # size constant of its own keeps its current setting
+        for name, checkbox in self.preserve_fields.items():
+            for key in self.PRESERVE_KEYS.get(name, []):
+                rt_cst.PRESERVE_CTRL[key] = checkbox.isChecked()
         rt_cst.rebuild_derived()
         super().accept()
 
