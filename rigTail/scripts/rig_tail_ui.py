@@ -161,8 +161,12 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_ik = QtWidgets.QCheckBox('IK')
         self.chk_indiv_fk = QtWidgets.QCheckBox('Indiv FK')
         self.chk_stretchy = QtWidgets.QCheckBox('Stretchy')
-        self.chk_fk.setChecked(rt_cst.BUILD_FK)
-        self.chk_ik.setChecked(rt_cst.BUILD_IK)
+        # getattr defaults: reopening the tool reloads the code modules but
+        # deliberately not rig_tail_constants (it holds the session state),
+        # so a constant added after this session started may be missing
+        # from the cached module. Fall back rather than crash the window.
+        self.chk_fk.setChecked(getattr(rt_cst, 'BUILD_FK', True))
+        self.chk_ik.setChecked(getattr(rt_cst, 'BUILD_IK', True))
         self.chk_indiv_fk.setChecked(rt_cst.INDIV_FK)
         self.chk_stretchy.setChecked(True)
         # First-column boxes share a width so the second column aligns
@@ -435,8 +439,8 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_curl.setChecked(rt_cst.EFFECTS.get('curl', False))
         self.chk_noise.setChecked(rt_cst.EFFECTS.get('noise', False))
         self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
-        self.chk_fk.setChecked(rt_cst.BUILD_FK)
-        self.chk_ik.setChecked(rt_cst.BUILD_IK)
+        self.chk_fk.setChecked(getattr(rt_cst, 'BUILD_FK', True))
+        self.chk_ik.setChecked(getattr(rt_cst, 'BUILD_IK', True))
         self.chk_force.setChecked(rt_cst.FORCE_REBUILD)
         self.chk_main.setChecked(rt_cst.MAIN_CONTROLLER)
         self.update_display()
@@ -628,8 +632,8 @@ class RigTailUI(QtWidgets.QDialog):
             'loop': self.chk_loop.isChecked()
             }
         # Individual FK controls require FK
-        rt_cst.BUILD_FK = fk
-        rt_cst.BUILD_IK = ik
+        setattr(rt_cst, 'BUILD_FK', fk)
+        setattr(rt_cst, 'BUILD_IK', ik)
         rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
         rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
         rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
