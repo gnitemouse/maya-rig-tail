@@ -445,6 +445,44 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_main.setChecked(rt_cst.MAIN_CONTROLLER)
         self.update_display()
 
+    def save_current_values(self):
+        '''
+        Snapshot the main-window checkboxes into rig_tail_constants.
+
+        The RIGPARTS / naming / size editors already write to the constants
+        module when their OK is clicked, so those survive reopening the
+        window. The main-window checkboxes had no such path - they were
+        read only at build time - so they reset on reopen. Called from
+        closeEvent so any close persists them, not only a build.
+
+        Conditioned the same way as the build: stretchy needs IK (its
+        network reads the ikfk switch attribute), and individual FK needs
+        FK, so an unreachable combination is never stored.
+        '''
+        fk = self.chk_fk.isChecked()
+        ik = self.chk_ik.isChecked()
+        setattr(rt_cst, 'BUILD_FK', fk)
+        setattr(rt_cst, 'BUILD_IK', ik)
+        rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
+        rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
+        rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
+        rt_cst.EFFECTS = {
+            'stretchy': self.chk_stretchy.isChecked() and ik,
+            'wave': self.chk_wave.isChecked(),
+            'curl': self.chk_curl.isChecked(),
+            'noise': self.chk_noise.isChecked(),
+            'loop': self.chk_loop.isChecked(),
+            }
+
+    def closeEvent(self, event):
+        '''Persist the checkboxes before the window goes away.'''
+        try:
+            self.save_current_values()
+        except Exception:
+            # Never let a persistence error prevent the window closing
+            pass
+        super().closeEvent(event)
+
     def update_display(self):
         '''Refresh the config-file textbox and configuration summary.'''
         self.txt_config.setText(rt_cst.LOADED_CONFIG or '')
@@ -623,20 +661,9 @@ class RigTailUI(QtWidgets.QDialog):
                 'parts from RIGPARTS, then build again.')
             return
 
-        rt_cst.EFFECTS = {
-            # stretch network needs the ikfk switch attr from the IK build
-            'stretchy': self.chk_stretchy.isChecked() and ik,
-            'wave': self.chk_wave.isChecked(),
-            'curl': self.chk_curl.isChecked(),
-            'noise': self.chk_noise.isChecked(),
-            'loop': self.chk_loop.isChecked()
-            }
-        # Individual FK controls require FK
-        setattr(rt_cst, 'BUILD_FK', fk)
-        setattr(rt_cst, 'BUILD_IK', ik)
-        rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
-        rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
-        rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
+        # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, FORCE_REBUILD,
+        # MAIN_CONTROLLER, EFFECTS) the same way closeEvent does
+        self.save_current_values()
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
