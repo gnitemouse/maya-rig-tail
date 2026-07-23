@@ -190,6 +190,32 @@ ANIM_DIVIDER = ('anim_divider', '----------', 'ANIMATION')
 TWIST_DIVIDER = ('twist_divider', '----------', 'TWIST')
 SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
 
+# Naming Template: main controller dashboard (see rig_tail_mainctrl).
+# Real ALL values and per-tail override flags live on the cog control
+# (like the per-tail IKFK switches); each basectrl carries a proxy of
+# its own override flag.
+ALL_DIVIDER = ('all_divider', '----------', 'ALL')
+OVERRIDE_ALL_DIVIDER = ('override_all_divider', '----------', 'OVERRIDE ALL')
+OVERRIDE_DIVIDER = ('override_divider', '----------', 'OVERRIDE')
+# Per-tail override flag on the cog: Off (0, default) = the tail follows
+# the ALL section directly; On (1) = the tail uses its own basectrl values
+OVERRIDE = '{rigname}_override'
+OVERRIDE_ENUM = 'Off:On'
+# Hidden resolved IKFK driver on the cog (all_ikfk vs the tail's own
+# switch, picked by its override condition); the mode SDKs are driven
+# from this when the dashboard is active
+IKFK_RESOLVED = '{rigname}_ikfk_resolved'
+# Prefix of the ALL attributes on the cog ('all_ikfk', 'all_stretch', ...)
+ALL_PREFIX = 'all_'
+
+def mainctrl_active():
+    '''
+    Whether the main controller dashboard should be built: the
+    MAIN_CONTROLLER option is on and RIGPARTS has 2+ parts (a single
+    tail has nothing to centralize; the UI disables the checkbox too).
+    '''
+    return MAIN_CONTROLLER and len(RIGPARTS) >= 2
+
 def ikfk_mode_index(name):
     '''
     Index of a mode in IKFK_MODES matched by name (case-insensitive),

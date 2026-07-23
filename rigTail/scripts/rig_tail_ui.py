@@ -251,10 +251,12 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_main = QtWidgets.QCheckBox('Main Controller (dashboard)')
         self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
         self.chk_main.setToolTip(
-            'Build one centralized dashboard control with proxy '
-            'attributes (IKFK switch, IK Twist, Stretch, Animation '
-            'effects) for every tail in RIGPARTS. Enabled when RIGPARTS '
-            'has 2+ parts.')
+            'Build a centralized dashboard on the cog control: an ALL '
+            'section (IKFK mode, Stretch, Twist, Animation values '
+            'applied to every tail) plus a per-tail Override flag. '
+            'Override Off (default) makes the tail follow the ALL '
+            "values; On makes it use its own base control values. "
+            'Enabled when RIGPARTS has 2+ parts.')
         self.chk_force = QtWidgets.QCheckBox('Force Rebuild (ignore cache)')
         self.chk_force.setToolTip(
             'Tear the existing rig down completely and rebuild, even if '

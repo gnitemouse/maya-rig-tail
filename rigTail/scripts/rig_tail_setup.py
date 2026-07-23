@@ -25,6 +25,7 @@ import rig_tail_joint as rt_jnt
 import rig_tail_cache as rt_cache
 import rig_tail_control as rt_ctl
 import rig_tail_connect as rt_con
+import rig_tail_mainctrl as rt_mc
 
 logger = logger_setup(__name__)
 
@@ -78,6 +79,12 @@ def cleanup_rig(fk, ik):
             cleanup_rigname(rigname, fk, ik)
         else:
             cleanup_connections(rigname, fk, ik)
+
+    # Main controller dashboard: remove stale override conditions and,
+    # when the dashboard is off, every dashboard attribute. Runs after
+    # the per-part loop so expressions referencing the conditions are
+    # already gone on a full teardown.
+    rt_mc.cleanup_mainctrl(fk, ik)
 
 def restore_fk_joint_chain(rigname):
     '''

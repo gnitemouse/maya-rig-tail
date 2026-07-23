@@ -18,6 +18,7 @@ import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
+import rig_tail_mainctrl as rt_mc
 
 logger = logger_setup(__name__)
 
@@ -151,9 +152,14 @@ def build_loop(rigname, basectrl):
         cmds.createNode('network', n=loop_time)
         cmds.addAttr(loop_time, ln='loop_time', at='time', k=1)
 
+    # resolved_plug: override condition output when the main controller
+    # dashboard is active, the basectrl attribute otherwise
+    loop_src = rt_mc.resolved_plug(rigname, 'loop')
+    frame_src = rt_mc.resolved_plug(rigname, 'loop_frame')
+
     expr_code = f'''// Loop modulo expression - normalized time output
-float $loop_enabled = {basectrl}.loop;
-float $loop_len = {basectrl}.loop_frame;
+float $loop_enabled = {loop_src};
+float $loop_len = {frame_src};
 float $t = time1.outTime;
 float $two_pi = {TWO_PI};
 
@@ -199,8 +205,13 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
     time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
     # The loop attribute only exists when the Loop effect is built; when it
     # is not, reference a literal 0 so the expression still compiles and
-    # takes the non-looping branch.
-    loop_enabled_src = f'{basectrl}.loop' if loop_time else '0'
+    # takes the non-looping branch. resolved_plug: override condition
+    # output when the main controller dashboard is active, the basectrl
+    # attribute otherwise.
+    loop_enabled_src = rt_mc.resolved_plug(rigname, 'loop') if loop_time else '0'
+    freq_src = rt_mc.resolved_plug(rigname, 'wave_frequency')
+    speed_src = rt_mc.resolved_plug(rigname, 'wave_speed')
+    falloff_src = rt_mc.resolved_plug(rigname, 'wave_falloff')
 
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_nam.get_index_from_name(jnt)
@@ -214,11 +225,12 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
                 logger.trace(f'{compose_node} does not exist, skipping wave expression')
                 continue
 
+            amp_src = rt_mc.resolved_plug(rigname, wave_attr)
 
             expr_code = f'''// Wave expression for joint {NN:02d} axis {rot_axis}
 float $loop_enabled = {loop_enabled_src};
-float $wave_freq = {basectrl}.wave_frequency;
-float $wave_speed = {basectrl}.wave_speed * 0.5;
+float $wave_freq = {freq_src};
+float $wave_speed = {speed_src} * 0.5;
 float $freq;
 float $speed;
 if ($loop_enabled > 0.5) {{
@@ -229,8 +241,8 @@ if ($loop_enabled > 0.5) {{
     $freq = $wave_freq;
     $speed = $wave_speed;
 }}
-float $amp = {basectrl}.{wave_attr} * 3.0;
-float $falloff = {basectrl}.wave_falloff;
+float $amp = {amp_src} * 3.0;
+float $falloff = {falloff_src};
 float $t = {time_source};
 float $u = {u};
 
@@ -280,7 +292,9 @@ def build_curl(rigname, basectrl, joints):
             cmds.createNode('multiplyDivide', n=remap)
             cmds.setAttr(f'{remap}.operation', 1)
             cmds.setAttr(f'{remap}.input2X', 20.0)
-        ensure_connect(f'{basectrl}.{curl_attr}', f'{remap}.input1X')
+        # resolved_plug: override condition output when the dashboard is
+        # active, the basectrl attribute otherwise
+        ensure_connect(rt_mc.resolved_plug(rigname, curl_attr), f'{remap}.input1X')
 
         for i, jnt in enumerate(joints[1:], 1):
             NN = rt_nam.get_index_from_name(jnt)
@@ -293,7 +307,8 @@ def build_curl(rigname, basectrl, joints):
                 cmds.createNode('multiplyDivide', n=falloff_node)
                 cmds.setAttr(f'{falloff_node}.operation', 3)
                 cmds.setAttr(f'{falloff_node}.input1X', u)
-            ensure_connect(f'{basectrl}.curl_falloff', f'{falloff_node}.input2X')
+            ensure_connect(rt_mc.resolved_plug(rigname, 'curl_falloff'),
+                           f'{falloff_node}.input2X')
 
             weight_scale = f'{rigname}_curl{rot_axis}_{NN:02d}_weight_multiplyDivide'
             if not cmds.objExists(weight_scale):
@@ -344,8 +359,13 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
     time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
     # The loop attribute only exists when the Loop effect is built; when it
     # is not, reference a literal 0 so the expression still compiles and
-    # takes the non-looping branch.
-    loop_enabled_src = f'{basectrl}.loop' if loop_time else '0'
+    # takes the non-looping branch. resolved_plug: override condition
+    # output when the main controller dashboard is active, the basectrl
+    # attribute otherwise.
+    loop_enabled_src = rt_mc.resolved_plug(rigname, 'loop') if loop_time else '0'
+    amp_src = rt_mc.resolved_plug(rigname, 'noise')
+    freq_src = rt_mc.resolved_plug(rigname, 'noise_frequency')
+    speed_src = rt_mc.resolved_plug(rigname, 'noise_speed')
 
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_nam.get_index_from_name(jnt)
@@ -362,9 +382,9 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
 
             expr_code = f'''
 float $loop_enabled = {loop_enabled_src};
-float $amp = {basectrl}.noise;
-float $noise_freq = {basectrl}.noise_frequency;
-float $noise_speed = {basectrl}.noise_speed * 0.2;
+float $amp = {amp_src};
+float $noise_freq = {freq_src};
+float $noise_speed = {speed_src} * 0.2;
 float $t = {time_source};
 float $u = {u};
 

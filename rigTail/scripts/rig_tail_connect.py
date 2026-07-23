@@ -11,7 +11,10 @@ assembles them into one working rig. For each rig part it:
     - Creates the switch and channel-box attributes: the per-tail IKFK
       switch lives on the cog control, and stretch/twist/animation
       attributes live on the base control, mirrored onto every control
-      as proxy attributes.
+      as proxy attributes. With the Main Controller dashboard active
+      (rig_tail_mainctrl) the cog also carries ALL values and per-tail
+      override flags, and consumers read rt_mc.resolved_plug() /
+      rt_mc.ikfk_driver() instead of the basectrl/cog plug directly.
     - Wires the IKFK mode switching. Each curve cluster is parent-
       constrained to one control per mode (spline/ik/float), and set
       driven keys on the switch attribute fade constraint weights and
@@ -41,6 +44,7 @@ import rig_tail_maya as rt_mya
 import rig_tail_cache as rt_cache
 import rig_tail_joint as rt_jnt
 from rig_tail_matrix import build_matrix_offset_network
+import rig_tail_mainctrl as rt_mc
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
 import rig_tail_test as rt_test
@@ -92,6 +96,10 @@ def connect_rig_tail(fk, ik):
     # (low-CV driver) shape, so the IK joints now read their true rest -- match
     # FK onto it so the two modes agree and the tail does not pop on a switch.
     match_fk_to_ik_rest(fk, ik)
+
+    # The mode SDKs are wired now; tuck the internal resolved IKFK
+    # drivers out of the cog channel box (no-op when the dashboard is off)
+    rt_mc.hide_resolved_attrs()
 
     logger.debug('DONE Connected Rig Components')
     logger.debug('-----------------------------------------------------')
@@ -207,6 +215,10 @@ def connect_cog(fk, ik):
     if ik:
         add_attributes_ikfk_switch(cog_ctrl, fk, ik)
 
+    # Main controller dashboard: ALL values + per-tail override flags
+    if rt_mc.active():
+        rt_mc.add_dashboard_to_cog(cog_ctrl, fk, ik)
+
 def connect_basectrl(rigname, fk, ik):
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
     basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
@@ -215,8 +227,11 @@ def connect_basectrl(rigname, fk, ik):
 
     rt_mya.parent_to(basectrl_grp, cog_ctrl)
 
-    # Channel box order: IKFK, STRETCH, TWIST, ANIMATION, JNT SCALE
+    # Channel box order: OVERRIDE (dashboard only), IKFK, STRETCH,
+    # TWIST, ANIMATION, JNT SCALE
     # (STRETCH attributes always come before TWIST attributes)
+    if rt_mc.active():
+        rt_mc.add_override_to_basectrl(rigname, basectrl)
     if ik:
         add_ikfk_attributes_to_basectrl(rigname, basectrl)
     rt_str.add_stretch_attributes_to_basectrl(rigname, basectrl)
@@ -224,6 +239,13 @@ def connect_basectrl(rigname, fk, ik):
         add_twist_attributes_to_basectrl(rigname, basectrl)
     rt_ani.add_anim_attributes_to_basectrl(rigname, basectrl)
     rt_str.add_jntscale_attributes_to_basectrl(rigname, basectrl)
+
+    # Route every dashboard attribute through its override condition
+    # (local basectrl value vs cog ALL value). Runs here, in the setup
+    # phase, so the connect phase (stretch remaps, spline handle, FX
+    # expressions, mode SDKs) can read the resolved plugs.
+    if rt_mc.active():
+        rt_mc.build_override_conditions(rigname, fk, ik)
 
 
 # CONNECT FK ===========================================================
@@ -332,7 +354,8 @@ def connect_spline_ik(rigname):
     spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
     if cmds.objExists(spline_handle):
         for attr in ['twist', 'roll', 'offset']:
-            cmds.connectAttr(f'{basectrl}.{attr}', f'{spline_handle}.{attr}', f=1)
+            cmds.connectAttr(rt_mc.resolved_plug(rigname, attr),
+                             f'{spline_handle}.{attr}', f=1)
 
 
 # CONNECT EFFECTS =====================================================
@@ -357,10 +380,14 @@ def connect_stretch(rigname, fk, ik):
         logger.warning(f'Squash remap node not found: {squash_remap}')
         return
 
+    # resolved_plug: the override condition output when the dashboard is
+    # active, the basectrl attribute otherwise
     if cmds.attributeQuery('stretch', n=basectrl, ex=1):
-        cmds.connectAttr(f'{basectrl}.stretch', f'{stretch_remap}.input1X', f=1)
+        cmds.connectAttr(rt_mc.resolved_plug(rigname, 'stretch'),
+                         f'{stretch_remap}.input1X', f=1)
     if cmds.attributeQuery('squash', n=basectrl, ex=1):
-        cmds.connectAttr(f'{basectrl}.squash', f'{squash_remap}.input1X', f=1)
+        cmds.connectAttr(rt_mc.resolved_plug(rigname, 'squash'),
+                         f'{squash_remap}.input1X', f=1)
 
     rt_str.connect_stretch_to_joints(rigname, basectrl, fk, ik)
 
@@ -448,7 +475,10 @@ def constrain_spline_controls(rigname, typ=rt_cst.TYPE_IK):
 # IKFK MODE SWITCH =====================================================
 
 def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
-    ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
+    # ikfk_driver: the hidden resolved attr (ALL vs local, picked by the
+    # override flag) when the dashboard is active, the per-tail cog
+    # switch otherwise
+    ikfk_attr = rt_mc.ikfk_driver(rigname)
     fk_mode = rt_cst.ikfk_fk_mode_index() # Get index of FK mode
     if fk_mode is None:
         logger.warning(f"{rigname}: No 'FK' mode in IKFK_MODES, skip FK switch")
@@ -461,7 +491,7 @@ def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
 
 def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
-    ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
+    ikfk_attr = rt_mc.ikfk_driver(rigname)
     fk_mode = rt_cst.ikfk_fk_mode_index() # Get index of FK mode
     num_clusters = len(spline_constraints)
 
@@ -493,7 +523,7 @@ def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
 def setup_switch_upvec(rigname, typ=rt_cst.TYPE_IK):
     logger.trace(f"{rigname}: Space switching for upvec")
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
-    ikfk_attr = f"{rt_nam.fstr('', rt_cst.COG_CTRL)}.{rt_nam.fstr(rigname, rt_cst.IKFK)}"
+    ikfk_attr = rt_mc.ikfk_driver(rigname)
 
     upvec_bsectrl = ik_controls['upvec'][0]
     upvec_endctrl = ik_controls['upvec'][1]
