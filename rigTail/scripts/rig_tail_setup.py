@@ -50,7 +50,7 @@ def cleanup_rig(fk, ik):
         fk (bool): Clean up FK components
         ik (bool): Clean up IK components
     '''
-    logger.info(f'-----------------------------------------------------')
+    logger.debug(f'-----------------------------------------------------')
     logger.info(f"Cleanup Rig")
 
     # Clear control cache
@@ -78,6 +78,75 @@ def cleanup_rig(fk, ik):
             cleanup_rigname(rigname, fk, ik)
         else:
             cleanup_connections(rigname, fk, ik)
+
+def restore_fk_joint_chain(rigname):
+    '''
+    Tear down the FK SDK-group hierarchy and restore a flat FK joint chain.
+
+    build_fk (create_sdk_groups / put_jnt_under_sdk_groups) assumes each FK
+    joint enters the build as a plain link in a flat chain (its parent is the
+    previous joint). A prior build leaves every joint wrapped in its own SDK
+    stack instead; re-wrapping an already-wrapped joint parents the stack top
+    under its own descendant, which Maya rejects as a cycle. Unparent the
+    joints out, delete all SDK groups (pattern match also clears groups from a
+    previous NUM_CTRL_FK value or an older layer layout), then re-chain flat.
+
+    Arguments
+        rigname (str): Name of rig component
+    '''
+    if rigname not in rt_cst.JOINTS_FK:
+        return
+    logger.trace(f'{rigname}: Restoring flat FK joint chain')
+    joints = rt_cst.JOINTS_FK[rigname]
+    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
+
+    # Unparent all FK joints to world temporarily
+    for jnt in joints:
+        if cmds.objExists(jnt):
+            jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
+            if jnt_parent and jnt_parent[0] != fkjnt_grp:
+                cmds.parent(jnt, world=True)
+
+    # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end with the
+    # SDK label. Pattern matching (not exact counts) also removes groups left
+    # over from a previous NUM_CTRL_FK value.
+    sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
+    for sdk_grp in cmds.ls(sdk_pattern, type='transform'):
+        if cmds.objExists(sdk_grp):
+            rt_mya.remove(sdk_grp)
+
+    # Re-parent FK joints in proper hierarchy
+    for i in range(len(joints)-1, 0, -1):  # Reverse order
+        if cmds.objExists(joints[i]) and cmds.objExists(joints[i-1]):
+            rt_mya.parent_to(joints[i], joints[i-1])
+
+
+def fk_sdk_structure_is_current(rigname):
+    '''
+    Report whether the scene's FK SDK hierarchy matches what the current
+    builder produces: every FK joint parented directly under its own SDK_JNT
+    group. Returns False when the joints are unwrapped (no prior build) or
+    wrapped in a stale layout (e.g. built by older code with a different SDK
+    layer set), which the joint/control caches cannot detect on their own.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        bool: True if the existing SDK structure can be safely reused as-is
+    '''
+    if rigname not in rt_cst.JOINTS_FK:
+        return True
+    for jnt in rt_cst.JOINTS_FK[rigname]:
+        if not cmds.objExists(jnt):
+            return False
+        NN = rt_nam.get_index_from_name(jnt)
+        sdk_jnt = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+        jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
+        if not jnt_parent or jnt_parent[0] != sdk_jnt:
+            return False
+    return True
+
 
 def cleanup_rigname(rigname, fk, ik):
     '''
@@ -134,32 +203,9 @@ def cleanup_rigname(rigname, fk, ik):
         fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
         rt_mya.remove(fkroot_grp)
 
-    # Remove SDK groups for FK
+    # Remove SDK groups for FK, restoring the flat FK joint chain
     if fk and rigname in rt_cst.JOINTS_FK:
-        logger.trace(f'{rigname}: Cleaning up FK SDK groups')
-        # First, restore FK joint hierarchy by removing SDK groups
-        joints = rt_cst.JOINTS_FK[rigname]
-        fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
-
-        # Unparent all FK joints to world temporarily
-        for jnt in joints:
-            if cmds.objExists(jnt):
-                jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
-                if jnt_parent and jnt_parent[0] != fkjnt_grp:
-                    cmds.parent(jnt, world=True)
-
-        # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end
-        # with the SDK label. Pattern matching (not exact counts) also
-        # removes groups left over from a previous NUM_CTRL_FK value.
-        sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
-        for sdk_grp in cmds.ls(sdk_pattern, type='transform'):
-            if cmds.objExists(sdk_grp):
-                rt_mya.remove(sdk_grp)
-
-        # Re-parent FK joints in proper hierarchy
-        for i in range(len(joints)-1, 0, -1):  # Reverse order
-            if cmds.objExists(joints[i]) and cmds.objExists(joints[i-1]):
-                rt_mya.parent_to(joints[i], joints[i-1])
+        restore_fk_joint_chain(rigname)
 
     # 5. Delete utility nodes (conditions, multiply, math nodes)
     # Every utility node is named '{rigname}_<descriptor>_<nodetype>',
@@ -241,8 +287,18 @@ def cleanup_rigname(rigname, fk, ik):
 def cleanup_connections(rigname, fk, ik):
     '''
     Clean up connections. Only disconnect, don't delete nodes.
+
+    Exception: the FK SDK hierarchy is only safe to reuse in place when it
+    matches the current builder's layout. A stale layout (older build with a
+    different SDK layer set) is not something the joint/control caches detect,
+    and rebuilding over it re-wraps already-wrapped joints into a parenting
+    cycle, so tear that part down to a flat chain first.
     '''
     logger.debug(f'{rigname}: Cleanup connections')
+
+    if fk and not fk_sdk_structure_is_current(rigname):
+        logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
+        restore_fk_joint_chain(rigname)
 
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
         if rigname in joints:
@@ -334,6 +390,11 @@ def cleanup_dangling_unit_conversions():
     conversions = cmds.ls(type=['unitConversion', 'timeToUnitConversion',
                                 'unitToTimeConversion']) or []
     for uc in conversions:
+        # Deleting one conversion node can cascade-delete others still in
+        # this pre-captured list; skip any that Maya already removed so the
+        # .input/.output query below can't raise 'No object matches name'.
+        if not cmds.objExists(uc):
+            continue
         if not cmds.listConnections(f'{uc}.input', s=True, d=False) \
                 or not cmds.listConnections(f'{uc}.output', s=False, d=True):
             cmds.delete(uc)
@@ -352,7 +413,7 @@ def setup_rig(fk, ik):
         fk (bool): Setup FK components
         ik (bool): Setup IK components
     '''
-    logger.info('-----------------------------------------------------')
+    logger.debug('-----------------------------------------------------')
     logger.info('Setup rig components')
 
     # The matrix OPM network needs matrixNodes; load it up front

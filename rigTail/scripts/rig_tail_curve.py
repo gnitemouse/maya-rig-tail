@@ -220,8 +220,11 @@ def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
     # Get shape nodes
     ikhandle_crvshape = cmds.listRelatives(spline_list[2], s=1, ni=1)[0]
     ikspline_crvshape = cmds.listRelatives(curve, s=1, ni=1)[0]
-    # Disconnect temp curve from ikHandle
-    cmds.disconnectAttr(f'{ikhandle_crvshape}.worldSpace[0]', f'{spline_list[0]}.inCurve')
+    # Disconnect temp curve from ikHandle. On a rebuild the connection may
+    # already be absent; the force-connect below sets inCurve regardless, so
+    # only disconnect when the connection actually exists.
+    if cmds.isConnected(f'{ikhandle_crvshape}.worldSpace[0]', f'{spline_list[0]}.inCurve'):
+        cmds.disconnectAttr(f'{ikhandle_crvshape}.worldSpace[0]', f'{spline_list[0]}.inCurve')
     # Connect solver curve to ikHandle
     cmds.connectAttr(f'{ikspline_crvshape}.worldSpace[0]', f'{spline_list[0]}.inCurve', f=1)
 

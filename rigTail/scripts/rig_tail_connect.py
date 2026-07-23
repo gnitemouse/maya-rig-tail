@@ -88,7 +88,8 @@ def connect_rig_tail(fk, ik):
         rt_mya.bind_geometry(rigname)
         # rt_test.dump_chain()
 
-    logger.info('-----------------------------------------------------')
+    logger.debug('DONE Connected Rig Components')
+    logger.debug('-----------------------------------------------------')
 
 def connect_root(fk, ik):
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)

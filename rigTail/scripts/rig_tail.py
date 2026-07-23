@@ -129,7 +129,7 @@ def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
     '''
     Create FK tail using variable FK method.
     '''
-    logger.info('-----------------------------------------------------')
+    logger.debug('-----------------------------------------------------')
     logger.info(f"{rigname}: Build FK tail")
     logger.trace(f'joints {rt_cst.JOINTS_FK[rigname]}')
 
@@ -176,7 +176,7 @@ def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     '''
     Create IK tail
     '''
-    logger.info('-----------------------------------------------------')
+    logger.debug('-----------------------------------------------------')
     logger.info(f"{rigname}: Build IK tail")
     logger.trace(f'joints {rt_cst.JOINTS_IK[rigname]}')
 
