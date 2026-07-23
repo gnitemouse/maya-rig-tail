@@ -5,7 +5,7 @@ author: Daisy Jane @gnitemouse
 Main Controller (dashboard) for rigs with multiple tails.
 
 Built when the MAIN_CONTROLLER option is on and RIGPARTS has 2+ parts
-(rt_cst.mainctrl_active()). The cog control becomes the dashboard:
+(active()). The cog control becomes the dashboard:
 
 - ALL section (real attributes on the cog): one 'all_*' copy of every
   routed attribute -- IKFK mode, STRETCH, TWIST and ANIMATION values.
@@ -47,12 +47,38 @@ import re
 
 logger = logger_setup(__name__)
 
+# rig_tail_constants is deliberately never reloaded by rig_tail (it holds
+# session state), so a Maya session started before this feature existed
+# has a stale constants module without the dashboard templates. This
+# module IS reloaded every run: install anything missing onto rt_cst so
+# the build works without a Maya restart. Values must match
+# rig_tail_constants; existing attributes are never overwritten, so a
+# restarted session or a user-customized constants module wins.
+_CST_DEFAULTS = {
+    'ALL_DIVIDER': ('all_divider', '----------', 'ALL'),
+    'OVERRIDE_ALL_DIVIDER': ('override_all_divider', '----------', 'OVERRIDE ALL'),
+    'OVERRIDE_DIVIDER': ('override_divider', '----------', 'OVERRIDE'),
+    'OVERRIDE': '{rigname}_override',
+    'OVERRIDE_ENUM': 'Off:On',
+    'IKFK_RESOLVED': '{rigname}_ikfk_resolved',
+    'ALL_PREFIX': 'all_',
+}
+for _name, _value in _CST_DEFAULTS.items():
+    if not hasattr(rt_cst, _name):
+        setattr(rt_cst, _name, _value)
+
 
 # NAMES ================================================================
 
 def active():
-    ''' Whether the dashboard should be built for the current settings. '''
-    return rt_cst.mainctrl_active()
+    '''
+    Whether the dashboard should be built: the MAIN_CONTROLLER option is
+    on and RIGPARTS has 2+ parts (a single tail has nothing to
+    centralize; the UI disables the checkbox too). Computed here rather
+    than in rig_tail_constants so a stale (never-reloaded) constants
+    module cannot break the build.
+    '''
+    return rt_cst.MAIN_CONTROLLER and len(rt_cst.RIGPARTS) >= 2
 
 def all_attr(attr):
     ''' Name of the ALL copy of a routed attribute on the cog. '''

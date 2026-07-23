@@ -207,14 +207,12 @@ OVERRIDE_ENUM = 'Off:On'
 IKFK_RESOLVED = '{rigname}_ikfk_resolved'
 # Prefix of the ALL attributes on the cog ('all_ikfk', 'all_stretch', ...)
 ALL_PREFIX = 'all_'
-
-def mainctrl_active():
-    '''
-    Whether the main controller dashboard should be built: the
-    MAIN_CONTROLLER option is on and RIGPARTS has 2+ parts (a single
-    tail has nothing to centralize; the UI disables the checkbox too).
-    '''
-    return MAIN_CONTROLLER and len(RIGPARTS) >= 2
+# NOTE: whether the dashboard is active is computed by
+# rig_tail_mainctrl.active(), not here: this module is deliberately
+# never reloaded (see rig_tail.py), so build logic must not depend on
+# functions added here after a session started. For the same reason
+# rig_tail_mainctrl installs any of the above templates that are
+# missing from a stale session's copy of this module.
 
 def ikfk_mode_index(name):
     '''
