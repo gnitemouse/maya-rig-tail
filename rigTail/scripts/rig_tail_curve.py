@@ -200,11 +200,23 @@ def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
         logger.error(f"Must have more than 3 joints '{joints}'")
         return None
 
-    # Clean up old spline components
-    old_spline_list = get_spline_handle(rigname, joints) or []
+    # Clean up old spline components. Remove the previous handle and effector
+    # BY NAME, so a rebuild over an existing rig (the light-cleanup path, which
+    # keeps these nodes) cannot leave a same-named duplicate for a later
+    # short-name lookup to trip on ("Too many objects or values"). This must
+    # NOT go through get_spline_handle: it returns [] whenever the handle's
+    # joint-list query is empty -- which is exactly its state on a rebuilt
+    # chain, i.e. exactly when the stale handle needs removing. It also returns
+    # the solver curve in its tuple, and that curve is the one passed in here
+    # (create_curve reuses it) and connected to the fresh handle below, so
+    # removing via that list would delete the curve we are about to use. The
+    # handle and effector are recreated unconditionally by cmds.ikHandle just
+    # below, so removing them by name cannot break a working part -- it only
+    # makes the removal reliable. This mirrors cleanup_rigname's full-teardown
+    # removal, moved into the build so the light path gets it too.
     rt_mya.remove('curveInfo1')
-    for obj in old_spline_list:
-        rt_mya.remove(obj)
+    rt_mya.remove(rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ))
+    rt_mya.remove(rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ))
 
     # Create IK handle [ikhandle, effector, temp_curve]
     spline_list = cmds.ikHandle(n=rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ),

@@ -261,7 +261,15 @@ def connect_spline_ik(rigname):
 
     spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_IK)
     driver_curve = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
-    ikhandle, effector, solver_curve = get_spline_handle(rigname)
+    # get_spline_handle returns [] when the handle is missing or orphaned
+    # (no joint list). Abort this part's IK connect with a clear message
+    # rather than crashing on a 3-way unpack of an empty list.
+    spline_info = get_spline_handle(rigname)
+    if not spline_info:
+        logger.warning(f'{rigname}: No valid spline handle to connect; '
+                       f'skipping IK spline connect')
+        return
+    ikhandle, effector, solver_curve = spline_info
     rt_mya.parent_to(ikhandle, spline_grp_ik)
     rt_mya.parent_to(solver_curve, spline_grp_ik)
     rt_mya.parent_to(driver_curve, spline_grp_ik)
