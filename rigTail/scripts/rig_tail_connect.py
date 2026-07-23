@@ -88,8 +88,55 @@ def connect_rig_tail(fk, ik):
         rt_mya.bind_geometry(rigname)
         # rt_test.dump_chain()
 
+    # After everything is connected the IK spline has reached its final
+    # (low-CV driver) shape, so the IK joints now read their true rest -- match
+    # FK onto it so the two modes agree and the tail does not pop on a switch.
+    match_fk_to_ik_rest(fk, ik)
+
     logger.debug('DONE Connected Rig Components')
     logger.debug('-----------------------------------------------------')
+
+def match_fk_to_ik_rest(fk, ik):
+    '''
+    Snap each FK joint onto its IK-solved counterpart so FK and IK share one
+    rest pose and the tail does not pop when the ikfk switch moves between them.
+
+    Runs at the END of the build (called from connect_rig_tail). The IK spline
+    only reaches its final low-CV shape once the IK system is fully connected,
+    so this is the first point the IK joints reliably read their true rest -- an
+    earlier read, even after a forced eval, catches the sharper raw-solver pose
+    (~more bend) that the joints briefly sit on.
+
+    The FK joint sits at the bottom of the variable-FK SDK stack, and the
+    controls drive the groups ABOVE it, so moving the joint itself shifts only
+    the rest -- the controls still animate from there. Matched base-to-tip.
+
+    Only runs when both systems are built. FK-only / IK-only builds keep their
+    own rest (there is no other mode to pop against).
+
+    Arguments
+        fk (bool): FK was built
+        ik (bool): IK was built
+    '''
+    if not (fk and ik):
+        return
+    # The IK system is fully wired now, so a forced evaluation settles the
+    # spline onto its final shape before we read it (unlike mid-build, where the
+    # driver->solver network was not yet complete and no eval could settle it).
+    cmds.dgdirty(allPlugs=True)
+    try:
+        cmds.refresh(force=True)
+    except Exception as e:
+        logger.trace(f'refresh before FK match skipped: {e}')
+    for rigname in rt_cst.RIGPARTS:
+        fk_joints = rt_cst.JOINTS_FK.get(rigname, [])
+        ik_joints = rt_cst.JOINTS_IK.get(rigname, [])
+        if not fk_joints or not ik_joints or len(fk_joints) != len(ik_joints):
+            continue
+        logger.debug(f'{rigname}: Match FK rest to the settled IK rest')
+        for fk_jnt, ik_jnt in zip(fk_joints, ik_joints):
+            if cmds.objExists(fk_jnt) and cmds.objExists(ik_jnt):
+                cmds.matchTransform(fk_jnt, ik_jnt, pos=True, rot=True)
 
 def connect_root(fk, ik):
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)

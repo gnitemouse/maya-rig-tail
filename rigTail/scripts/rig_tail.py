@@ -134,6 +134,10 @@ def build_rig_tail(fk, ik):
             rig_tail_fk(rigname)
         if ik:
             rig_tail_ik(rigname)
+        # FK/IK rest match happens after connect_rig_tail (see
+        # rig_tail_connect.match_fk_to_ik_rest): the IK spline only reaches its
+        # final low-CV shape once the IK system is fully connected, so the IK
+        # joints cannot be read reliably here.
 
 def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
     '''
