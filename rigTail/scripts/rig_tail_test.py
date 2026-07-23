@@ -22,6 +22,8 @@ Usage:
     rt_test.show_data_flow()        # per-joint data-flow diagram
     rt_test.test_wave() / rt_test.test_curl()
     rt_test.test_time_evaluation()  # time-varying FX across frames
+    rt_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
+    rt_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
 '''
 import math
 
@@ -145,6 +147,250 @@ def probe_joint(jnt):
     parent = cmds.listRelatives(jnt, p=True) or ['(world)']
     return (f'{jnt:<26} jo={fmt(jo)} r={fmt(rot)} t={fmt(tr)} '
             f'opm={opm_state:<8} parent={parent[0]}')
+
+
+# REBUILD DEGRADATION ========================================
+#
+# Quantify how much curvature a chain loses across repeated rebuilds.
+# Curved chains (the L/R/C fintails on the squid) flatten a little on every
+# rebuild; straight chains do not, so measure the fintails. See the memory
+# note 'ikfk-rebuild-degradation' for the root cause.
+#
+# Unlike the read-only test_*/check_* helpers, this MUTATES the scene: it
+# rebuilds the rig. Keep it out of run_all().
+
+
+def _chain_from_scene(rigname, typ):
+    '''
+    Locate a rig part's joint chain in the scene by naming convention, base to
+    tip, excluding the _ee_ tip.
+
+    Reads the scene directly (cmds.ls) instead of the rt_cst.JOINTS_* session
+    cache, so it works on a freshly loaded build: the cache is empty until a
+    build runs in the current Python session, which is why the first version of
+    this test reported "nothing measured" on a just-opened scene.
+
+    Arguments:
+        rigname (str): Rig part name
+        typ (str): Joint type prefix (rt_cst.TYPE_BN / _FK / _IK)
+
+    Return:
+        list: Joint names, base to tip, ee excluded (empty if none found)
+    '''
+    pattern = f'{typ}_{rigname}_*_{rt_cst.JNT}'
+    indexed = []
+    for j in cmds.ls(pattern, type='joint') or []:
+        leaf = j.split('|')[-1]
+        # Exact rigname match so 'C_fintail' never grabs 'C_fintail2' joints
+        if rt_nam.get_rigname(leaf, rt_cst.JOINT) != rigname:
+            continue
+        NN = rt_nam.get_index_from_name(leaf)
+        if NN == 'ee' or NN is None:
+            continue
+        indexed.append((NN, j))
+    indexed.sort(key=lambda pair: pair[0])
+    return [j for _, j in indexed]
+
+
+def _bend_snapshot(parts):
+    '''Total bend (deg) of every part's BN/FK/IK chain, keyed [part][label].
+
+    Resolves joints from the scene (see _chain_from_scene), independent of the
+    session cache. A chain with fewer than two joints records None so it is
+    skipped rather than counted as 0.
+    '''
+    types = {'BN': rt_cst.TYPE_BN, 'FK': rt_cst.TYPE_FK, 'IK': rt_cst.TYPE_IK}
+    snap = {}
+    for part in parts:
+        snap[part] = {}
+        for label, typ in types.items():
+            joints = _chain_from_scene(part, typ)
+            snap[part][label] = chain_bend(joints)[0] if len(joints) >= 2 else None
+    return snap
+
+
+def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
+                                force_full=True, invalidate_cache=False,
+                                scope=True, detail=True):
+    '''
+    Measure curvature loss across repeated rebuilds.
+
+    Records chain_bend (total turn angle) of each part's BN, FK and IK chains
+    BEFORE any rebuild, then AFTER each of `rebuilds` consecutive rebuilds, and
+    prints the per-chain sequence with its drift from the baseline. A rig that
+    reproduces its shape holds each number steady; a degrading rig shows the
+    bend fall on every rebuild. BN is the one that matters most -- it is the
+    source pose; if BN drops, the rig cannot be reproduced (see the memory note
+    'ikfk-rebuild-degradation').
+
+    Works on a freshly loaded build: chains are read from the scene, not the
+    session cache. MUTATES the scene: rebuilds the rig via
+    rig_tail.rig_tail_multiple, as the UI Build button does.
+
+    Knobs:
+      scope=True  -- rebuild ONLY the measured parts (RIGPARTS is narrowed to
+          `rignames` for the duration, then restored). This both makes the
+          rebuild actually cover the parts on a fresh scene and keeps it fast
+          -- rebuilding one fintail instead of all twelve tails. The existing
+          root group is detected and reused so no hierarchy is renamed.
+      force_full=True  -- force the full-cleanup path (FORCE_REBUILD). The light
+          path reuses the IK curve, so it does NOT resample and will not show
+          curve-side degradation.
+      invalidate_cache=True -- clear the in-memory joint caches for these parts
+          before each rebuild, so set_joints re-duplicates FK/IK from the
+          (already OPM-smoothed) BN, the way a fresh Maya session does -- the
+          compounding path the memory note identifies.
+
+    FORCE_REBUILD, RIGPARTS and ROOT are saved and restored on exit.
+
+    Usage:
+        import rig_tail_test as rt_test
+        # scoped to one fintail, 2 rebuilds, full-cleanup path:
+        rt_test.measure_rebuild_degradation('C_fintail')
+        # fresh-session re-duplication path (re-duplicates FK/IK from BN):
+        rt_test.measure_rebuild_degradation('C_fintail', invalidate_cache=True)
+        # measure several parts at once:
+        rt_test.measure_rebuild_degradation(['C_fintail', 'L_fintail'])
+
+        REOPEN the scene between runs. The test degrades the part it measures,
+        so a second run starts from the first run's degraded end-state, not the
+        original rest pose -- baselines will not be comparable otherwise.
+
+    Arguments:
+        rignames (str or list): Part(s) to measure. Required.
+        rebuilds (int): Rebuilds to run after the baseline capture.
+        tol (float): Max allowed drift (deg) of any chain's bend from its
+            baseline across all rebuilds before the part is reported FAIL.
+        force_full (bool): Force the full-rebuild cleanup path.
+        invalidate_cache (bool): Clear joint caches before each rebuild.
+        scope (bool): Narrow RIGPARTS to `rignames` while rebuilding.
+        detail (bool): Print the per-rebuild sequence, not only PASS/FAIL.
+
+    Return:
+        bool: True if every measured chain stayed within tol across all
+            rebuilds; False if any drifted past tol. None if nothing measured.
+    '''
+    import rig_tail            # lazy import: both modules are loaded by call time
+    import rig_tail_setup as rt_set
+
+    parts = [rignames] if isinstance(rignames, str) else list(rignames or [])
+    if not parts:
+        print('[DEGRADE] No rig parts given to measure')
+        return None
+
+    history = [_bend_snapshot(parts)]   # index 0 = baseline (pre-rebuild)
+
+    # Reuse the scene's existing root group so a scoped rebuild does not rename
+    # the hierarchy (set_root would otherwise rename whatever root it finds to
+    # the ROOT template name).
+    existing_root = rt_set.find_existing_root_grp()
+    root_arg = existing_root if existing_root else rt_cst.ROOT
+
+    saved_force = rt_cst.FORCE_REBUILD
+    saved_rigparts = list(rt_cst.RIGPARTS)
+    saved_root = rt_cst.ROOT
+    try:
+        if force_full:
+            rt_cst.FORCE_REBUILD = True
+        if scope:
+            rt_cst.RIGPARTS = list(parts)
+        for _ in range(rebuilds):
+            if invalidate_cache:
+                for jdict in (rt_cst.JOINTS_BN, rt_cst.JOINTS_FK,
+                              rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+                    for part in parts:
+                        jdict.pop(part, None)
+            rig_tail.rig_tail_multiple(root=root_arg,
+                                       fk=rt_cst.BUILD_FK,
+                                       ik=rt_cst.BUILD_IK)
+            history.append(_bend_snapshot(parts))
+    finally:
+        rt_cst.FORCE_REBUILD = saved_force
+        rt_cst.RIGPARTS = saved_rigparts
+        rt_cst.ROOT = saved_root
+
+    # Report
+    print('\n' + '=' * 72)
+    print(f'  REBUILD DEGRADATION  ({rebuilds} rebuilds, tol {tol} deg, '
+          f'full={force_full}, invalidate_cache={invalidate_cache}, '
+          f'scope={scope})')
+    print('=' * 72)
+
+    ok = True
+    measured_any = False
+    for part in parts:
+        printed_part = False
+        for label in ('BN', 'FK', 'IK'):
+            series = [h[part][label] for h in history]
+            if all(v is None for v in series):
+                continue
+            measured_any = True
+            base = series[0]
+            worst = max((abs(v - base) for v in series
+                         if v is not None and base is not None), default=0.0)
+            drift = ((series[-1] - base)
+                     if series[-1] is not None and base is not None else 0.0)
+            status = 'OK  ' if worst <= tol else 'FAIL'
+            if worst > tol:
+                ok = False
+            if not printed_part:
+                print(f'\n  {part}')
+                printed_part = True
+            if detail:
+                cells = ' -> '.join('   -  ' if v is None else f'{v:6.1f}'
+                                    for v in series)
+                print(f'    {label}  {status}  bend: {cells}   '
+                      f'(drift {drift:+.1f}, worst {worst:.1f})')
+            else:
+                print(f'    {label}  {status}  '
+                      f'baseline {base:6.1f} -> final {series[-1]:6.1f}  '
+                      f'(drift {drift:+.1f})')
+
+    print('\n' + '=' * 72)
+    if not measured_any:
+        print(f'  RESULT: nothing measured -- no BN/FK/IK joints found in the '
+              f'scene for {parts}.')
+        print(f'          Check the part name(s) against the joint names, e.g. '
+              f'BN_<name>_00_jnt.')
+        print('=' * 72 + '\n')
+        return None
+    if ok:
+        print(f'  RESULT: CONSISTENT (all chains within tol {tol} deg)')
+    else:
+        print(f'  RESULT: DEGRADING (a chain drifted past tol {tol} deg)')
+    print('=' * 72 + '\n')
+    return ok
+
+
+def report_bend(rignames):
+    '''
+    Print each part's current BN/FK/IK total bend, read from the scene.
+
+    Read-only, no rebuild -- the cheapest way to measure degradation: call it,
+    run your own Build (UI or rig_tail_multiple), then call it again and compare
+    the BN row. That is one build instead of the N that measure_rebuild_
+    degradation runs.
+
+    Usage:
+        import rig_tail_test as rt_test
+        rt_test.report_bend('C_fintail')   # before
+        # ... press Build once (UI), or rig_tail_multiple(...) ...
+        rt_test.report_bend('C_fintail')   # after; compare the BN number
+
+    Arguments:
+        rignames (str or list): Part(s) to report.
+
+    Return:
+        dict: {part: {'BN'/'FK'/'IK': bend or None}}
+    '''
+    parts = [rignames] if isinstance(rignames, str) else list(rignames)
+    snap = _bend_snapshot(parts)
+    for part in parts:
+        cells = '  '.join(
+            f'{lbl}={"   -  " if snap[part][lbl] is None else f"{snap[part][lbl]:6.1f}"}'
+            for lbl in ('BN', 'FK', 'IK'))
+        print(f'[BEND] {part:<16} {cells}')
+    return snap
 
 
 # TEST ORCHESTRATION =========================================
