@@ -258,9 +258,12 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
 
     Arguments:
         rignames (str or list): Part(s) to measure. Required.
-        rebuilds (int): Rebuilds to run after the baseline capture.
-        tol (float): Max allowed drift (deg) of any chain's bend from its
-            baseline across all rebuilds before the part is reported FAIL.
+        rebuilds (int): Rebuilds to run after the baseline capture. Needs >= 2
+            to measure consistency (the spread among post-first-build states).
+        tol (float): Max allowed spread (deg) of a chain's bend ACROSS rebuilds
+            (after the first build) before it is reported FAIL. The one-time
+            first-build smoothing of the raw pose is reported separately and
+            does not count against this.
         force_full (bool): Force the full-rebuild cleanup path.
         invalidate_cache (bool): Clear joint caches before each rebuild.
         scope (bool): Narrow RIGPARTS to `rignames` while rebuilding.
@@ -315,6 +318,8 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
           f'full={force_full}, invalidate_cache={invalidate_cache}, '
           f'scope={scope})')
     print('=' * 72)
+    print('  settle = drift ACROSS rebuilds (the degradation metric -- pass/fail)')
+    print('  1st-build = one-time smoothing from the raw pose (accepted, informational)')
 
     ok = True
     measured_any = False
@@ -325,26 +330,31 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
             if all(v is None for v in series):
                 continue
             measured_any = True
-            base = series[0]
-            worst = max((abs(v - base) for v in series
-                         if v is not None and base is not None), default=0.0)
-            drift = ((series[-1] - base)
-                     if series[-1] is not None and base is not None else 0.0)
-            status = 'OK  ' if worst <= tol else 'FAIL'
-            if worst > tol:
+            baseline = series[0]
+            # Consistency is measured AFTER the first rebuild: the first build
+            # applies an accepted one-time smoothing of the raw pose, so drift
+            # from the raw baseline is not degradation. Degradation is when
+            # rebuilds keep changing -- the spread among the post-first-build
+            # snapshots. That is the pass/fail metric.
+            built = [v for v in series[1:] if v is not None]
+            if built:
+                ref = built[0]
+                settle = max(abs(v - ref) for v in built)
+            else:
+                ref, settle = None, 0.0
+            first_build = (ref - baseline
+                           if ref is not None and baseline is not None else None)
+            status = 'OK  ' if settle <= tol else 'FAIL'
+            if settle > tol:
                 ok = False
             if not printed_part:
                 print(f'\n  {part}')
                 printed_part = True
-            if detail:
-                cells = ' -> '.join('   -  ' if v is None else f'{v:6.1f}'
-                                    for v in series)
-                print(f'    {label}  {status}  bend: {cells}   '
-                      f'(drift {drift:+.1f}, worst {worst:.1f})')
-            else:
-                print(f'    {label}  {status}  '
-                      f'baseline {base:6.1f} -> final {series[-1]:6.1f}  '
-                      f'(drift {drift:+.1f})')
+            cells = ' -> '.join('   -  ' if v is None else f'{v:6.1f}'
+                                for v in series)
+            fb = '' if first_build is None else f', 1st-build {first_build:+.1f}'
+            print(f'    {label}  {status}  bend: {cells}   '
+                  f'(settle {settle:.1f}{fb})')
 
     print('\n' + '=' * 72)
     if not measured_any:
@@ -355,9 +365,10 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
         print('=' * 72 + '\n')
         return None
     if ok:
-        print(f'  RESULT: CONSISTENT (all chains within tol {tol} deg)')
+        print(f'  RESULT: CONSISTENT across rebuilds (settle <= {tol} deg)')
     else:
-        print(f'  RESULT: DEGRADING (a chain drifted past tol {tol} deg)')
+        print(f'  RESULT: DEGRADING -- a chain keeps changing across rebuilds '
+              f'(settle > {tol} deg)')
     print('=' * 72 + '\n')
     return ok
 
