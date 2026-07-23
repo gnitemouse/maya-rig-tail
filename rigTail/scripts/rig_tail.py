@@ -77,6 +77,7 @@ import rig_tail_fk as rt_fk
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
 import rig_tail_connect as rt_con
+import rig_tail_restpose as rt_rest
 import rig_tail_ui as rt_ui
 import rig_tail_test as rt_test
 
@@ -99,6 +100,7 @@ il.reload(rt_fk)
 il.reload(rt_str)
 il.reload(rt_ani)
 il.reload(rt_con)
+il.reload(rt_rest)
 il.reload(rt_ui)
 il.reload(rt_test)
 
@@ -115,6 +117,14 @@ def build_rig_tail(fk, ik):
         fk (bool): Build FK components
         ik (bool): Build IK components
     '''
+    # Method D (rebuild-degradation fix): record each BN joint's rest pose once,
+    # now, while BN is still at true rest -- cleanup/setup have run but the IK
+    # curve/spline (which smooths) and the OPM network (which drives BN off
+    # rest) have not. rig_tail_ik then builds the curve from this stored rest
+    # instead of live positions, so rebuilds stay consistent. Guarded to
+    # capture on the first build only; see rig_tail_restpose.
+    rt_rest.capture_rest_pose()
+
     for rigname in rt_cst.RIGPARTS:
         # Parts without joints were skipped during setup
         if rigname not in rt_cst.JOINTS_BN:
@@ -181,7 +191,10 @@ def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     logger.trace(f'joints {rt_cst.JOINTS_IK[rigname]}')
 
     joints = rt_cst.JOINTS_IK[rigname]
-    jnt_pos = rt_jnt.get_joint_position_from_list(joints)
+    # Method D swap point: build the IK curve from the captured rest pose so
+    # rebuilds don't compound (falls back to live positions when no rest is
+    # stored). See rig_tail_restpose.
+    jnt_pos = rt_rest.curve_source_positions(rigname, joints)
 
     # Create groups
     rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
