@@ -30,16 +30,22 @@ sets each joint root->tip using its own captured world position, so re-
 orienting a parent cannot drag a child off its spot. World orientation
 is written into jointOrient with rotate left at zero.
 
-Runs at the start of setup_rig, the one safe window: the FK/IK driver
-chains are still free duplicates (not yet wired to controls/spline) and
-cleanup_rig has unbound geometry, so re-orienting drags neither skin nor
-a live rig; the connect phase rebinds at the new rest.
+This is the SETUP phase, run BEFORE the build and never during it (see
+rig_tail.setup_tails / the Tail Rig Setup UI). It operates on the BN
+skeleton only -- FK/IK chains do not exist yet; the build later
+duplicates them from the oriented BN, inheriting the fix. The Setup
+entry unbinds the affected geometry first (re-orienting a bound joint
+would distort the mesh) and leaves it for the build to rebind.
 
-Gating: rt_cst.MIRROR_ORIENT enables it (default OFF -- opt in once
-verified), and rt_cst.MIRROR_ORIENT_DRYRUN (default ON) only logs the
-intended changes without modifying anything, so the first run is always
-a safe preview. Because rig_tail_constants is never reloaded, toggle
-these at runtime with e.g. `rig_tail_constants.MIRROR_ORIENT = True`
+Two independent operations, each with its own toggle:
+    orient_chains()  MIRROR_ORIENT  -- aim-orient, removes twist
+    mirror_joints()  MIRROR_JOINTS  -- behavior-mirror L/R pairs
+run_setup() runs the enabled ones (orient first, then mirror).
+
+rt_cst.MIRROR_ORIENT_DRYRUN only logs the intended changes without
+modifying anything, for a safe preview. Because rig_tail_constants is
+never reloaded, toggle these at runtime (e.g.
+`rig_tail_constants.MIRROR_ORIENT = True`) or through the Setup UI,
 rather than by editing the file mid-session.
 '''
 
@@ -57,8 +63,9 @@ logger = logger_setup(__name__)
 # rt_cst so the build works without a Maya restart, never overwriting a
 # value a restarted/customized session already provides.
 _CST_DEFAULTS = {
-    'MIRROR_ORIENT': False,         # aim-orient + mirror L/R chains in setup
-    'MIRROR_ORIENT_DRYRUN': True,   # only log intended changes; do not modify
+    'MIRROR_ORIENT': True,          # aim-orient chains (remove twist)
+    'MIRROR_JOINTS': True,          # behavior-mirror L/R pairs
+    'MIRROR_ORIENT_DRYRUN': False,  # only log intended changes; do not modify
     'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
@@ -283,86 +290,106 @@ def _apply_frames(joints, frames, dry_run):
     return n
 
 
-# ENTRY ================================================================
+# SETUP OPERATIONS =====================================================
+#
+# Both operate on the BN skeleton only (rt_cst.JOINTS_BN). Setup runs
+# before the build, so FK/IK chains do not exist yet; the build later
+# duplicates them from the oriented BN, inheriting the fix.
 
-def _chain_dicts(fk, ik):
-    ''' Joint dicts to re-orient for the current build options. '''
-    dicts = [rt_cst.JOINTS_BN]
-    if fk:
-        dicts.append(rt_cst.JOINTS_FK)
-    if ik:
-        dicts.append(rt_cst.JOINTS_IK)
-    return dicts
-
-
-def orient_all(fk, ik):
+def orient_chains(dry_run):
     '''
-    Aim-orient every tail chain (twist fix), then behavior-mirror each
-    L/R pair's target side from its aim-oriented source.
-
-    Called at the start of setup_rig. No-op when MIRROR_ORIENT is off.
-    Center and unpaired chains are only aim-oriented; a pair's source is
-    aim-oriented and its target mirrored. BN, and per build options FK/IK,
-    are all re-oriented (co-located duplicates), so every layer agrees.
+    Aim-orient every BN chain: re-aim each joint down its own chain with
+    a single up-axis (the chain plane normal), removing intra-chain
+    twist. Applies to every rig part, both sides included.
 
     Arguments
-        fk (bool): FK chains are being built
-        ik (bool): IK chains are being built
-    '''
-    if not _cst('MIRROR_ORIENT'):
-        logger.debug('Orient: disabled (MIRROR_ORIENT off)')
-        return
+        dry_run (bool): only log, do not modify
 
-    dry_run = bool(_cst('MIRROR_ORIENT_DRYRUN'))
-    axis = _cst('MIRROR_AXIS')
+    Return
+        int: joints re-oriented (or that would be)
+    '''
     aim_axis = _cst('ORIENT_AIM_AXIS')
     up_axis = _cst('ORIENT_UP_AXIS')
     mode = ' [dry-run]' if dry_run else ''
-
-    pairs, paired = find_mirror_pairs(rt_cst.RIGPARTS)
-    target_source = {tgt: src for src, tgt in pairs}
-    dicts = _chain_dicts(fk, ik)
-    logger.info(f'Orient{mode}: aim-orient chains'
-                + (f', mirror {len(pairs)} L/R pair(s) '
-                   f'(axis={axis}, source={_cst("MIRROR_SOURCE_SIDE")})'
-                   if pairs else ' (no L/R pairs)'))
-
-    # Pass 1: aim-orient every chain that is NOT a mirror target
+    count = 0
     for rigname in rt_cst.RIGPARTS:
-        if rigname in target_source:
+        joints = rt_cst.JOINTS_BN.get(rigname)
+        if not joints or len(joints) < 2:
             continue
-        for jdict in dicts:
-            joints = jdict.get(rigname)
-            if not joints or len(joints) < 2:
-                continue
-            try:
-                positions = [cmds.xform(j, q=True, ws=True, translation=True)
-                             for j in joints]
-                frames = aim_frames(positions, aim_axis, up_axis)
-                logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
-                _apply_frames(joints, frames, dry_run)
-            except Exception as err:
-                logger.error(f'Orient: aim failed on {rigname}: {err}')
-
-    # Pass 2: mirror each target from its (now aim-oriented) source
-    for target, source in target_source.items():
-        for jdict in dicts:
-            src = jdict.get(source)
-            tgt = jdict.get(target)
-            if not src or not tgt:
-                continue
-            try:
-                src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
-                            for j in src]
-                frames = mirror_frames(src_mats, axis)
-                logger.info(f'Orient{mode}: mirror {source} -> {target}')
-                _apply_frames(tgt, frames, dry_run)
-            except Exception as err:
-                logger.error(f'Orient: mirror failed on '
-                             f'{source}->{target}: {err}')
+        try:
+            positions = [cmds.xform(j, q=True, ws=True, translation=True)
+                         for j in joints]
+            frames = aim_frames(positions, aim_axis, up_axis)
+            logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
+            count += _apply_frames(joints, frames, dry_run)
+        except Exception as err:
+            logger.error(f'Orient: aim failed on {rigname}: {err}')
+    return count
 
 
-# Backwards-compatible alias (setup_rig calls this name)
-def mirror_orient_all(fk, ik):
-    ''' Alias for orient_all (kept for the setup_rig call site). '''
-    orient_all(fk, ik)
+def mirror_joints(dry_run):
+    '''
+    Behavior-mirror each L/R pair's BN chain: overwrite the target side
+    with the mirror of the source side (rt_cst.MIRROR_SOURCE_SIDE). Does
+    not remove twist -- run orient_chains first for a clean source.
+
+    Arguments
+        dry_run (bool): only log, do not modify
+
+    Return
+        int: joints re-oriented (or that would be)
+    '''
+    axis = _cst('MIRROR_AXIS')
+    mode = ' [dry-run]' if dry_run else ''
+    pairs, _ = find_mirror_pairs(rt_cst.RIGPARTS)
+    if not pairs:
+        logger.info(f'Mirror{mode}: no L/R pairs in RIGPARTS, skipping')
+        return 0
+    count = 0
+    for source, target in pairs:
+        src = rt_cst.JOINTS_BN.get(source)
+        tgt = rt_cst.JOINTS_BN.get(target)
+        if not src or not tgt:
+            logger.warning(f'Mirror: {source} or {target} has no BN joints')
+            continue
+        try:
+            src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
+                        for j in src]
+            frames = mirror_frames(src_mats, axis)
+            logger.info(f'Mirror{mode}: {source} -> {target} (axis={axis})')
+            count += _apply_frames(tgt, frames, dry_run)
+        except Exception as err:
+            logger.error(f'Mirror: failed on {source}->{target}: {err}')
+    return count
+
+
+def run_setup(dry_run=None):
+    '''
+    Run the enabled Setup orientation steps on the BN skeleton.
+
+    orient_chains first (if MIRROR_ORIENT) to remove twist on every
+    chain, then mirror_joints (if MIRROR_JOINTS) to make each L/R pair
+    symmetric. Positions are never changed. Expects rt_cst.JOINTS_BN to
+    be populated (rig_tail_setup.detect_joints_bn) and the affected
+    geometry unbound (the Setup entry does that).
+
+    Arguments
+        dry_run (bool): override the MIRROR_ORIENT_DRYRUN setting; None
+            uses the setting.
+
+    Return
+        dict: {'oriented': n, 'mirrored': n, 'dry_run': bool}
+    '''
+    if dry_run is None:
+        dry_run = bool(_cst('MIRROR_ORIENT_DRYRUN'))
+    do_orient = bool(_cst('MIRROR_ORIENT'))
+    do_mirror = bool(_cst('MIRROR_JOINTS'))
+    mode = ' [dry-run]' if dry_run else ''
+    logger.info(f'Setup{mode}: orient={do_orient}, mirror={do_mirror}')
+
+    oriented = orient_chains(dry_run) if do_orient else 0
+    mirrored = mirror_joints(dry_run) if do_mirror else 0
+    if not (do_orient or do_mirror):
+        logger.info('Setup: nothing enabled '
+                    '(MIRROR_ORIENT and MIRROR_JOINTS both off)')
+    return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}

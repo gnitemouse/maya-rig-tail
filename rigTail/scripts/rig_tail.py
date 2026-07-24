@@ -296,8 +296,58 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     build_rig_tail(fk, ik)
     rt_con.connect_rig_tail(fk, ik)
 
+# SETUP: TAIL SKELETON =================================================
+
+def setup_tails(root=None, dry_run=None):
+    '''
+    Setup phase: prepare the tail skeleton before building.
+
+    Detects the BN chains for RIGPARTS and runs the enabled orientation
+    steps on them (rig_tail_orient.run_setup): MIRROR_ORIENT aim-orients
+    each chain to remove intra-chain twist, MIRROR_JOINTS behavior-mirrors
+    each L/R pair. Joint positions are never changed.
+
+    Re-orienting a bound joint would distort the mesh, so the affected
+    geometry is unbound first and left for the build to rebind (unless
+    dry_run). Run this once on the raw skeleton, verify, then build.
+
+    Arguments
+        root (str): Rig root name (as in the build); sets ROOT
+        dry_run (bool): override MIRROR_ORIENT_DRYRUN; None uses the
+            setting. When true, nothing is unbound or modified.
+
+    Return
+        dict: summary from rig_tail_orient.run_setup
+    '''
+    if root:
+        rt_set.set_root(root)
+
+    found = rt_set.detect_joints_bn()
+    if not found:
+        logger.warning('Setup: no BN joints found for any RIGPART')
+        return {'oriented': 0, 'mirrored': 0, 'dry_run': True}
+
+    preview = dry_run if dry_run is not None \
+        else bool(getattr(rt_cst, 'MIRROR_ORIENT_DRYRUN', False))
+
+    # Re-orienting a bound joint drags the mesh, so unbind the affected
+    # parts first; the build rebinds. Skipped in dry-run (no changes).
+    if not preview:
+        for rigname in found:
+            rt_mya.unbind_geometry(rigname)
+
+    return rt_orient.run_setup(dry_run=dry_run)
+
 def main():
     '''
-    Launch Qt UI
+    Launch the Tail Rig Builder UI.
     '''
     return rt_ui.show_ui()
+
+def main_setup():
+    '''
+    Launch the Tail Rig Setup UI (skeleton orientation / mirroring).
+    '''
+    import rig_tail_setup_ui as rt_setui
+    il.reload(rt_setui)
+    return rt_setui.show_ui()

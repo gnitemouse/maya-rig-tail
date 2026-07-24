@@ -12,15 +12,17 @@ Maya.env) is ever touched.
 --------------------------------------------------------------------------
 INSTALL (drag-and-drop)
     Drag install.py from a file browser into the Maya viewport. It copies
-    the module in and adds a "TailRig" shelf button. Works immediately --
+    the module in and adds two shelf buttons -- "TailSetup" (skeleton
+    orient / mirror) and "TailRig" (the builder). Works immediately --
     no restart. Keep install.py next to the rigTail/ folder and
     rigTail.mod when you drag it, since it copies them.
 
 INSTALL (manual, no drag-and-drop)
     Copy rigTail/ and rigTail.mod into ~/Documents/maya/modules/
     then restart Maya. Launch from the Script Editor with:
-        import rig_tail; rig_tail.main()
-    (or make your own shelf button running the same two lines).
+        import rig_tail; rig_tail.main()        # builder
+        import rig_tail; rig_tail.main_setup()  # setup (orient / mirror)
+    (or make your own shelf buttons running those lines).
 
 UNINSTALL
     Delete rigTail.mod and the rigTail folder from
@@ -54,14 +56,24 @@ MOD_FILE = MODULE_NAME + '.mod'
 SHELF_ICON = 'octopus.png'
 
 SHELF_BUTTON_LABEL = 'TailRig'
+# Second button for the Setup phase (skeleton orient / mirror).
+SHELF_SETUP_LABEL = 'TailSetup'
 
 # Command the shelf button runs. No absolute path is baked in: once the
 # module is registered, scripts/ is on sys.path automatically.
-LAUNCH_COMMAND = '''# Launch Rig Tail
+LAUNCH_COMMAND = '''# Launch Rig Tail Builder
 import importlib
 import rig_tail
 importlib.reload(rig_tail)
 rig_tail.main()
+'''
+
+# Setup-phase launcher: orient / mirror the skeleton before building.
+LAUNCH_SETUP_COMMAND = '''# Launch Rig Tail Setup
+import importlib
+import rig_tail
+importlib.reload(rig_tail)
+rig_tail.main_setup()
 '''
 
 
@@ -134,14 +146,29 @@ def _remove_existing_button(shelf, label):
 
 
 def _add_shelf_button():
-    '''Add (or refresh) the TailRig launcher on the active shelf.'''
+    '''Add (or refresh) the TailSetup + TailRig launchers on the active shelf.
+
+    Two buttons for the two phases: Setup (orient/mirror the skeleton)
+    then Build. The Setup button is added first so it sits to the left of
+    the Builder, matching the order they are used.
+    '''
     shelf = _current_shelf()
+    _remove_existing_button(shelf, SHELF_SETUP_LABEL)
     _remove_existing_button(shelf, SHELF_BUTTON_LABEL)
 
     cmds.shelfButton(
         parent=shelf,
+        label=SHELF_SETUP_LABEL,
+        annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
+        image=SHELF_ICON,
+        image1=SHELF_ICON,
+        sourceType='python',
+        command=LAUNCH_SETUP_COMMAND,
+    )
+    cmds.shelfButton(
+        parent=shelf,
         label=SHELF_BUTTON_LABEL,
-        annotation='Launch the Rig Tail builder UI',
+        annotation='Launch the Rig Tail Builder UI',
         image=SHELF_ICON,
         image1=SHELF_ICON,
         sourceType='python',
@@ -168,8 +195,9 @@ def onMayaDroppedPythonFile(*args):
         raise
 
     cmds.inViewMessage(
-        amg='<hl>Rig Tail installed</hl> - see the "{0}" button on the '
-            '"{1}" shelf'.format(SHELF_BUTTON_LABEL, shelf),
+        amg='<hl>Rig Tail installed</hl> - see the "{0}" and "{1}" '
+            'buttons on the "{2}" shelf'.format(
+                SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, shelf),
         pos='midCenter', fade=True, fadeStayTime=3000)
 
     print('# Rig Tail: installed module to {0}'.format(module_dir))

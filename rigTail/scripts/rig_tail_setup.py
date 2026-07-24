@@ -26,7 +26,6 @@ import rig_tail_cache as rt_cache
 import rig_tail_control as rt_ctl
 import rig_tail_connect as rt_con
 import rig_tail_mainctrl as rt_mc
-import rig_tail_orient as rt_orient
 
 logger = logger_setup(__name__)
 
@@ -427,12 +426,11 @@ def setup_rig(fk, ik):
     # The matrix OPM network needs matrixNodes; load it up front
     rt_mya.ensure_plugins()
 
-    # Behavior-mirror L/R chains before anything reads their orientation.
-    # This is the safe window: cleanup_rig has unbound geometry and the
-    # FK/IK driver chains are still free duplicates (not yet wired to
-    # controls or the spline), so re-orienting cannot drag skin or a
-    # live rig. No-op when MIRROR_ORIENT is off or no L/R pair exists.
-    rt_orient.mirror_orient_all(fk, ik)
+    # NOTE: joint orientation / L-R mirroring is NOT done here. It is a
+    # separate Setup phase (rig_tail_orient, run from rig_tail.setup_tails
+    # or the Tail Rig Setup UI) that the user runs on the skeleton BEFORE
+    # building. Keeping it out of the build means a rebuild never silently
+    # re-orients joints.
 
     # Sync IKFK_MODES with the build options before the switch attribute
     # is created (connect_cog): IK-only builds must not offer 'FK'
@@ -582,6 +580,49 @@ def set_joints_auto():
 
         # Set joints for this rigname (will auto-detect end)
         set_joints(rigname, start_jnt=start_jnt, end_jnt=None)
+
+def _find_bn_start(rigname):
+    '''
+    Locate the BN start joint for a rig part, using the same detection as
+    set_joints_auto: the exact BN start-joint name first, then any BN
+    joint whose name resolves to exactly this rigname. Returns None when
+    the part has no joints.
+    '''
+    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
+    if cmds.objExists(start_jnt):
+        return start_jnt
+    for j in cmds.ls(type='joint') or []:
+        if rt_cst.TYPE_BN in j and \
+                rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname:
+            return j
+    return None
+
+def detect_joints_bn():
+    '''
+    Populate rt_cst.JOINTS_BN for every RIGPART by chain detection only
+    -- no FK/IK duplication, no renaming. Used by the Setup phase
+    (rig_tail.setup_tails), which re-orients the raw BN skeleton before
+    any rig components exist; the build's set_joints_auto later creates
+    the FK/IK chains from the oriented BN.
+
+    Return
+        list: rignames whose BN chain was found and stored
+    '''
+    logger.debug('Detect BN joints for all RIGPARTS (Setup phase)')
+    found = []
+    for rigname in rt_cst.RIGPARTS:
+        start_jnt = _find_bn_start(rigname)
+        if not start_jnt:
+            logger.warning(f'{rigname}: No BN joints found, skipping')
+            continue
+        chain = rt_jnt.get_joint_chain(start_jnt)
+        if not chain:
+            logger.warning(f'{rigname}: Empty joint chain from {start_jnt}')
+            continue
+        rt_cst.JOINTS_BN[rigname] = chain
+        found.append(rigname)
+        logger.debug(f'{rigname}: {len(chain)} BN joints detected')
+    return found
 
 def set_joints(rigname, start_jnt=None, end_jnt=None):
     '''

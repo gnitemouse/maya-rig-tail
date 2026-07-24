@@ -54,18 +54,31 @@ BUILD_IK = True
 # sliding controls. Requires FK. If False, only build varFK controls.
 INDIV_FK = False
 # Build centralized main controller dashboard (for multiple tails)
-MAIN_CONTROLLER = False
+MAIN_CONTROLLER = True
 # Force Rebuild (even if joints are unchanged)
 FORCE_REBUILD = False
 
-# Aim-orient tail chains during setup (removes intra-chain twist so each
-# tail bends in a plane) and behavior-mirror matching 'L_'/'R_' pairs so
-# left/right sides move as mirror images (see rig_tail_orient). Off by
-# default: opt in once verified, since it re-orients joints.
-MIRROR_ORIENT = False
-# Only LOG intended orientation changes without modifying the joints.
-# On by default so the first run is always a safe preview.
-MIRROR_ORIENT_DRYRUN = True
+# SETUP PHASE ==========================================================
+# Skeleton-prep options, run by the separate 'Tail Rig Setup' step
+# (rig_tail_orient) BEFORE the build, never during it. Two independent
+# operations:
+#
+# MIRROR_ORIENT - aim-orient each chain: re-aim every joint down its own
+#   chain with a single up-axis (the chain's plane normal), removing the
+#   intra-chain twist so a tail bends in a plane.
+# MIRROR_JOINTS - behavior-mirror matching 'L_'/'R_' pairs: overwrite the
+#   target side's joint orientation with the mirror of the source side so
+#   the two sides move as mirror images.
+#
+# Enable both (orient runs first, then mirror) for planar, symmetric
+# tails. Mirroring alone does not remove twist; it copies the source
+# orientation, twist and all. Both only re-orient joints (positions are
+# preserved) and only act when their inputs exist (MIRROR_JOINTS needs an
+# L/R pair).
+MIRROR_ORIENT = True
+MIRROR_JOINTS = True
+# Only LOG intended changes without modifying joints (safe preview).
+MIRROR_ORIENT_DRYRUN = False
 # Character symmetry-plane normal: 'x' = YZ plane (left/right along X).
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
@@ -429,6 +442,7 @@ def get_user_editable_config():
         'INDIV_FK': INDIV_FK,
         'MAIN_CONTROLLER': MAIN_CONTROLLER,
         'MIRROR_ORIENT': MIRROR_ORIENT,
+        'MIRROR_JOINTS': MIRROR_JOINTS,
         'MIRROR_ORIENT_DRYRUN': MIRROR_ORIENT_DRYRUN,
         'MIRROR_AXIS': MIRROR_AXIS,
         'MIRROR_SOURCE_SIDE': MIRROR_SOURCE_SIDE,
@@ -566,8 +580,8 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
-    global MIRROR_ORIENT, MIRROR_ORIENT_DRYRUN, MIRROR_AXIS, MIRROR_SOURCE_SIDE
-    global ORIENT_AIM_AXIS, ORIENT_UP_AXIS
+    global MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_ORIENT_DRYRUN, MIRROR_AXIS
+    global MIRROR_SOURCE_SIDE, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
@@ -605,6 +619,7 @@ def load_config(filepath=None):
             'MAIN_CONTROLLER', config.get(
                 'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MAIN_CONTROLLER)))
         MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
+        MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
         MIRROR_ORIENT_DRYRUN = config.get('MIRROR_ORIENT_DRYRUN', MIRROR_ORIENT_DRYRUN)
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
