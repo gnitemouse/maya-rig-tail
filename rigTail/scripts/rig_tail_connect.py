@@ -192,10 +192,27 @@ def connect_root(fk, ik):
     if cmds.objExists(geometry_grp):
         rt_mya.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
                            en='Unlocked:Wireframe:Locked', dv=0)
-        # Display overrides are cosmetic: when the geometry group's
-        # overrideEnabled is locked or already driven (e.g. the group
-        # is in a display layer), leave the existing setup in place
-        # instead of failing the build
+        # Some incoming scenes (modeling/autorigger) drop the geometry group
+        # into a display layer (e.g. 'disp_geo'). That layer drives
+        # geometry.drawOverride, which both (a) forces overrideEnabled on -- so
+        # the export_geo block below gets skipped -- and (b) ANDs the layer's
+        # own visibility into the mesh, so root_ctrl.geo -> geometry.v can't
+        # actually show it. Evict the group back to the default layer so the
+        # rig owns its own visibility + display-type overrides. (We don't
+        # create this layer, so there's nothing to preserve on our side.)
+        member_layers = cmds.listConnections(
+            geometry_grp, type='displayLayer', s=True, d=False) or []
+        for layer in set(member_layers):
+            if layer != 'defaultLayer':
+                cmds.editDisplayLayerMembers('defaultLayer', geometry_grp,
+                                             noRecurse=True)
+                logger.info(
+                    f"Removed '{geometry_grp}' from display layer '{layer}' so "
+                    f"the root ctrl can drive geometry visibility/display.")
+                break
+        # Display overrides are cosmetic: if overrideEnabled is still locked or
+        # driven after the eviction above (unexpected), leave the existing
+        # setup in place instead of failing the build.
         if cmds.getAttr(f'{geometry_grp}.overrideEnabled', settable=True):
             cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
             # Enabling the override activates whatever overrideVisibility the
