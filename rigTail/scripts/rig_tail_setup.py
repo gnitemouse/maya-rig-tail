@@ -142,6 +142,14 @@ def run_setup(dry_run=None):
     if not (do_orient or do_mirror):
         logger.info('Setup: nothing enabled '
                     '(MIRROR_ORIENT and MIRROR_JOINTS both off)')
+
+    # The raw skeleton is the user's to inspect and pose during Setup, so
+    # keep every joint keyable and visible (the build later makes the rig
+    # joints non-keyable). Skipped on a dry run, which changes nothing.
+    if not dry_run:
+        rt_mya.finalize_joint_channels(
+            keyable=True, visibility=1, joint_dicts=[rt_cst.JOINTS_BN])
+
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
 
 

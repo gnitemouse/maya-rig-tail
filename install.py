@@ -12,10 +12,11 @@ Maya.env) is ever touched.
 --------------------------------------------------------------------------
 INSTALL (drag-and-drop)
     Drag install.py from a file browser into the Maya viewport. It copies
-    the module in and adds two shelf buttons -- "TailSetup" (skeleton
-    orient / mirror) and "TailRig" (the builder). Works immediately --
-    no restart. Keep install.py next to the rigTail/ folder and
-    rigTail.mod when you drag it, since it copies them.
+    the module in and adds three shelf buttons -- "TailSetup" (skeleton
+    orient / mirror, black icon), "TailRig" (the builder, white icon) and
+    "TailManual" (developer import/build/test workflow, grey icon). Works
+    immediately -- no restart. Keep install.py next to the rigTail/ folder
+    and rigTail.mod when you drag it, since it copies them.
 
 INSTALL (manual, no drag-and-drop)
     Copy rigTail/ and rigTail.mod into ~/Documents/maya/modules/
@@ -34,7 +35,7 @@ Installed layout:
         rigTail.mod
         rigTail/
             scripts/   rig_tail*.py + logger_config.py
-            icons/     octopus.png, octopus_200.png
+            icons/     octopus{,_black,_grey}.png (+ _200 variants)
 
 Compatible with Maya 2020+ (Python 3). UI tested in Maya 2024/2025.
 '''
@@ -50,14 +51,23 @@ import maya.mel as mel
 MODULE_NAME = 'rigTail'
 MOD_FILE = MODULE_NAME + '.mod'
 
-# Shelf icon: "Octopus" icon by Icons8 (https://icons8.com/icons/set/octopus).
+# Shelf icons: "Octopus" icon by Icons8 (https://icons8.com/icons/set/octopus).
 # Free use requires attribution -- see the Credits section of README.md.
-# Resolved by bare name via the module's icon path once registered.
-SHELF_ICON = 'octopus.png'
+# Resolved by bare name via the module's icon path once registered. Three
+# recolours of the same octopus distinguish the three buttons at a glance:
+#   white      -> Builder
+#   black      -> Setup
+#   light grey -> Manual Run (developer console workflow)
+SHELF_ICON = 'octopus.png'              # white  -- Builder
+SHELF_ICON_SETUP = 'octopus_black.png'  # black  -- Setup
+SHELF_ICON_MANUAL = 'octopus_grey.png'  # grey   -- Manual Run
 
 SHELF_BUTTON_LABEL = 'TailRig'
 # Second button for the Setup phase (skeleton orient / mirror).
 SHELF_SETUP_LABEL = 'TailSetup'
+# Third button: developer console workflow (import / build / setup / test
+# from the source tree).
+SHELF_MANUAL_LABEL = 'TailManual'
 
 # Command the shelf button runs. No absolute path is baked in: once the
 # module is registered, scripts/ is on sys.path automatically.
@@ -74,6 +84,61 @@ import importlib
 import rig_tail
 importlib.reload(rig_tail)
 rig_tail.main_setup()
+'''
+
+# Manual Run: a developer console workflow rather than a UI launcher. It
+# loads the modules fresh from the SOURCE tree (edit a .py, click the
+# button, it re-imports and runs) and keeps module handles bound for
+# interactive testing in the Script Editor. Commented lines lay out the
+# full workflow -- setup, build, and test -- so the user can uncomment the
+# call they want. Raw string so the Windows TOOL_DIR backslashes survive.
+LAUNCH_MANUAL_COMMAND = r'''# Rig Tail -- Manual Run (import / build / setup / test from source)
+import sys
+import os
+import importlib
+
+# Source scripts dir (edit this if your repo lives elsewhere).
+TOOL_DIR = os.path.expanduser(r'~\Documents\maya-rig-tail\rigTail\scripts')
+
+# Put this version's directory at the FRONT of sys.path
+# so that internal imports resolve to files in THIS directory.
+if TOOL_DIR in sys.path:
+    sys.path.remove(TOOL_DIR)
+sys.path.insert(0, TOOL_DIR)
+
+# Purge already loaded modules
+for mod_name in list(sys.modules):
+    if mod_name.startswith('rig_tail'):
+        del sys.modules[mod_name]
+
+# Fresh import.
+# rig_tail pulls in the rest via its own imports;
+# explicit list keeps handles around for console testing
+rt = importlib.import_module('rig_tail')
+rt_con = importlib.import_module('rig_tail_connect')
+rt_cst = importlib.import_module('rig_tail_constants')
+rt_ctl = importlib.import_module('rig_tail_control')
+rt_crv = importlib.import_module('rig_tail_curve')
+rt_fk = importlib.import_module('rig_tail_fk')
+rt_set = importlib.import_module('rig_tail_setup')
+rt_str = importlib.import_module('rig_tail_stretch')
+rt_test = importlib.import_module('rig_tail_test')
+
+# --- SETUP phase (optional; run BEFORE the build, on the raw BN skeleton) ---
+#rt.setup_tails('squid', dry_run=True)   # preview only (orient/mirror), no changes
+#rt.setup_tails('squid')                 # apply orient/mirror, then build
+#rt.main_setup()                         # or open the Setup UI
+
+# --- BUILD ---
+#rt.rig_tail_single('tail', fk=True, ik=True)
+rt.rig_tail_multiple('squid', fk=True, ik=True)
+#rt.main()                               # or open the Builder UI
+
+# --- TEST / INSPECT (after a build) ---
+#rt_test.run_all('squid')                    # full test sweep
+#rt_test.report_bend(rt_cst.RIGPARTS)        # per-chain bend angles
+#rt_test.probe('after build', 'C_fintail')   # quick joint probe
+#rt_test.measure_rebuild_degradation(rt_cst.RIGPARTS, rebuilds=2)
 '''
 
 
@@ -146,22 +211,23 @@ def _remove_existing_button(shelf, label):
 
 
 def _add_shelf_button():
-    '''Add (or refresh) the TailSetup + TailRig launchers on the active shelf.
+    '''Add (or refresh) the TailSetup + TailRig + TailManual launchers.
 
-    Two buttons for the two phases: Setup (orient/mirror the skeleton)
-    then Build. The Setup button is added first so it sits to the left of
-    the Builder, matching the order they are used.
+    Three buttons, added left-to-right in the order they are used: Setup
+    (orient/mirror the skeleton, black icon), Build (the builder, white
+    icon), and Manual Run (developer console workflow, grey icon).
     '''
     shelf = _current_shelf()
     _remove_existing_button(shelf, SHELF_SETUP_LABEL)
     _remove_existing_button(shelf, SHELF_BUTTON_LABEL)
+    _remove_existing_button(shelf, SHELF_MANUAL_LABEL)
 
     cmds.shelfButton(
         parent=shelf,
         label=SHELF_SETUP_LABEL,
         annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
-        image=SHELF_ICON,
-        image1=SHELF_ICON,
+        image=SHELF_ICON_SETUP,
+        image1=SHELF_ICON_SETUP,
         sourceType='python',
         command=LAUNCH_SETUP_COMMAND,
     )
@@ -173,6 +239,16 @@ def _add_shelf_button():
         image1=SHELF_ICON,
         sourceType='python',
         command=LAUNCH_COMMAND,
+    )
+    cmds.shelfButton(
+        parent=shelf,
+        label=SHELF_MANUAL_LABEL,
+        annotation='Rig Tail Manual Run: import / build / setup / test '
+                   'the modules from source (developer console workflow)',
+        image=SHELF_ICON_MANUAL,
+        image1=SHELF_ICON_MANUAL,
+        sourceType='python',
+        command=LAUNCH_MANUAL_COMMAND,
     )
     return shelf
 
@@ -195,9 +271,10 @@ def onMayaDroppedPythonFile(*args):
         raise
 
     cmds.inViewMessage(
-        amg='<hl>Rig Tail installed</hl> - see the "{0}" and "{1}" '
-            'buttons on the "{2}" shelf'.format(
-                SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, shelf),
+        amg='<hl>Rig Tail installed</hl> - see the "{0}", "{1}" and "{2}" '
+            'buttons on the "{3}" shelf'.format(
+                SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_MANUAL_LABEL,
+                shelf),
         pos='midCenter', fade=True, fadeStayTime=3000)
 
     print('# Rig Tail: installed module to {0}'.format(module_dir))

@@ -25,6 +25,8 @@ Functions:
     set_transform_visibility: Set transform attribute visibility
     set_curve_visibility: Set curve visibility
     set_group_visibility: Set group visibility
+    set_joint_channels: Set a joint's channels (non-)keyable, no locking
+    finalize_joint_channels: Apply set_joint_channels to all rig joints
     create_group: Create transform group
     create_condition: Create condition node
     create_condition_multi: Create multi-output condition
@@ -577,6 +579,76 @@ def set_group_visibility(group, visibility=1):
             if cmds.attributeQuery(f"{attribute}{axis}", n=group, ex=1):
                 cmds.setAttr(f"{group}.{attribute}{axis}", k=0, cb=0, l=1)
     set_visibility(group, visibility, k=0, cb=1, l=0)
+
+
+def set_joint_channels(joint, keyable, visibility=None):
+    """
+    Set the keyable state of a joint's channels (translate, rotate, scale,
+    radius) WITHOUT locking them, so rig-driven connections (offsetParent-
+    Matrix, constraints, SDKs) stay intact -- locking would break an
+    incoming connection, but toggling the keyable flag does not.
+
+    keyable=False leaves the channels shown in the channel box (cb=1) but
+    non-keyable, so they can be read yet not accidentally keyed in
+    animation. keyable=True restores them to keyable.
+
+    Arguments:
+        joint (str): Joint transform.
+        keyable (bool): Keyable state to apply.
+        visibility (int|None): When not None, also set the joint's
+            visibility to this value (0/1); its keyable flag follows
+            `keyable`.
+    """
+    if not cmds.objExists(joint):
+        logger.error(f"'{joint}' does not exist.")
+        return
+    k = 1 if keyable else 0
+    cb = 0 if keyable else 1
+    for attribute in ['translate', 'rotate', 'scale']:
+        for axis in 'XYZ':
+            if cmds.attributeQuery(f"{attribute}{axis}", n=joint, ex=1):
+                cmds.setAttr(f"{joint}.{attribute}{axis}", k=k, cb=cb)
+    if cmds.attributeQuery('radius', n=joint, ex=1):
+        cmds.setAttr(f"{joint}.radius", k=k, cb=cb)
+    if visibility is not None:
+        set_visibility(joint, visibility, k=k, cb=1, l=0)
+
+
+def finalize_joint_channels(keyable, visibility=None, joint_dicts=None):
+    """
+    Apply set_joint_channels across cached rig joints.
+
+    The build calls this with keyable=False (all four caches) so the
+    deformation/rig joints are non-keyable and cannot be accidentally keyed
+    in animation; the Setup phase calls it with keyable=True, visibility=1
+    and joint_dicts=[JOINTS_BN] so the raw skeleton stays fully keyable and
+    visible while it is being prepared, without touching a prior build's
+    IK/FK joints.
+
+    Arguments:
+        keyable (bool): Keyable state to apply to every joint.
+        visibility (int|None): When not None, force every joint's
+            visibility to this value.
+        joint_dicts (list|None): Joint-cache dicts to process; defaults to
+            all four (BN, IK, FK, FX).
+
+    Return
+        int: number of joints processed.
+    """
+    if joint_dicts is None:
+        joint_dicts = [rt_cst.JOINTS_BN, rt_cst.JOINTS_IK,
+                       rt_cst.JOINTS_FK, rt_cst.JOINTS_FX]
+    count = 0
+    for jdict in joint_dicts:
+        for joints in jdict.values():
+            for jnt in joints:
+                if cmds.objExists(jnt):
+                    set_joint_channels(jnt, keyable, visibility)
+                    count += 1
+    state = 'keyable' if keyable else 'non-keyable'
+    vis = f', visibility={visibility}' if visibility is not None else ''
+    logger.debug(f'Set {count} joints {state}{vis}')
+    return count
 
 
 def swap_shapes(target, source):

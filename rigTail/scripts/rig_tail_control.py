@@ -189,13 +189,27 @@ def set_control_color(control, color='neonblue'):
     '''
     Set control color using Maya's override system.
 
+    The override is written onto the control's SHAPE nodes -- the shape is
+    what the viewport draws, and shape colour survives a rebuild's shape
+    swap. Writing it only on the transform is fragile on re-runs: a
+    swapped-in shape that carries its own overrideEnabled masks the
+    transform's override, so the colour silently stops updating. Locked or
+    connected override plugs are skipped rather than erroring.
+
     Arguments
         control (str): Control name
         color (str): Color name from COLOR_OVERRIDE dict
     '''
-    cmds.setAttr(f'{control}.overrideEnabled', 1)
-    cmds.setAttr(f'{control}.overrideRGBColors', 0)
-    cmds.setAttr(f'{control}.overrideColor', rt_cst.COLOR_OVERRIDE[color])
+    index = rt_cst.COLOR_OVERRIDE[color]
+    shapes = cmds.listRelatives(control, shapes=True, fullPath=True) or [control]
+    for node in shapes:
+        for plug, value in (('overrideEnabled', 1),
+                            ('overrideRGBColors', 0),
+                            ('overrideColor', index)):
+            attr = f'{node}.{plug}'
+            if cmds.attributeQuery(plug, node=node, exists=True) and \
+                    cmds.getAttr(attr, settable=True):
+                cmds.setAttr(attr, value)
 
 def create_control_shape(name, size=1, nr=(1,0,0), color='darkcyan', shape=None):
     '''

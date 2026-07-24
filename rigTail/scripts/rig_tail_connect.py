@@ -101,6 +101,12 @@ def connect_rig_tail(fk, ik):
     # drivers out of the cog channel box (no-op when the dashboard is off)
     rt_mc.hide_resolved_attrs()
 
+    # Rig joints are driven by the rig, never keyed directly: make every
+    # joint channel non-keyable (shown but not settable) so animators cannot
+    # accidentally key them. Not locked -- the OPM/constraint/SDK
+    # connections that drive the joints must stay intact.
+    rt_mya.finalize_joint_channels(keyable=False)
+
     logger.debug('DONE Connected Rig Components')
     logger.debug('-----------------------------------------------------')
 
