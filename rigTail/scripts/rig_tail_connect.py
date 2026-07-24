@@ -198,6 +198,13 @@ def connect_root(fk, ik):
         # instead of failing the build
         if cmds.getAttr(f'{geometry_grp}.overrideEnabled', settable=True):
             cmds.setAttr(f'{geometry_grp}.overrideEnabled', 1)
+            # Enabling the override activates whatever overrideVisibility the
+            # group came in with. Modeling/autorigger scenes sometimes leave
+            # it OFF, which then hides all geometry once we switch the
+            # override on. Force it visible (the Show/Hide toggle already
+            # lives on the separate .visibility -> geometry.v channel).
+            if cmds.getAttr(f'{geometry_grp}.overrideVisibility', settable=True):
+                cmds.setAttr(f'{geometry_grp}.overrideVisibility', 1)
             cmds.connectAttr(f'{root_ctrl}.export_geo',
                              f'{geometry_grp}.overrideDisplayType', f=1)
             cmds.setAttr(f'{root_ctrl}.export_geo', 2)
