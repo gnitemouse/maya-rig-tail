@@ -20,7 +20,8 @@ copies a clean source. Mirroring on its own does not remove twist.
 
 Only joint orientation changes; world positions are always preserved.
 Orientation is written into jointOrient with rotate left at zero.
-MIRROR_ORIENT_DRYRUN logs the intended changes without touching anything.
+MIRROR_DRYRUN logs the intended changes (for both operations) without
+touching anything.
 
 Re-orienting a bound joint would drag the mesh, so setup_tails unbinds the
 affected geometry first and leaves it for the build to rebind.
@@ -53,7 +54,7 @@ logger = logger_setup(__name__)
 _CST_DEFAULTS = {
     'MIRROR_ORIENT': True,          # aim-orient chains (remove twist)
     'MIRROR_JOINTS': True,          # behavior-mirror L/R pairs
-    'MIRROR_ORIENT_DRYRUN': False,  # only log intended changes; do not modify
+    'MIRROR_DRYRUN': False,         # only log intended changes; do not modify
     'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
@@ -91,8 +92,8 @@ def setup_tails(root=None, dry_run=None):
 
     Arguments
         root (str): Rig root name (sets rt_cst.ROOT); skipped when None.
-        dry_run (bool): Override MIRROR_ORIENT_DRYRUN; None uses the
-            setting. When true nothing is unbound or modified.
+        dry_run (bool): Override MIRROR_DRYRUN; None uses the setting.
+            When true nothing is unbound or modified.
 
     Return
         dict: summary from run_setup, {'oriented', 'mirrored', 'dry_run'}.
@@ -106,7 +107,7 @@ def setup_tails(root=None, dry_run=None):
         return {'oriented': 0, 'mirrored': 0, 'dry_run': True}
 
     preview = dry_run if dry_run is not None \
-        else bool(_cst('MIRROR_ORIENT_DRYRUN'))
+        else bool(_cst('MIRROR_DRYRUN'))
     if not preview:
         for rigname in found:
             rt_mya.unbind_geometry(rigname)
@@ -124,14 +125,13 @@ def run_setup(dry_run=None):
     the affected geometry unbound. Positions are never changed.
 
     Arguments
-        dry_run (bool): Override MIRROR_ORIENT_DRYRUN; None uses the
-            setting.
+        dry_run (bool): Override MIRROR_DRYRUN; None uses the setting.
 
     Return
         dict: {'oriented': n, 'mirrored': n, 'dry_run': bool}.
     '''
     if dry_run is None:
-        dry_run = bool(_cst('MIRROR_ORIENT_DRYRUN'))
+        dry_run = bool(_cst('MIRROR_DRYRUN'))
     do_orient = bool(_cst('MIRROR_ORIENT'))
     do_mirror = bool(_cst('MIRROR_JOINTS'))
     mode = ' [dry-run]' if dry_run else ''

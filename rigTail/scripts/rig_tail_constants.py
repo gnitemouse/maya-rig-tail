@@ -77,8 +77,9 @@ FORCE_REBUILD = False
 # L/R pair).
 MIRROR_ORIENT = True
 MIRROR_JOINTS = True
-# Only LOG intended changes without modifying joints (safe preview).
-MIRROR_ORIENT_DRYRUN = False
+# Only LOG the intended changes without modifying joints (safe preview);
+# covers both operations above (orient and mirror).
+MIRROR_DRYRUN = False
 # Character symmetry-plane normal: 'x' = YZ plane (left/right along X).
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
@@ -443,7 +444,7 @@ def get_user_editable_config():
         'MAIN_CONTROLLER': MAIN_CONTROLLER,
         'MIRROR_ORIENT': MIRROR_ORIENT,
         'MIRROR_JOINTS': MIRROR_JOINTS,
-        'MIRROR_ORIENT_DRYRUN': MIRROR_ORIENT_DRYRUN,
+        'MIRROR_DRYRUN': MIRROR_DRYRUN,
         'MIRROR_AXIS': MIRROR_AXIS,
         'MIRROR_SOURCE_SIDE': MIRROR_SOURCE_SIDE,
         'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
@@ -580,7 +581,7 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
-    global MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_ORIENT_DRYRUN, MIRROR_AXIS
+    global MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
@@ -620,7 +621,9 @@ def load_config(filepath=None):
                 'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MAIN_CONTROLLER)))
         MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
         MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
-        MIRROR_ORIENT_DRYRUN = config.get('MIRROR_ORIENT_DRYRUN', MIRROR_ORIENT_DRYRUN)
+        # 'MIRROR_ORIENT_DRYRUN' is the legacy key name for MIRROR_DRYRUN
+        MIRROR_DRYRUN = config.get(
+            'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)

@@ -110,7 +110,7 @@ Setup phase: orient and mirror the BN skeleton before the build. Optional
 and never runs during the build. Two independent toggles in
 `rig_tail_constants`: `MIRROR_ORIENT` (aim-orient, removes intra-chain
 twist) and `MIRROR_JOINTS` (behavior-mirror `L_`/`R_` pairs). Positions
-are never changed; `MIRROR_ORIENT_DRYRUN` previews without modifying.
+are never changed; `MIRROR_DRYRUN` previews both operations without modifying.
 
 ### Functions
 

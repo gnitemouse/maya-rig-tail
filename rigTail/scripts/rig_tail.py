@@ -310,8 +310,8 @@ def setup_tails(root=None, dry_run=None):
 
     Arguments
         root (str): Rig root name; sets rt_cst.ROOT when given.
-        dry_run (bool): override MIRROR_ORIENT_DRYRUN; None uses the
-            setting. When true, nothing is unbound or modified.
+        dry_run (bool): override MIRROR_DRYRUN; None uses the setting.
+            When true, nothing is unbound or modified.
 
     Return
         dict: summary from rig_tail_setup.run_setup.

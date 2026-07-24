@@ -74,24 +74,56 @@ class RigTailSetupUI(QtWidgets.QDialog):
         author.setAlignment(QtCore.Qt.AlignRight)
         main_layout.addWidget(author)
 
-        # Current configuration + config file row
+        # Current configuration + config file row (mirrors the Builder)
         display_group = self.create_group_box('Current Configuration')
         display_layout = QtWidgets.QVBoxLayout()
+
         self.txt_display = QtWidgets.QTextEdit()
         self.txt_display.setReadOnly(True)
-        self.txt_display.setMaximumHeight(110)
+        self.txt_display.setMaximumHeight(120)
         self.txt_display.setStyleSheet('''
             QTextEdit {
-                background-color: #2b2b2b; color: #cccccc;
-                font-family: Consolas, monospace; font-size: 11px;
-                border: 1px solid #555555; border-radius: 4px;
+                background-color: #2b2b2b;
+                color: #cccccc;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+                border: 1px solid #555555;
+                border-radius: 4px;
                 padding: 2px 20px;
             }
         ''')
         self.txt_display.document().setDocumentMargin(4)
+        self.txt_display.setToolTip('Summary of setup configuration')
         display_layout.setContentsMargins(8, 2, 8, 2)
         display_layout.setSpacing(4)
         display_layout.addWidget(self.txt_display)
+
+        config_file_layout = QtWidgets.QHBoxLayout()
+        lbl_config = QtWidgets.QLabel('File:')
+        lbl_config.setMinimumWidth(24)
+        self.txt_config = QtWidgets.QLineEdit()
+        self.txt_config.setPlaceholderText('Default')
+        self.txt_config.setStyleSheet('''
+            QLineEdit {
+                background-color: #2b2b2b;
+                color: #4A90E2;
+                font-size: 10px;
+                border: 1px solid #555555;
+                border-radius: 10px;
+                padding: 2px 14px;
+            }
+            QLineEdit:focus {
+                border-color: #F5D041;
+            }
+        ''')
+        self.txt_config.setToolTip(
+            'Config file currently in effect (Default = built-in '
+            'defaults). Type a path and press Enter to load it '
+            'directly; Load/Save Config update it too.')
+        self.txt_config.returnPressed.connect(self.load_config_from_text)
+        config_file_layout.addWidget(lbl_config)
+        config_file_layout.addWidget(self.txt_config)
+        display_layout.addLayout(config_file_layout)
 
         config_btn_layout = QtWidgets.QHBoxLayout()
         self.btn_load_config = QtWidgets.QPushButton('Load Config')
@@ -105,6 +137,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
         config_btn_layout.addWidget(self.btn_load_config)
         config_btn_layout.addWidget(self.btn_save_config)
         display_layout.addLayout(config_btn_layout)
+        display_layout.addSpacing(8)
+
         display_group.setLayout(display_layout)
         main_layout.addWidget(display_group)
 
@@ -112,23 +146,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
         options_group = self.create_group_box('Setup Options')
         options_layout = QtWidgets.QVBoxLayout()
         options_layout.setSpacing(8)
-
-        root_layout = QtWidgets.QHBoxLayout()
-        root_label = QtWidgets.QLabel('Root Name:')
-        root_label.setMinimumWidth(110)
-        self.txt_root = QtWidgets.QLineEdit()
-        self.txt_root.setPlaceholderText('e.g. squid')
-        self.txt_root.setToolTip('Rig root name (ROOT), same as the Builder.')
-        self.txt_root.setStyleSheet('''
-            QLineEdit {
-                background-color: #3a3a3a; color: #cccccc; font-size: 11px;
-                border: 1px solid #4A90E2; border-radius: 4px; padding: 4px 6px;
-            }
-            QLineEdit:focus { border-color: #F5D041; }
-        ''')
-        root_layout.addWidget(root_label)
-        root_layout.addWidget(self.txt_root)
-        options_layout.addLayout(root_layout)
 
         btn_parts = QtWidgets.QPushButton('Edit Rig Parts')
         btn_parts.setToolTip('Edit RIGPARTS: the tails to set up (shared with the Builder).')
@@ -151,8 +168,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'itself, so enable Orient Chains too. (MIRROR_JOINTS)')
         self.chk_dryrun = QtWidgets.QCheckBox('Dry Run (preview only)')
         self.chk_dryrun.setToolTip(
-            'Only log the intended changes; do not modify any joints or '
-            'unbind geometry. Use this first to verify. (MIRROR_ORIENT_DRYRUN)')
+            'Only log the intended changes for both operations (orient and '
+            'mirror); do not modify any joints or unbind geometry. Use this '
+            'first to verify. (MIRROR_DRYRUN)')
         for chk in (self.chk_orient, self.chk_mirror, self.chk_dryrun):
             self.style_checkbox(chk)
             options_layout.addWidget(chk)
@@ -169,10 +187,14 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'Local axis aimed down each chain. (ORIENT_AIM_AXIS)')
         self.cmb_up = self._combo(self.AXES,
             'Local axis aligned to the chain plane normal. (ORIENT_UP_AXIS)')
-        options_layout.addLayout(self._labeled_row('Mirror Source Side:', self.cmb_source))
-        options_layout.addLayout(self._labeled_row('Mirror Axis (plane normal):', self.cmb_axis))
-        options_layout.addLayout(self._labeled_row('Aim Axis (down chain):', self.cmb_aim))
-        options_layout.addLayout(self._labeled_row('Up Axis (plane normal):', self.cmb_up))
+        # Keep the dropdown rows close together in their own tight layout.
+        combos_layout = QtWidgets.QVBoxLayout()
+        combos_layout.setSpacing(2)
+        combos_layout.addLayout(self._labeled_row('Mirror Source Side:', self.cmb_source))
+        combos_layout.addLayout(self._labeled_row('Mirror Axis (plane normal):', self.cmb_axis))
+        combos_layout.addLayout(self._labeled_row('Aim Axis (down chain):', self.cmb_aim))
+        combos_layout.addLayout(self._labeled_row('Up Axis (plane normal):', self.cmb_up))
+        options_layout.addLayout(combos_layout)
 
         options_group.setLayout(options_layout)
         main_layout.addWidget(options_group)
@@ -243,6 +265,15 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 QPushButton:hover { background-color: #4153F5; }
                 QPushButton:pressed { background-color: #304EB8; }
             ''')
+        elif style == 2:  # yellow (used by the shared RIGPARTS editor)
+            button.setStyleSheet('''
+                QPushButton {
+                    background-color: #F5D041; color: #555555; border: none;
+                    border-radius: 4px; padding: 8px 16px;
+                }
+                QPushButton:hover { background-color: #ECBE0C; }
+                QPushButton:pressed { background-color: #A58509; }
+            ''')
         else:  # grey
             button.setStyleSheet('''
                 QPushButton {
@@ -268,10 +299,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def load_current_values(self):
         '''Refresh fields from rig_tail_constants (getattr for stale sessions).'''
-        self.txt_root.setText(getattr(rt_cst, 'ROOT', ''))
         self.chk_orient.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT', True)))
         self.chk_mirror.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', True)))
-        self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT_DRYRUN', False)))
+        self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
         self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
         self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))
         self._combo_set(self.cmb_aim, getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'))
@@ -282,7 +312,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         '''Write the UI state into rig_tail_constants.'''
         rt_cst.MIRROR_ORIENT = self.chk_orient.isChecked()
         rt_cst.MIRROR_JOINTS = self.chk_mirror.isChecked()
-        rt_cst.MIRROR_ORIENT_DRYRUN = self.chk_dryrun.isChecked()
+        rt_cst.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         rt_cst.MIRROR_AXIS = self.cmb_axis.currentText()
         rt_cst.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
@@ -302,6 +332,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         return pairs
 
     def update_display(self):
+        self.txt_config.setText(getattr(rt_cst, 'LOADED_CONFIG', None) or '')
         parts = rt_cst.RIGPARTS
         pairs = self._mirror_pairs()
         pair_txt = ', '.join(f'{s}->{t}' for s, t in pairs) if pairs else '(none)'
@@ -326,14 +357,12 @@ class RigTailSetupUI(QtWidgets.QDialog):
             self.update_display()
 
     def config_start_path(self):
-        return getattr(rt_cst, 'CONFIG_FILE', '')
+        '''Config path to preselect in file dialogs: the textbox path if
+        one is typed/displayed, otherwise the default CONFIG_FILE.'''
+        return self.txt_config.text().strip() or getattr(rt_cst, 'CONFIG_FILE', '')
 
-    def load_config(self):
-        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, 'Load Config', self.config_start_path(),
-            'JSON Files (*.json);;All Files (*)')
-        if not filepath:
-            return
+    def load_config_path(self, filepath):
+        '''Load the given config file and refresh the UI.'''
         if rt_cst.load_config(filepath):
             self.load_current_values()
             QtWidgets.QMessageBox.information(
@@ -342,7 +371,27 @@ class RigTailSetupUI(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(
                 self, 'Warning', f'Failed to load configuration from:\n{filepath}')
 
+    def load_config(self):
+        '''Import configuration from a user-chosen JSON config file.'''
+        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Load Config', self.config_start_path(),
+            'JSON Files (*.json);;All Files (*)')
+        if filepath:
+            self.load_config_path(filepath)
+
+    def load_config_from_text(self):
+        '''Load the config path typed into the config textbox (Enter).'''
+        filepath = self.txt_config.text().strip()
+        if not filepath:
+            return
+        if not os.path.isfile(filepath):
+            QtWidgets.QMessageBox.warning(
+                self, 'Warning', f'Config file not found:\n{filepath}')
+            return
+        self.load_config_path(filepath)
+
     def save_config(self):
+        '''Export configuration to a user-chosen JSON config file.'''
         self.save_current_values()
         filepath, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, 'Save Config', self.config_start_path(),
@@ -350,6 +399,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         if not filepath:
             return
         if rt_cst.save_config(filepath):
+            self.update_display()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration saved to:\n{filepath}')
         else:
@@ -366,7 +416,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
             return
 
         self.save_current_values()
-        root = self.txt_root.text().strip() or None
         dry = self.chk_dryrun.isChecked()
 
         if not (self.chk_orient.isChecked() or self.chk_mirror.isChecked()):
@@ -375,7 +424,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
             return
 
         try:
-            result = rt_set.setup_tails(root=root, dry_run=dry)
+            # ROOT is not needed here: the Setup phase detects BN chains by
+            # RIGPARTS naming, not by the rig root. Build sets ROOT.
+            result = rt_set.setup_tails(root=None, dry_run=dry)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error',
                 f'Setup failed:\n{str(e)}')
