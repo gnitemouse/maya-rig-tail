@@ -55,6 +55,16 @@ BUILD_IK = True
 INDIV_FK = False
 # Build centralized main controller dashboard (for multiple tails)
 MAIN_CONTROLLER = False
+# Behavior-mirror matching 'L_'/'R_' tail chains during setup so left
+# and right sides move as mirror images (see rig_tail_orient). Only
+# acts when an L/R pair is present.
+MIRROR_ORIENT = True
+# Log intended mirror changes without modifying the joints.
+MIRROR_ORIENT_DRYRUN = False
+# Character symmetry-plane normal: 'x' = YZ plane (left/right along X).
+MIRROR_AXIS = 'x'
+# Authored side used as the mirror source; the other side is overwritten.
+MIRROR_SOURCE_SIDE = 'R'
 # Force Rebuild (even if joints are unchanged)
 FORCE_REBUILD = False
 # Max per-joint world position drift (scene units) still treated as
@@ -410,6 +420,10 @@ def get_user_editable_config():
         'BUILD_IK': BUILD_IK,
         'INDIV_FK': INDIV_FK,
         'MAIN_CONTROLLER': MAIN_CONTROLLER,
+        'MIRROR_ORIENT': MIRROR_ORIENT,
+        'MIRROR_ORIENT_DRYRUN': MIRROR_ORIENT_DRYRUN,
+        'MIRROR_AXIS': MIRROR_AXIS,
+        'MIRROR_SOURCE_SIDE': MIRROR_SOURCE_SIDE,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
 
@@ -542,6 +556,7 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
+    global MIRROR_ORIENT, MIRROR_ORIENT_DRYRUN, MIRROR_AXIS, MIRROR_SOURCE_SIDE
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
@@ -578,6 +593,10 @@ def load_config(filepath=None):
         MAIN_CONTROLLER = config.get(
             'MAIN_CONTROLLER', config.get(
                 'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MAIN_CONTROLLER)))
+        MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
+        MIRROR_ORIENT_DRYRUN = config.get('MIRROR_ORIENT_DRYRUN', MIRROR_ORIENT_DRYRUN)
+        MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
+        MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
 

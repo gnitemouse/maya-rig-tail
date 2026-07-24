@@ -26,6 +26,7 @@ import rig_tail_cache as rt_cache
 import rig_tail_control as rt_ctl
 import rig_tail_connect as rt_con
 import rig_tail_mainctrl as rt_mc
+import rig_tail_orient as rt_orient
 
 logger = logger_setup(__name__)
 
@@ -425,6 +426,13 @@ def setup_rig(fk, ik):
 
     # The matrix OPM network needs matrixNodes; load it up front
     rt_mya.ensure_plugins()
+
+    # Behavior-mirror L/R chains before anything reads their orientation.
+    # This is the safe window: cleanup_rig has unbound geometry and the
+    # FK/IK driver chains are still free duplicates (not yet wired to
+    # controls or the spline), so re-orienting cannot drag skin or a
+    # live rig. No-op when MIRROR_ORIENT is off or no L/R pair exists.
+    rt_orient.mirror_orient_all(fk, ik)
 
     # Sync IKFK_MODES with the build options before the switch attribute
     # is created (connect_cog): IK-only builds must not offer 'FK'
