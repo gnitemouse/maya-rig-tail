@@ -409,7 +409,13 @@ def add_twist_attributes_to_basectrl(rigname, basectrl):
             cmds.addAttr(basectrl, ln=attr, at='float', k=1, dv=0)
 
 def add_attributes_ikfk_switch(control, fk, ik):
-    rt_mya.add_attribute_enum(control, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
+    # The autorigger leaves its own empty switch divider on the cog
+    # (ln 'ikfkDivider', labeled TAIL IKFK); ours takes over that label,
+    # so drop the stale one rather than showing two dividers
+    if cmds.attributeQuery('ikfkDivider', n=control, ex=1):
+        rt_mya.remove_attribute(control, 'ikfkDivider')
+
+    rt_mya.add_attribute_enum(control, rt_cst.TAIL_IKFK_DIVIDER[0], rt_cst.TAIL_IKFK_DIVIDER[1], rt_cst.TAIL_IKFK_DIVIDER[2])
 
     for rigname in rt_cst.RIGPARTS:
         ln_ikfk = rt_nam.fstr(rigname, rt_cst.IKFK)

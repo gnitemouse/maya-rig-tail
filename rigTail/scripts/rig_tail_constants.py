@@ -185,6 +185,11 @@ IKFK_MODE_DESCRIPTIONS = {
           'and rotate adjacent joints within falloff range.'
 }
 IKFK_DIVIDER = ('ikfk_divider', '----------', 'IKFK')
+# The cog's switch section label. Shares the ikfk_divider long name with
+# IKFK_DIVIDER so a rebuild relabels the existing divider in place
+# (keeping its channel-box position); per-tail controls keep the plain
+# IKFK label above their own switch proxy.
+TAIL_IKFK_DIVIDER = (IKFK_DIVIDER[0], IKFK_DIVIDER[1], 'TAIL IKFK')
 STRETCH_DIVIDER = ('stretch_divider', '----------', 'STRETCH')
 ANIM_DIVIDER = ('anim_divider', '----------', 'ANIMATION')
 TWIST_DIVIDER = ('twist_divider', '----------', 'TWIST')

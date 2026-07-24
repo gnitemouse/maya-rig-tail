@@ -55,6 +55,7 @@ logger = logger_setup(__name__)
 # rig_tail_constants; existing attributes are never overwritten, so a
 # restarted session or a user-customized constants module wins.
 _CST_DEFAULTS = {
+    'TAIL_IKFK_DIVIDER': ('ikfk_divider', '----------', 'TAIL IKFK'),
     'ALL_DIVIDER': ('all_divider', '----------', 'ALL'),
     'OVERRIDE_ALL_DIVIDER': ('override_all_divider', '----------', 'OVERRIDE ALL'),
     'OVERRIDE_DIVIDER': ('override_divider', '----------', 'OVERRIDE'),
