@@ -76,7 +76,10 @@ FORCE_REBUILD = False
 # preserved) and only act when their inputs exist (MIRROR_JOINTS needs an
 # L/R pair).
 MIRROR_ORIENT = True
-MIRROR_JOINTS = True
+# Default OFF: the behavior-mirror math (rig_tail_setup.mirror_frames) is
+# known to flip L/R sides incorrectly and needs a Maya-verified rewrite
+# before it is trusted on by default. Enable per-run once fixed.
+MIRROR_JOINTS = False
 # Only LOG the intended changes without modifying joints (safe preview);
 # covers both operations above (orient and mirror).
 MIRROR_DRYRUN = False

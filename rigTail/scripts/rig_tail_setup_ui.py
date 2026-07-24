@@ -300,7 +300,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
     def load_current_values(self):
         '''Refresh fields from rig_tail_constants (getattr for stale sessions).'''
         self.chk_orient.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT', True)))
-        self.chk_mirror.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', True)))
+        self.chk_mirror.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
         self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
         self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
         self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))

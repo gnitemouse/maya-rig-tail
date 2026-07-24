@@ -53,7 +53,7 @@ logger = logger_setup(__name__)
 # restarted or customized session already provides.
 _CST_DEFAULTS = {
     'MIRROR_ORIENT': True,          # aim-orient chains (remove twist)
-    'MIRROR_JOINTS': True,          # behavior-mirror L/R pairs
+    'MIRROR_JOINTS': False,         # behavior-mirror L/R pairs (off: math WIP)
     'MIRROR_DRYRUN': False,         # only log intended changes; do not modify
     'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
