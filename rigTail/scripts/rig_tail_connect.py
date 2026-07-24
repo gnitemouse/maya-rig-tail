@@ -227,7 +227,7 @@ def connect_basectrl(rigname, fk, ik):
 
     rt_mya.parent_to(basectrl_grp, cog_ctrl)
 
-    # Channel box order: OVERRIDE (dashboard only), IKFK, STRETCH,
+    # Channel box order: OVERRIDE ALL (dashboard only), IKFK, STRETCH,
     # TWIST, ANIMATION, JNT SCALE
     # (STRETCH attributes always come before TWIST attributes)
     if rt_mc.active():

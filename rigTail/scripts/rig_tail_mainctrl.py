@@ -10,13 +10,13 @@ Built when the MAIN_CONTROLLER option is on and RIGPARTS has 2+ parts
 - ALL section (real attributes on the cog): one 'all_*' copy of every
   routed attribute -- IKFK mode, STRETCH, TWIST and ANIMATION values.
   JNT SCALE attributes stay per-tail and are never routed.
-- OVERRIDE ALL section: one '{rigname}_override' flag per tail.
+- OVERRIDE section: one '{rigname}_override' flag per tail.
   Override Off (default): the tail follows the ALL values directly and
   its basectrl values are ignored downstream (though they stay
   editable). Override On: the tail uses its own basectrl values. Each
-  basectrl shows its flag through a proxy attribute, following the
-  existing convention that global truth lives on the cog (like the
-  per-tail IKFK switches).
+  basectrl shows its flag through an 'Override All' proxy attribute
+  (under an OVERRIDE ALL divider), following the existing convention
+  that global truth lives on the cog (like the per-tail IKFK switches).
 
 Routing is one condition node per tail per routed attribute
 ('{rigname}_{attr}_override_condition'): firstTerm reads the override
@@ -176,11 +176,11 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
         if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
             cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
 
-    # OVERRIDE ALL section: per-tail flags. Off (default) follows the
+    # OVERRIDE section: per-tail flags. Off (default) follows the
     # ALL values; On uses the tail's own basectrl values.
-    rt_mya.add_attribute_enum(cog_ctrl, rt_cst.OVERRIDE_ALL_DIVIDER[0],
-                              rt_cst.OVERRIDE_ALL_DIVIDER[1],
-                              rt_cst.OVERRIDE_ALL_DIVIDER[2])
+    rt_mya.add_attribute_enum(cog_ctrl, rt_cst.OVERRIDE_DIVIDER[0],
+                              rt_cst.OVERRIDE_DIVIDER[1],
+                              rt_cst.OVERRIDE_DIVIDER[2])
     for rigname in rt_cst.RIGPARTS:
         ln = rt_nam.fstr(rigname, rt_cst.OVERRIDE)
         nn = re.sub(r'[-_\s]+', ' ', ln).title()
@@ -197,10 +197,10 @@ def add_override_to_basectrl(rigname, basectrl):
     '''
     cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
     override = rt_nam.fstr(rigname, rt_cst.OVERRIDE)
-    rt_mya.add_attribute_enum(basectrl, rt_cst.OVERRIDE_DIVIDER[0],
-                              rt_cst.OVERRIDE_DIVIDER[1],
-                              rt_cst.OVERRIDE_DIVIDER[2])
-    rt_mya.add_attribute_enum(basectrl, override, 'Override',
+    rt_mya.add_attribute_enum(basectrl, rt_cst.OVERRIDE_ALL_DIVIDER[0],
+                              rt_cst.OVERRIDE_ALL_DIVIDER[1],
+                              rt_cst.OVERRIDE_ALL_DIVIDER[2])
+    rt_mya.add_attribute_enum(basectrl, override, 'Override All',
                               pxy=f'{cog_ctrl}.{override}')
 
 def build_override_conditions(rigname, fk, ik):
@@ -354,17 +354,23 @@ def cleanup_mainctrl(fk, ik):
         if node not in expected_nodes:
             rt_mya.remove(node)
 
-    # Basectrl override proxies (before their cog masters, so the proxy
-    # is not left pointing at a deleted master)
-    if not act:
-        for rigname in rt_cst.RIGPARTS:
-            basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-            if not cmds.objExists(basectrl):
-                continue
-            for attr in (rt_nam.fstr(rigname, rt_cst.OVERRIDE),
-                         rt_cst.OVERRIDE_DIVIDER[0]):
-                if cmds.attributeQuery(attr, n=basectrl, ex=1):
-                    rt_mya.remove_attribute(basectrl, attr)
+    # Basectrl override attrs (before their cog masters, so a proxy is
+    # not left pointing at a deleted master). When the dashboard is off
+    # everything goes; when it is on, only the stale divider from the
+    # old naming goes ('override_divider' now labels the cog section,
+    # basectrls carry 'override_all_divider').
+    for rigname in rt_cst.RIGPARTS:
+        basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+        if not cmds.objExists(basectrl):
+            continue
+        stale = [rt_cst.OVERRIDE_DIVIDER[0]]
+        if not act:
+            stale = [rt_nam.fstr(rigname, rt_cst.OVERRIDE),
+                     rt_cst.OVERRIDE_ALL_DIVIDER[0],
+                     rt_cst.OVERRIDE_DIVIDER[0]]
+        for attr in stale:
+            if cmds.attributeQuery(attr, n=basectrl, ex=1):
+                rt_mya.remove_attribute(basectrl, attr)
 
     if not cmds.objExists(cog_ctrl):
         return
@@ -377,7 +383,7 @@ def cleanup_mainctrl(fk, ik):
         expected_attrs = {all_attr(attr)
                           for attr, _ in routed_attr_specs(fk, ik)}
         expected_attrs |= {rt_cst.ALL_DIVIDER[0],
-                           rt_cst.OVERRIDE_ALL_DIVIDER[0]}
+                           rt_cst.OVERRIDE_DIVIDER[0]}
         if ik:
             expected_attrs.add(all_attr('ikfk'))
         for rigname in rt_cst.RIGPARTS:
@@ -389,6 +395,7 @@ def cleanup_mainctrl(fk, ik):
                      or attr.endswith('_override')
                      or attr.endswith('_ikfk_resolved')
                      or attr in (rt_cst.ALL_DIVIDER[0],
+                                 rt_cst.OVERRIDE_DIVIDER[0],
                                  rt_cst.OVERRIDE_ALL_DIVIDER[0]))
         if dashboard and attr not in expected_attrs:
             rt_mya.remove_attribute(cog_ctrl, attr)

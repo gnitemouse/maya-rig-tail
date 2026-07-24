@@ -802,6 +802,10 @@ def attribute_is_reusable(node, attr, pxy=None):
        stuck at its default value and silently freezes everything the
        attribute drives. Editing it cannot repair that, and an attribute
        asked to become a proxy cannot gain the flag by editing either.
+       The one reusable case: an attribute that already IS a proxy of the
+       wanted master needs no rebuild at all -- and keeping it also keeps
+       its channel-box position, where a delete/re-add would move it to
+       the end of the list on every rebuild.
     2. Type. An existing attribute of another type (a float ikfk switch
        from a hand-built rig, say) cannot be edited into an enum.
 
@@ -814,7 +818,12 @@ def attribute_is_reusable(node, attr, pxy=None):
         bool: True if addAttr -e can express the wanted definition
     """
     if pxy:
-        # Rebuild to attach a fresh proxy link to the wanted master
+        # Already a proxy of the wanted master: keep it as is. Anything
+        # else must be rebuilt to attach a fresh proxy link.
+        if attribute_is_proxy(node, attr):
+            src = cmds.listConnections(f'{node}.{attr}', s=1, d=0, p=1) or []
+            if pxy in src:
+                return True
         return False
     if attribute_is_proxy(node, attr):
         return False  # Rebuild to shed the flag; -e cannot clear it
@@ -919,6 +928,12 @@ def add_attribute_enum(plug, ln, nn, en=None, dv=0, pxy=None):
             return
 
     if exists:
+        if pxy:
+            # attribute_is_reusable only lets an existing attribute
+            # through with pxy when it is already a proxy of the wanted
+            # master; its definition mirrors the master, nothing to edit
+            logger.trace(f'kept proxy attribute {plug}')
+            return
         if re_divider:
             if en:
                 cmds.addAttr(plug, nn=nn, at='enum', e=1, en=en)

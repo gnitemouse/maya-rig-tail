@@ -195,8 +195,11 @@ SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
 # (like the per-tail IKFK switches); each basectrl carries a proxy of
 # its own override flag.
 ALL_DIVIDER = ('all_divider', '----------', 'ALL')
-OVERRIDE_ALL_DIVIDER = ('override_all_divider', '----------', 'OVERRIDE ALL')
+# OVERRIDE labels the per-tail flag section on the cog; OVERRIDE ALL
+# labels the flag's proxy on each basectrl ('Override All' = override
+# the ALL section with this tail's own values)
 OVERRIDE_DIVIDER = ('override_divider', '----------', 'OVERRIDE')
+OVERRIDE_ALL_DIVIDER = ('override_all_divider', '----------', 'OVERRIDE ALL')
 # Per-tail override flag on the cog: Off (0, default) = the tail follows
 # the ALL section directly; On (1) = the tail uses its own basectrl values
 OVERRIDE = '{rigname}_override'
