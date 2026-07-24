@@ -190,14 +190,22 @@ def cleanup_rigname(rigname, fk, ik):
     logger.trace(f"{rigname}: Cleaning up skeleton constraints")
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX]:
         if rigname in joints:
+            # BN joints carry the geometry bind (worldMatrix -> skinCluster)
+            # on their OUTGOING side. Only their incoming drivers are
+            # replaced by the rig, so keep their outgoing connections or the
+            # skin goes with them and the mesh stops deforming. FK/IK/FX
+            # joints hold no skin, so clear both directions as before.
+            keep_skin = joints is rt_cst.JOINTS_BN
             for jnt in joints[rigname]:
                 if cmds.objExists(jnt):
                     # Delete constraints
                     constraints = cmds.listRelatives(jnt, type='constraint') or []
                     for constr in constraints:
                         cmds.delete(constr)
-                    # Disconnect incoming connections
-                    rt_mya.disconnect_all(jnt, source=True)
+                    # Disconnect incoming drivers (and outgoing too, except
+                    # on BN where outgoing is the geometry bind)
+                    rt_mya.disconnect_all(jnt, source=True,
+                                          destination=not keep_skin)
 
     # 2. Delete control constraints
     if cmds.objExists(basectrl):
@@ -330,9 +338,13 @@ def cleanup_connections(rigname, fk, ik):
 
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
         if rigname in joints:
+            # Keep BN joints' outgoing worldMatrix -> skinCluster (the
+            # geometry bind); only their incoming drivers are rebuilt.
+            keep_skin = joints is rt_cst.JOINTS_BN
             for jnt in joints[rigname]:
                 if cmds.objExists(jnt):
-                    rt_mya.disconnect_all(jnt, source=True)
+                    rt_mya.disconnect_all(jnt, source=True,
+                                          destination=not keep_skin)
                     # Remove constraints
                     constraints = cmds.listRelatives(jnt, type='constraint') or []
                     for constr in constraints:
