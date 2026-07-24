@@ -1,22 +1,29 @@
 '''
-# rig_tail_setup_ui.py
+rig_tail_setup_ui.py
 author: Daisy Jane @gnitemouse
 
-PySide2 UI for the Tail Rig SETUP phase (skeleton preparation), the
-step that runs BEFORE the Tail Rig Builder.
+PySide2 UI for the Tail Rig Setup phase, the optional skeleton-prep step
+that runs before the Tail Rig Builder. Nothing here affects the build; it
+only re-orients the raw BN skeleton so tails move coherently.
 
-Setup re-orients the raw BN skeleton so tails move coherently, without
-building anything:
-  - Orient Chains (MIRROR_ORIENT): aim-orient each chain so a tail bends
-    in a plane (removes intra-chain twist).
-  - Mirror Joints (MIRROR_JOINTS): behavior-mirror matching 'L_'/'R_'
-    pairs so the two sides move as mirror images.
-Joint positions are never changed. Dry Run only logs the intended
-changes. Affected geometry is unbound (the build rebinds it).
+Two operations, exposed as checkboxes:
+    Orient Chains (MIRROR_ORIENT): aim-orient each chain so a tail bends
+        in a plane (removes intra-chain twist).
+    Mirror Joints (MIRROR_JOINTS): behavior-mirror matching 'L_'/'R_'
+        pairs so the two sides move as mirror images.
+Dropdowns set the source side and the aim, up and mirror axes. Dry Run
+only logs the intended changes. Joint positions are never changed;
+affected geometry is unbound for the build to rebind.
 
-Modeled on rig_tail_ui.RigTailUI (the Builder) and reuses its RIGPARTS
-editor. All values live in rig_tail_constants and round-trip through the
-same JSON config as the Builder.
+Run Setup calls rig_tail_setup.setup_tails. Values live in
+rig_tail_constants and round-trip through the same JSON config as the
+Builder. The window is modeled on rig_tail_ui.RigTailUI and reuses its
+RIGPARTS editor. Compatible with Maya 2024/2025 (Qt5).
+
+Classes and functions:
+    RigTailSetupUI: the Setup window
+    show_ui: build and show the window, closing any previous instance
+    get_maya_window: the Maya main window as a QWidget for parenting
 '''
 
 import os
@@ -141,7 +148,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'Behavior-mirror each matching L_/R_ pair: overwrite the target '
             "side's orientation with the mirror of the source side so the "
             'two sides move as mirror images. Does not remove twist by '
-            'itself -- enable Orient Chains too. (MIRROR_JOINTS)')
+            'itself, so enable Orient Chains too. (MIRROR_JOINTS)')
         self.chk_dryrun = QtWidgets.QCheckBox('Dry Run (preview only)')
         self.chk_dryrun.setToolTip(
             'Only log the intended changes; do not modify any joints or '
@@ -286,8 +293,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
         prev = getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R')
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         try:
-            import rig_tail_orient as rt_orient
-            pairs, _ = rt_orient.find_mirror_pairs(rt_cst.RIGPARTS)
+            import rig_tail_setup as rt_set
+            pairs, _ = rt_set.find_mirror_pairs(rt_cst.RIGPARTS)
         except Exception:
             pairs = []
         finally:
@@ -351,7 +358,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def run_setup(self):
         '''Commit options and run the Setup phase on the skeleton.'''
-        import rig_tail as rt
+        import rig_tail_setup as rt_set
 
         if not rt_cst.RIGPARTS:
             QtWidgets.QMessageBox.warning(self, 'Error',
@@ -368,7 +375,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
             return
 
         try:
-            result = rt.setup_tails(root=root, dry_run=dry)
+            result = rt_set.setup_tails(root=root, dry_run=dry)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error',
                 f'Setup failed:\n{str(e)}')

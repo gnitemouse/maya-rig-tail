@@ -274,7 +274,7 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
             rebuilds; False if any drifted past tol. None if nothing measured.
     '''
     import rig_tail            # lazy import: both modules are loaded by call time
-    import rig_tail_setup as rt_set
+    import rig_tail_cleanup as rt_cln
 
     parts = [rignames] if isinstance(rignames, str) else list(rignames or [])
     if not parts:
@@ -286,7 +286,7 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
     # Reuse the scene's existing root group so a scoped rebuild does not rename
     # the hierarchy (set_root would otherwise rename whatever root it finds to
     # the ROOT template name).
-    existing_root = rt_set.find_existing_root_grp()
+    existing_root = rt_cln.find_existing_root_grp()
     root_arg = existing_root if existing_root else rt_cst.ROOT
 
     saved_force = rt_cst.FORCE_REBUILD

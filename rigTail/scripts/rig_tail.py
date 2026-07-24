@@ -71,14 +71,16 @@ import rig_tail_naming as rt_nam
 import rig_tail_cache as rt_che
 import rig_tail_maya as rt_mya
 import rig_tail_mainctrl as rt_mc
-import rig_tail_orient as rt_orient
-import rig_tail_setup as rt_set
 import rig_tail_control as rt_ctl
 import rig_tail_curve as rt_crv
 import rig_tail_fk as rt_fk
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
 import rig_tail_connect as rt_con
+# rig_tail_cleanup: teardown + build-structure setup (former rig_tail_setup)
+import rig_tail_cleanup as rt_cln
+# rig_tail_setup: pre-build Setup phase, orient/mirror (former rig_tail_orient)
+import rig_tail_setup as rt_set
 import rig_tail_restpose as rt_rest
 import rig_tail_ui as rt_ui
 import rig_tail_test as rt_test
@@ -96,14 +98,15 @@ il.reload(rt_nam)
 il.reload(rt_che)
 il.reload(rt_mya)
 il.reload(rt_mc)
-il.reload(rt_orient)
-il.reload(rt_set)
 il.reload(rt_ctl)
 il.reload(rt_crv)
 il.reload(rt_fk)
 il.reload(rt_str)
 il.reload(rt_ani)
 il.reload(rt_con)
+# rig_tail_cleanup before rig_tail_setup: the Setup module imports it
+il.reload(rt_cln)
+il.reload(rt_set)
 il.reload(rt_rest)
 il.reload(rt_ui)
 il.reload(rt_test)
@@ -251,10 +254,10 @@ def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
         rt.rig_tail_test('tail', root='tail_spline_grp', fk=False, ik=True)
     '''
     rt_cst.RIGPARTS = [root]
-    rt_set.set_root(root)
-    rt_set.set_joints(root, start_jnt, end_jnt)
-    rt_set.cleanup_rig(fk, ik)
-    rt_set.setup_rig(fk, ik)
+    rt_cln.set_root(root)
+    rt_cln.set_joints(root, start_jnt, end_jnt)
+    rt_cln.cleanup_rig(fk, ik)
+    rt_cln.setup_rig(fk, ik)
     build_rig_tail(fk, ik)
     rt_con.connect_rig_tail(fk, ik)
 
@@ -267,10 +270,10 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
         fk (bool): Build FK components
         ik (bool): Build IK components
     '''
-    rt_set.set_root(root)
-    rt_set.set_joints_auto()
-    rt_set.cleanup_rig(fk, ik)
-    rt_set.setup_rig(fk, ik)
+    rt_cln.set_root(root)
+    rt_cln.set_joints_auto()
+    rt_cln.cleanup_rig(fk, ik)
+    rt_cln.setup_rig(fk, ik)
     build_rig_tail(fk, ik)
     rt_con.connect_rig_tail(fk, ik)
 
@@ -284,15 +287,15 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     if not selected:
         abort_build(logger, 'Select joint to rig tail')
 
-    rt_set.set_root(root)
+    rt_cln.set_root(root)
     for jnt in selected:
         if cmds.objectType(jnt, i='joint'):
             rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
             if rigname and rigname not in rt_cst.RIGPARTS:
                 rt_cst.RIGPARTS.append(rigname)
-            rt_set.set_joints(rigname, jnt)
-    rt_set.cleanup_rig(fk, ik)
-    rt_set.setup_rig(fk, ik)
+            rt_cln.set_joints(rigname, jnt)
+    rt_cln.cleanup_rig(fk, ik)
+    rt_cln.setup_rig(fk, ik)
     build_rig_tail(fk, ik)
     rt_con.connect_rig_tail(fk, ik)
 
@@ -300,53 +303,30 @@ def rig_tail_selected(root=None, fk=True, ik=True):
 
 def setup_tails(root=None, dry_run=None):
     '''
-    Setup phase: prepare the tail skeleton before building.
+    Convenience delegate to rig_tail_setup.setup_tails (the Setup phase).
 
-    Detects the BN chains for RIGPARTS and runs the enabled orientation
-    steps on them (rig_tail_orient.run_setup): MIRROR_ORIENT aim-orients
-    each chain to remove intra-chain twist, MIRROR_JOINTS behavior-mirrors
-    each L/R pair. Joint positions are never changed.
-
-    Re-orienting a bound joint would distort the mesh, so the affected
-    geometry is unbound first and left for the build to rebind (unless
-    dry_run). Run this once on the raw skeleton, verify, then build.
+    Setup is optional and never runs during the build; it orients and
+    mirrors the skeleton beforehand. See rig_tail_setup for details.
 
     Arguments
-        root (str): Rig root name (as in the build); sets ROOT
+        root (str): Rig root name; sets rt_cst.ROOT when given.
         dry_run (bool): override MIRROR_ORIENT_DRYRUN; None uses the
             setting. When true, nothing is unbound or modified.
 
     Return
-        dict: summary from rig_tail_orient.run_setup
+        dict: summary from rig_tail_setup.run_setup.
     '''
-    if root:
-        rt_set.set_root(root)
-
-    found = rt_set.detect_joints_bn()
-    if not found:
-        logger.warning('Setup: no BN joints found for any RIGPART')
-        return {'oriented': 0, 'mirrored': 0, 'dry_run': True}
-
-    preview = dry_run if dry_run is not None \
-        else bool(getattr(rt_cst, 'MIRROR_ORIENT_DRYRUN', False))
-
-    # Re-orienting a bound joint drags the mesh, so unbind the affected
-    # parts first; the build rebinds. Skipped in dry-run (no changes).
-    if not preview:
-        for rigname in found:
-            rt_mya.unbind_geometry(rigname)
-
-    return rt_orient.run_setup(dry_run=dry_run)
+    return rt_set.setup_tails(root=root, dry_run=dry_run)
 
 def main():
     '''
-    Launch the Tail Rig Builder UI.
+    Launch the Tail Rig Builder UI (the build phase).
     '''
     return rt_ui.show_ui()
 
 def main_setup():
     '''
-    Launch the Tail Rig Setup UI (skeleton orientation / mirroring).
+    Launch the Tail Rig Setup UI (skeleton orient / mirror, pre-build).
     '''
     import rig_tail_setup_ui as rt_setui
     il.reload(rt_setui)

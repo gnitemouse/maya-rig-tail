@@ -13,6 +13,10 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 - **IK/FK Switching** - Switch between modes
 - **Stretch/Squash** - Optional volume preservation
 - **Wave/Curl FX** - Built-in procedural animation effects
+- **Main Controller** - Optional cog dashboard driving every tail at once,
+  with a per-tail override (for multi-tail rigs)
+- **Setup phase** - Optional pre-build step that orients each chain (fixes
+  twist) and mirrors matching L/R tails so both sides move together
 - **JSON Configs** - Save/load custom configuration through UI
 
 ## Install
@@ -31,10 +35,11 @@ rigTail/
 
 Drag `install.py` from a file browser into the Maya viewport. It copies
 `rigTail/` and `rigTail.mod` into
-`~/Documents/maya/modules/` and adds a **TailRig** button to the active
-shelf. Works immediately -- no restart, no `userSetup.py` edits. Keep
-`install.py` next to `rigTail/` and `rigTail.mod` when you drag
-it, since it copies them.
+`~/Documents/maya/modules/` and adds two shelf buttons to the active
+shelf: **TailSetup** (skeleton orient / mirror) and **TailRig** (the
+builder). Works immediately, with no restart and no `userSetup.py` edits.
+Keep `install.py` next to `rigTail/` and `rigTail.mod` when you drag it,
+since it copies them.
 
 **Manual**
 
@@ -54,13 +59,33 @@ import rig_tail
 
 il.reload(rig_tail)
 
-# Rig a single tail from a single joint chain
+# Optional Setup phase: orient / mirror the skeleton before building.
+# Preview first (logs only), then apply.
+rig_tail.setup_tails(root='tail', dry_run=True)
+rig_tail.setup_tails(root='tail')
+rig_tail.main_setup()   # or launch the Setup UI
+
+# Build a single tail from a single joint chain
 rig_tail.rig_tail_single(root='tail', fk=True, ik=True)
-# Rig multiple tails with each part defined in rig_tail_constants.RIGPARTS
+# Build multiple tails with each part defined in rig_tail_constants.RIGPARTS
 rig_tail.rig_tail_multiple(root='tail', fk=True, ik=True)
-# Launch UI
-rig_tail.main()
+rig_tail.main()         # or launch the Builder UI
 ```
+
+## Setup phase (optional)
+
+Run before building, from the **TailSetup** shelf button or
+`rig_tail.main_setup()`. It re-orients the raw BN skeleton so tails move
+coherently, and never affects the build itself. Two independent options:
+
+- **Orient Chains** (`MIRROR_ORIENT`): aim-orient each chain so a tail
+  bends in one plane. Fixes joints whose orientation twists down the chain.
+- **Mirror Joints** (`MIRROR_JOINTS`): behavior-mirror matching `L_`/`R_`
+  tails so the two sides move as mirror images at equal values.
+
+Only joint orientation changes; positions are preserved. Enable **Dry Run**
+first to log the intended changes without modifying anything, then apply
+and build. Skip this phase entirely if the skeleton is already oriented.
 
 ## Requirements
 
@@ -112,14 +137,18 @@ Component naming can be changed through UI or in rig_tail_constants.py
 | `rig_tail_math` | `rt_mat` | Vector/matrix math |
 | `rig_tail_matrix` | `rt_mtx` | Matrix network builder |
 | `rig_tail_cache` | `rt_che` | Control caching |
+| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix |
+| `rig_tail_setup` | `rt_set` | Setup phase: skeleton orient / mirror (pre-build) |
+| `rig_tail_setup_ui` | - | Setup UI (Tail Rig Setup) |
+| `rig_tail_cleanup` | `rt_cln` | Teardown + build-structure setup |
 | `rig_tail_control` | `rt_ctl` | Control creation |
 | `rig_tail_curve` | `rt_crv` | Curve/spline creation |
 | `rig_tail_fk` | `rt_fk` | FK system building |
 | `rig_tail_stretch` | `rt_str` | Stretch system |
 | `rig_tail_anim` | `rt_ani` | Animation effects |
 | `rig_tail_connect` | `rt_con` | IK/FK connections |
-| `rig_tail_setup` | `rt_set` | Rig setup/cleanup |
-| `rig_tail_ui` | `rt_ui` | Qt-based UI |
+| `rig_tail_mainctrl` | `rt_mc` | Main Controller dashboard (multi-tail) |
+| `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
 
 ## Configuration
 

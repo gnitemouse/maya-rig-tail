@@ -7,15 +7,36 @@ Complete API reference for the Maya Tail Rig system.
 
 ---
 
+## Two phases: Setup then Build
+
+The tool has two phases, run in order and launched from two shelf buttons
+(`TailSetup`, then `TailRig`):
+
+1. **Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`): a pre-build
+   step that orients and mirrors the raw BN skeleton so tails move
+   coherently. It changes only joint orientation, never positions, and
+   never runs during the build. If the skeleton is already well oriented,
+   skip it entirely; the build is unaffected.
+2. **Build** (`rig_tail` and the modules below): tear down any previous
+   rig, then create joints, curves, controls, node networks, and bind the
+   geometry.
+
 ## Module Overview
 
 ### Core Modules
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail` | - | Main entry point, build orchestration |
+| `rig_tail` | - | Main entry point, build orchestration, phase launchers |
 | `rig_tail_constants` | `rt_cst` | Global constants, naming templates, caches |
-| `rig_tail_ui` | `rt_ui` | Qt-based user interface |
+| `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
+
+### Setup Phase Modules
+
+| Module | Import Alias | Description |
+|--------|--------------|-------------|
+| `rig_tail_setup` | `rt_set` | Skeleton orient / mirror, run before the build |
+| `rig_tail_setup_ui` | - | Setup UI (Tail Rig Setup) |
 
 ### Utility Modules
 
@@ -27,18 +48,24 @@ Complete API reference for the Maya Tail Rig system.
 | `rig_tail_matrix` | `rt_mtx` | Matrix offset network builder |
 | `rig_tail_cache` | `rt_che` | Control caching and validation |
 | `rig_tail_joint` | `rt_jnt` | Joint chain utilities |
+| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix (Method D) |
 
 ### Build Modules
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail_setup` | `rt_set` | Scene setup and cleanup |
+| `rig_tail_cleanup` | `rt_cln` | Teardown of a previous rig, plus build-structure setup |
 | `rig_tail_control` | `rt_ctl` | Control creation |
 | `rig_tail_curve` | `rt_crv` | Curve and spline creation |
 | `rig_tail_fk` | `rt_fk` | FK system with SDK groups |
 | `rig_tail_stretch` | `rt_str` | Stretch/squash system |
 | `rig_tail_connect` | `rt_con` | IK/FK connections and blending |
 | `rig_tail_anim` | `rt_ani` | Wave and dynamic FX |
+| `rig_tail_mainctrl` | `rt_mc` | Main Controller dashboard (multi-tail) |
+
+> Note: `rig_tail_setup` was previously the teardown/setup module; that
+> module is now `rig_tail_cleanup`, and `rig_tail_setup` is the Setup phase
+> (formerly `rig_tail_orient`).
 
 ---
 
@@ -66,8 +93,155 @@ Rig multiple tails defined in RIGPARTS.
 #### `rig_tail_selected(root, fk=True, ik=True)`
 Rig tail on user-selected joints.
 
+#### `setup_tails(root=None, dry_run=None)`
+Run the pre-build Setup phase (delegates to `rig_tail_setup.setup_tails`).
+
 #### `main()`
-Launch Qt UI.
+Launch the Tail Rig Builder UI.
+
+#### `main_setup()`
+Launch the Tail Rig Setup UI.
+
+---
+
+## rig_tail_setup.py (rt_set)
+
+Setup phase: orient and mirror the BN skeleton before the build. Optional
+and never runs during the build. Two independent toggles in
+`rig_tail_constants`: `MIRROR_ORIENT` (aim-orient, removes intra-chain
+twist) and `MIRROR_JOINTS` (behavior-mirror `L_`/`R_` pairs). Positions
+are never changed; `MIRROR_ORIENT_DRYRUN` previews without modifying.
+
+### Functions
+
+#### `setup_tails(root=None, dry_run=None)`
+Detect BN chains, unbind affected geometry, run the enabled steps.
+
+#### `run_setup(dry_run=None)`
+Run the enabled orient/mirror steps on `rt_cst.JOINTS_BN`.
+
+#### `orient_chains(dry_run)`
+Aim-orient every BN chain to remove intra-chain twist.
+
+#### `mirror_joints(dry_run)`
+Behavior-mirror each L/R pair's BN chain from the source side.
+
+#### `find_mirror_pairs(rigparts)`
+Pair rig parts into (source, target) by `L_`/`R_` prefix.
+
+#### `aim_frames(positions, aim_axis, up_axis)`
+Per-joint world frames aimed down a chain with a twist-free up-axis.
+
+#### `mirror_frames(src_matrices, axis)`
+Behavior-mirror source world matrices for the target side.
+
+---
+
+## rig_tail_cleanup.py (rt_cln)
+
+Teardown of a previous rig and preparation of the scene structure, run at
+the start of every build. Formerly `rig_tail_setup`.
+
+### Functions
+
+#### `cleanup_rig(fk, ik)`
+Entry point; per rig part choose full vs light teardown from the cache.
+
+#### `cleanup_rigname(rigname, fk, ik)`
+Full teardown of one rig part (controls, curves, clusters, FX nodes).
+
+#### `cleanup_connections(rigname, fk, ik)`
+Light teardown: break connections only, keep nodes for reuse.
+
+#### `setup_rig(fk, ik)`
+Create the rig root, cog, and hierarchy groups.
+
+#### `set_root(root)`
+Set `ROOT` and reconcile the scene root group.
+
+#### `find_existing_root_grp()`
+Locate the current rig root group in the scene.
+
+#### `set_joints_auto()`
+Detect and (re)build the BN/FK/IK chains for all RIGPARTS.
+
+#### `set_joints(rigname, start_jnt=None, end_jnt=None)`
+Detect/build the chains for one rig part.
+
+#### `detect_joints_bn()`
+Fill `JOINTS_BN` by chain detection only (used by the Setup phase).
+
+#### `rigpart_has_joints(rigname)`
+Does the scene hold BN joints for a rig part.
+
+#### `rename_rigpart(old, new)`
+Rename a rig part in place across scene nodes and caches.
+
+---
+
+## rig_tail_mainctrl.py (rt_mc)
+
+Main Controller dashboard for rigs with multiple tails. Built during the
+connect phase when `MAIN_CONTROLLER` is on and RIGPARTS has 2+ parts. The
+cog gets an ALL section (one `all_*` copy of each routed attribute) and an
+OVERRIDE section (a per-tail flag choosing ALL vs the tail's own values).
+
+### Functions
+
+#### `active()`
+Is the dashboard enabled for the current settings.
+
+#### `add_dashboard_to_cog(cog_ctrl, fk, ik)`
+Add the ALL and OVERRIDE sections to the cog control.
+
+#### `add_override_to_basectrl(rigname, basectrl)`
+Proxy a tail's override flag onto its base control.
+
+#### `build_override_conditions(rigname, fk, ik)`
+Create/rewire the per-tail condition nodes (local vs ALL).
+
+#### `resolved_plug(rigname, attr)`
+Source plug a consumer reads for a routed attribute (falls back to the
+base control plug when the dashboard is off).
+
+#### `ikfk_driver(rigname)`
+Driver plug for a tail's IKFK mode SDKs.
+
+#### `cleanup_mainctrl(fk, ik)`
+Remove stale dashboard nodes, or all of them when the dashboard is off.
+
+---
+
+## rig_tail_restpose.py (rt_rest)
+
+Rest-pose store for the IK rebuild-degradation fix (Method D). Captures
+each BN joint's rest world matrix once and builds the IK curve from it on
+every rebuild, so rebuilds reproduce the same shape instead of compounding.
+
+### Functions
+
+#### `capture_rest_pose(rignames=None)`
+Store each BN joint's rest world matrix, once, on the first build.
+
+#### `curve_source_positions(rigname, joints)`
+Positions the IK curve is built from: the stored rest, else live.
+
+#### `rest_positions(rigname, joints)`
+Stored rest positions aligned to a target chain, or None.
+
+#### `clear_rest_pose(rignames=None)`
+Remove the stored rest pose (for re-capture or testing).
+
+---
+
+## rig_tail_setup_ui.py
+
+Setup UI (Tail Rig Setup window). Exposes the orient/mirror toggles,
+source-side and axis dropdowns, and Dry Run, then calls
+`rig_tail_setup.setup_tails`. Launched by `rig_tail.main_setup()`.
+
+#### `show_ui()`
+Build and show the Setup window, closing any previous instance.
 
 ---
 

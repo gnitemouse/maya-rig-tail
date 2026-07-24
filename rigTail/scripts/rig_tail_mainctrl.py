@@ -1,41 +1,47 @@
 '''
-# rig_tail_mainctrl.py
+rig_tail_mainctrl.py
 author: Daisy Jane @gnitemouse
 
-Main Controller (dashboard) for rigs with multiple tails.
+Main Controller dashboard for rigs with multiple tails.
 
-Built when the MAIN_CONTROLLER option is on and RIGPARTS has 2+ parts
-(active()). The cog control becomes the dashboard:
+Built during the connect phase of the build when MAIN_CONTROLLER is on
+and RIGPARTS has two or more parts. The cog control becomes a dashboard:
 
-- ALL section (real attributes on the cog): one 'all_*' copy of every
-  routed attribute -- IKFK mode, STRETCH, TWIST and ANIMATION values.
-  JNT SCALE attributes stay per-tail and are never routed.
-- OVERRIDE section: one '{rigname}_override' flag per tail.
-  Override Off (default): the tail follows the ALL values directly and
-  its basectrl values are ignored downstream (though they stay
-  editable). Override On: the tail uses its own basectrl values. Each
-  basectrl shows its flag through an 'Override All' proxy attribute
-  (under an OVERRIDE ALL divider), following the existing convention
-  that global truth lives on the cog (like the per-tail IKFK switches).
+  ALL section: one 'all_*' copy on the cog of every routed attribute
+    (IKFK mode, STRETCH, TWIST, ANIMATION). JNT SCALE stays per-tail.
+  OVERRIDE section: one '{rigname}_override' flag per tail. Off (default)
+    makes the tail follow the ALL values; On makes it use its own base
+    control values. Each basectrl shows the flag as an 'Override All'
+    proxy of the cog master, matching the convention that global truth
+    lives on the cog (like the per-tail IKFK switches).
 
-Routing is one condition node per tail per routed attribute
+Routing is one condition node per tail per attribute
 ('{rigname}_{attr}_override_condition'): firstTerm reads the override
-flag, colorIfTrueR the tail's own value, colorIfFalseR the ALL value,
-and outColorR feeds whatever consumed the basectrl attribute before
-(remap nodes, the spline handle, FX expressions). The IKFK mode is
-special twice over: its local truth already lives on the cog (the
-basectrl only proxies it), and its consumers are driven keys that
-cannot be re-pointed per consumer -- so the condition output lands on
-a hidden '{rigname}_ikfk_resolved' attribute on the cog and
-setup_switch_fk/ik/upvec drive from that instead.
+flag, colorIfTrueR the tail's own value, colorIfFalseR the ALL value, and
+outColorR feeds whatever consumed the basectrl attribute before (remap
+nodes, spline handle, FX expressions). The IKFK mode is special: its
+local value already lives on the cog and its consumers are driven keys
+that cannot be re-pointed, so the condition output lands on a hidden
+'{rigname}_ikfk_resolved' cog attribute that the mode SDKs drive from.
 
-Lifecycle: cleanup_mainctrl() (from cleanup_rig) removes stale pieces
-and, when the dashboard is off, every dashboard attribute and node;
-the setup phase (connect_cog / connect_basectrl) then rebuilds
-attributes and conditions idempotently, so ALL values and per-tail
-override choices survive a rebuild. resolved_plug() is self-gating:
-it returns the plain basectrl plug whenever the dashboard did not
-build a condition, so every consumer can call it unconditionally.
+Consumers read resolved_plug() and ikfk_driver(), which return the plain
+basectrl or cog plug when the dashboard is off, so a single-tail build
+wires exactly as before. cleanup_mainctrl (from cleanup_rig) removes
+stale pieces every build and strips all dashboard attributes when the
+option is off, while keeping ALL values and override choices across
+rebuilds.
+
+Functions:
+    active: is the dashboard enabled for the current settings
+    routed_attr_specs: the attributes routed through the dashboard
+    add_dashboard_to_cog: add the ALL and OVERRIDE sections to the cog
+    add_override_to_basectrl: proxy a tail's override flag onto its basectrl
+    build_override_conditions: create/rewire a tail's override conditions
+    resolved_plug: source plug a consumer reads for a routed attribute
+    ikfk_driver: driver plug for a tail's IKFK mode SDKs
+    hide_resolved_attrs: hide the internal resolved IKFK driver attrs
+    cleanup_mainctrl: remove stale or all dashboard nodes and attributes
+    all_attr, condition_node: attribute and node name helpers
 '''
 
 import maya.cmds as cmds
@@ -328,8 +334,8 @@ def cleanup_mainctrl(fk, ik):
     and condition node goes. When it is on, only stale pieces go:
     conditions/attrs of parts no longer in RIGPARTS, or of attributes
     whose effect/build gates turned off. Live pieces are kept so ALL
-    values and per-tail override choices survive the rebuild -- the
-    setup phase re-adds and re-wires them idempotently.
+    values and per-tail override choices survive the rebuild; the connect
+    phase re-adds and re-wires them idempotently.
 
     Nodes are removed with rt_mya.remove (disconnect first), so a
     condition still referenced by an FX expression cannot cascade the

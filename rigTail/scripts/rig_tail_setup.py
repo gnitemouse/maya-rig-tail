@@ -1,945 +1,426 @@
 '''
-# rig_tail_setup.py
+rig_tail_setup.py
 author: Daisy Jane @gnitemouse
 
-Setup for Rig Tail
-Cleanup previous rig and prepare for build.
+Setup phase: prepare the tail skeleton before the build.
 
-cleanup_rig picks teardown path
-True ->
-    cleanup_rigname: full teardown, delete basectrl, curves, clusters, FX nodes
-False ->
-    cleanup_connections: only break connections, keep nodes
+Runs on the BN skeleton only, before any rig components exist. The build
+later duplicates the FK and IK chains from this skeleton, so orienting it
+here is enough. This phase is optional and never runs during the build;
+launch it from the Tail Rig Setup UI (rig_tail_setup_ui) or call
+setup_tails() directly, then build as usual.
 
-validate_cache() checks whether RIGPARTS / ROOT changed
+Two independent operations, each with its own toggle in rig_tail_constants:
+    MIRROR_ORIENT  aim-orient each chain so a tail bends in one plane
+                   (removes intra-chain twist)
+    MIRROR_JOINTS  behavior-mirror matching 'L_'/'R_' pairs so the two
+                   sides move as mirror images
+Enable both for planar, symmetric tails; orient runs first so mirror
+copies a clean source. Mirroring on its own does not remove twist.
+
+Only joint orientation changes; world positions are always preserved.
+Orientation is written into jointOrient with rotate left at zero.
+MIRROR_ORIENT_DRYRUN logs the intended changes without touching anything.
+
+Re-orienting a bound joint would drag the mesh, so setup_tails unbinds the
+affected geometry first and leaves it for the build to rebind.
+
+Functions:
+    setup_tails: entry point; detect joints, unbind geo, run the phase
+    run_setup: run the enabled orient/mirror steps on rt_cst.JOINTS_BN
+    orient_chains: aim-orient every BN chain to remove twist
+    mirror_joints: behavior-mirror each L/R pair's BN chain
+    find_mirror_pairs: pair rig parts by 'L_'/'R_' prefix
+    aim_frames: per-joint world frames aimed down a chain, twist-free
+    mirror_frames: behavior-mirror source world matrices for the target
 '''
 
-import re
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
+import rig_tail_cleanup as rt_cln
 import rig_tail_maya as rt_mya
-import rig_tail_joint as rt_jnt
-import rig_tail_cache as rt_cache
-import rig_tail_control as rt_ctl
-import rig_tail_connect as rt_con
-import rig_tail_mainctrl as rt_mc
+import math
+import re
 
 logger = logger_setup(__name__)
 
+# rig_tail_constants is never reloaded (it holds session state), so a
+# session started before this feature existed lacks these settings. This
+# module IS reloaded every run: install any missing default onto rt_cst so
+# Setup works without a Maya restart, never overwriting a value a
+# restarted or customized session already provides.
+_CST_DEFAULTS = {
+    'MIRROR_ORIENT': True,          # aim-orient chains (remove twist)
+    'MIRROR_JOINTS': True,          # behavior-mirror L/R pairs
+    'MIRROR_ORIENT_DRYRUN': False,  # only log intended changes; do not modify
+    'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
+    'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
+    'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
+    'ORIENT_UP_AXIS': 'z',          # local axis aligned to the plane normal
+}
+for _name, _value in _CST_DEFAULTS.items():
+    if not hasattr(rt_cst, _name):
+        setattr(rt_cst, _name, _value)
 
-# CLEANUP ==============================================================
+# Rig part prefix that marks a mirrored side, e.g. 'L_fintail'.
+_SIDE_RE = re.compile(r'^([LlRr])_(.+)$')
+_EPS = 1e-9
 
-def cleanup_rig(fk, ik):
+
+def _cst(name):
+    ''' Read a Setup setting, falling back to the installed default. '''
+    return getattr(rt_cst, name, _CST_DEFAULTS.get(name))
+
+
+# ENTRY ================================================================
+
+def setup_tails(root=None, dry_run=None):
     '''
-    Safely clean up rig components defined in RIGPARTS.
-    Handles constraints, skinClusters, controls, node networks.
-    Called from build_rig_tail() before building new components.
+    Run the Setup phase on the tail skeleton.
 
-    Cleanup:
-    1. Disconnect skeleton, delete joint constraints
-    2. Delete control constraints
-    3. Delete skinClusters from curves
-    4. Delete existing controls and control groups
-    5. Delete utility nodes (conditions, multiply, etc)
-    7. Delete curves, clusters, ikHandles
+    Detects the BN chains for every RIGPART, then runs the enabled
+    orientation steps (run_setup). Re-orienting a bound joint distorts the
+    mesh, so the affected geometry is unbound first and left for the build
+    to rebind. Run this once on the raw skeleton, verify, then build.
+
+    Usage:
+        import rig_tail_setup as rt_set
+        rt_set.setup_tails('squid')          # apply
+        rt_set.setup_tails('squid', True)    # preview only
 
     Arguments
-        rigname (str): Name of rig component to clean up
-        fk (bool): Clean up FK components
-        ik (bool): Clean up IK components
+        root (str): Rig root name (sets rt_cst.ROOT); skipped when None.
+        dry_run (bool): Override MIRROR_ORIENT_DRYRUN; None uses the
+            setting. When true nothing is unbound or modified.
+
+    Return
+        dict: summary from run_setup, {'oriented', 'mirrored', 'dry_run'}.
     '''
-    logger.debug(f'-----------------------------------------------------')
-    logger.info(f"Cleanup Rig")
+    if root:
+        rt_cln.set_root(root)
 
-    # Clear control cache
-    rt_con.clear_control_cache()
-    # Validate cache
-    rt_cache.validate_cache()
-    # Control count changes invalidate the node layout for every part
-    structure_changed = rt_cache.validate_cache_structure()
+    found = rt_cln.detect_joints_bn()
+    if not found:
+        logger.warning('Setup: no BN joints found for any RIGPART')
+        return {'oriented': 0, 'mirrored': 0, 'dry_run': True}
 
-    # Delete SDK animCurves
-    logger.trace(f"Cleaning up SDK curves")
-    anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
-    for anim_curve in anim_curves:
-        cmds.delete(anim_curve)
-    cleanup_dangling_unit_conversions()
+    preview = dry_run if dry_run is not None \
+        else bool(_cst('MIRROR_ORIENT_DRYRUN'))
+    if not preview:
+        for rigname in found:
+            rt_mya.unbind_geometry(rigname)
 
+    return run_setup(dry_run=dry_run)
+
+
+def run_setup(dry_run=None):
+    '''
+    Run the enabled orient and mirror steps on the BN skeleton.
+
+    orient_chains runs first when MIRROR_ORIENT is on, then mirror_joints
+    when MIRROR_JOINTS is on, so each L/R pair mirrors a clean source.
+    Expects rt_cst.JOINTS_BN to be populated (setup_tails does this) and
+    the affected geometry unbound. Positions are never changed.
+
+    Arguments
+        dry_run (bool): Override MIRROR_ORIENT_DRYRUN; None uses the
+            setting.
+
+    Return
+        dict: {'oriented': n, 'mirrored': n, 'dry_run': bool}.
+    '''
+    if dry_run is None:
+        dry_run = bool(_cst('MIRROR_ORIENT_DRYRUN'))
+    do_orient = bool(_cst('MIRROR_ORIENT'))
+    do_mirror = bool(_cst('MIRROR_JOINTS'))
+    mode = ' [dry-run]' if dry_run else ''
+    logger.info(f'Setup{mode}: orient={do_orient}, mirror={do_mirror}')
+
+    oriented = orient_chains(dry_run) if do_orient else 0
+    mirrored = mirror_joints(dry_run) if do_mirror else 0
+    if not (do_orient or do_mirror):
+        logger.info('Setup: nothing enabled '
+                    '(MIRROR_ORIENT and MIRROR_JOINTS both off)')
+    return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
+
+
+# OPERATIONS ===========================================================
+# Both operate on the BN skeleton only (rt_cst.JOINTS_BN).
+
+def orient_chains(dry_run):
+    '''
+    Aim-orient every BN chain to remove intra-chain twist.
+
+    Re-aims each joint down its own chain with a single up-axis (the chain
+    plane normal), so the tail bends in one plane. Applies to every rig
+    part, both sides. Skips chains with fewer than two joints.
+
+    Arguments
+        dry_run (bool): only log the intended changes, do not modify.
+
+    Return
+        int: joints re-oriented (or that would be, in a dry run).
+    '''
+    aim_axis = _cst('ORIENT_AIM_AXIS')
+    up_axis = _cst('ORIENT_UP_AXIS')
+    mode = ' [dry-run]' if dry_run else ''
+    count = 0
     for rigname in rt_cst.RIGPARTS:
-        # Validate cache
-        joints_changed = rt_cache.validate_cache_joints(rigname)
-        # Unbind geometry before rebuild
-        rt_mya.unbind_geometry(rigname)
-
-        # Rebuild check
-        if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
-            cleanup_rigname(rigname, fk, ik)
-        else:
-            cleanup_connections(rigname, fk, ik)
-
-    # Main controller dashboard: remove stale override conditions and,
-    # when the dashboard is off, every dashboard attribute. Runs after
-    # the per-part loop so expressions referencing the conditions are
-    # already gone on a full teardown.
-    rt_mc.cleanup_mainctrl(fk, ik)
-
-def restore_fk_joint_chain(rigname):
-    '''
-    Tear down the FK SDK-group hierarchy and restore a flat FK joint chain.
-
-    build_fk (create_sdk_groups / put_jnt_under_sdk_groups) assumes each FK
-    joint enters the build as a plain link in a flat chain (its parent is the
-    previous joint). A prior build leaves every joint wrapped in its own SDK
-    stack instead; re-wrapping an already-wrapped joint parents the stack top
-    under its own descendant, which Maya rejects as a cycle. Unparent the
-    joints out, delete all SDK groups (pattern match also clears groups from a
-    previous NUM_CTRL_FK value or an older layer layout), then re-chain flat.
-
-    Arguments
-        rigname (str): Name of rig component
-    '''
-    if rigname not in rt_cst.JOINTS_FK:
-        return
-    logger.trace(f'{rigname}: Restoring flat FK joint chain')
-    joints = rt_cst.JOINTS_FK[rigname]
-    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
-
-    # Unparent all FK joints to world temporarily
-    for jnt in joints:
-        if cmds.objExists(jnt):
-            jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
-            if jnt_parent and jnt_parent[0] != fkjnt_grp:
-                cmds.parent(jnt, world=True)
-
-    # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end with the
-    # SDK label. Pattern matching (not exact counts) also removes groups left
-    # over from a previous NUM_CTRL_FK value.
-    sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
-    for sdk_grp in cmds.ls(sdk_pattern, type='transform'):
-        if cmds.objExists(sdk_grp):
-            rt_mya.remove(sdk_grp)
-
-    # Re-parent FK joints in proper hierarchy
-    for i in range(len(joints)-1, 0, -1):  # Reverse order
-        if cmds.objExists(joints[i]) and cmds.objExists(joints[i-1]):
-            rt_mya.parent_to(joints[i], joints[i-1])
-
-
-def fk_sdk_structure_is_current(rigname):
-    '''
-    Report whether the scene's FK SDK hierarchy matches what the current
-    builder produces: every FK joint parented directly under its own SDK_JNT
-    group. Returns False when the joints are unwrapped (no prior build) or
-    wrapped in a stale layout (e.g. built by older code with a different SDK
-    layer set), which the joint/control caches cannot detect on their own.
-
-    Arguments
-        rigname (str): Name of rig component
-
-    Return
-        bool: True if the existing SDK structure can be safely reused as-is
-    '''
-    if rigname not in rt_cst.JOINTS_FK:
-        return True
-    for jnt in rt_cst.JOINTS_FK[rigname]:
-        if not cmds.objExists(jnt):
-            return False
-        NN = rt_nam.get_index_from_name(jnt)
-        sdk_jnt = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
-        jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
-        if not jnt_parent or jnt_parent[0] != sdk_jnt:
-            return False
-    return True
-
-
-def cleanup_rigname(rigname, fk, ik):
-    '''
-    Cleanup components for a single RIGPART (rigname).
-    Can be called independently for targeted cleanup.
-    '''
-    logger.debug(f"{rigname}: Cleanup rig part")
-    types = ['', rt_cst.TYPE_BN, rt_cst.TYPE_IK, rt_cst.TYPE_FK, rt_cst.TYPE_FX]
-    basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-
-    # 1. Disconnect skeleton, delete joint constraints
-    logger.trace(f"{rigname}: Cleaning up skeleton constraints")
-    for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX]:
-        if rigname in joints:
-            for jnt in joints[rigname]:
-                if cmds.objExists(jnt):
-                    # Delete constraints
-                    constraints = cmds.listRelatives(jnt, type='constraint') or []
-                    for constr in constraints:
-                        cmds.delete(constr)
-                    # Disconnect incoming connections
-                    rt_mya.disconnect_all(jnt, source=True)
-
-    # 2. Delete control constraints
-    if cmds.objExists(basectrl):
-        all_descendants = cmds.listRelatives(basectrl, ad=True, type='transform') or []
-        for node in all_descendants:
-            constraints = cmds.listRelatives(node, type='constraint') or []
-            for constr in constraints:
-                cmds.delete(constr)
-            # Reset OPM and transforms on controls
-            if f'{rt_cst.CTRL}' in node:
-                rt_mya.reset_opm(node, unlock=True)
-                rt_mya.reset_transforms(node, unlock=True)
-
-    # 3. Delete skinClusters from curves
-    logger.trace(f"{rigname}: Cleaning up skinClusters")
-    if fk:
-        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
-        rt_mya.unbind_skincluster(curve_fk)
-    if ik:
-        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
-        rt_mya.unbind_skincluster(curve_ik)
-        rt_mya.unbind_skincluster(curve_ik_spline)
-
-    # 4. Delete existing controls and control groups
-    logger.trace(f"{rigname} Cleaning up controls and groups")
-    rt_mya.remove(basectrl_grp)
-    rt_mya.remove(basectrl)
-
-    if fk:
-        fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
-        rt_mya.remove(fkroot_grp)
-
-    # Remove SDK groups for FK, restoring the flat FK joint chain
-    if fk and rigname in rt_cst.JOINTS_FK:
-        restore_fk_joint_chain(rigname)
-
-    # 5. Delete utility nodes (conditions, multiply, math nodes)
-    # Every utility node is named '{rigname}_<descriptor>_<nodetype>',
-    # so anchor the underscore after rigname: '{rigname}_*' cannot
-    # bleed into another part whose name merely extends this one
-    # ('tail' cleanup must not delete 'tail2' nodes)
-    logger.trace(f"{rigname}: Cleaning up utility nodes")
-    for typ in types:
-        node_patterns = [
-            f'{typ}_{rigname}_*condition',
-            f'{typ}_{rigname}_*multiplyDivide',
-            f'{typ}_{rigname}_*plusMinusAverage',
-            f'{typ}_{rigname}_*multDoubleLinear',
-            f'{typ}_{rigname}_*pointMatrixMult',
-            f'{typ}_{rigname}_*blendTwoAttr',
-            f'{typ}_{rigname}_*clamp',
-            f'{typ}_{rigname}_*setRange',
-            f'{typ}_{rigname}_*choice',
-            f'{typ}_{rigname}_*curveInfo',
-            f'{typ}_{rigname}_*pointOnCurveInfo'
-        ]
-        for pattern in node_patterns:
-            nodes = cmds.ls(pattern) or []
-            for node in nodes:
-                rt_mya.remove(node)
-
-    # 7. Delete curves, clusters, ikHandles
-    logger.trace(f"{rigname}: Cleaning up curves and clusters")
-    if fk:
-        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
-        spline_grp_fk = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_FK)
-        cluster_grp_fk = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_FK)
-        rt_mya.remove(curve_fk)
-        rt_mya.remove(spline_grp_fk)
-        rt_mya.remove(cluster_grp_fk)
-
-    if ik:
-        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
-        spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_IK)
-        cluster_grp_ik = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_IK)
-        spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
-        spline_effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, rt_cst.TYPE_IK)
-        rt_mya.remove(spline_handle)
-        rt_mya.remove(spline_effector)
-        rt_mya.remove(curve_ik)
-        rt_mya.remove(curve_ik_spline)
-        rt_mya.remove(spline_grp_ik)
-        rt_mya.remove(cluster_grp_ik)
-
-    # Clean up animation effects
-    cleanup_anim_effects(rigname, fk, ik)
-
-    # Delete scale group
-    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
-    rt_mya.remove(scale_grp)
-
-    # Clean up old visibility conditions
-    basectrl_name = basectrl.rsplit(rt_cst.CTRL, 1)[0]
-    rt_mya.remove(f'{basectrl_name}{rt_cst.VIS}{rt_cst.COND}')
-
-    # Clean up old items
-    patterns = list()
-    for typ in types:
-        patterns.extend([
-            f'{typ}_{rigname}_revik_{rt_cst.NUM_CTRL_IK:02d}{rt_cst.CTRL}{rt_cst.GRP}',
-            f'{typ}_{rigname}_switch_*{rt_cst.VIS}{rt_cst.COND}',
-            f'{typ}_{rigname}_measure_scale{rt_cst.GRP}'
-        ])
-    # for p in patterns:
-    #     nodes = cmds.ls(p) or []
-    #     for node in nodes:
-    #         rt_mya.remove(node)
-    for p in patterns:
-        nodes = cmds.ls(p)
-        if nodes:
-            cmds.delete(nodes)
-
-def cleanup_connections(rigname, fk, ik):
-    '''
-    Clean up connections. Only disconnect, don't delete nodes.
-
-    Exception: the FK SDK hierarchy is only safe to reuse in place when it
-    matches the current builder's layout. A stale layout (older build with a
-    different SDK layer set) is not something the joint/control caches detect,
-    and rebuilding over it re-wraps already-wrapped joints into a parenting
-    cycle, so tear that part down to a flat chain first.
-    '''
-    logger.debug(f'{rigname}: Cleanup connections')
-
-    if fk and not fk_sdk_structure_is_current(rigname):
-        logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
-        restore_fk_joint_chain(rigname)
-
-    for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
-        if rigname in joints:
-            for jnt in joints[rigname]:
-                if cmds.objExists(jnt):
-                    rt_mya.disconnect_all(jnt, source=True)
-                    # Remove constraints
-                    constraints = cmds.listRelatives(jnt, type='constraint') or []
-                    for constr in constraints:
-                        cmds.delete(constr)
-
-    # Disconnect FK SDK groups
-    if fk and rigname in rt_cst.JOINTS_FK:
-        for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
-            NN = rt_nam.get_index_from_name(jnt)
-            for idx in range(rt_cst.NUM_CTRL_FK + 1):
-                if idx < rt_cst.NUM_CTRL_FK:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
-                else:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
-                if cmds.objExists(sdk_grp):
-                    rt_mya.disconnect_all(sdk_grp, source=True)
-
-    # Delete FK utility node networks: the FK build (set_curveinfo_fk,
-    # falloff_rotation) recreates them from scratch every run, so
-    # keeping the old nodes would accumulate name-suffixed duplicates
-    if fk:
-        typ = rt_cst.TYPE_FK
-        # Underscore anchored after rigname so 'tail' cannot delete
-        # 'tail2' nodes (see cleanup_rigname)
-        fk_patterns = [
-            f'{typ}_{rigname}_*{rt_cst.COND}',
-            f'{typ}_{rigname}_*multiplyDivide',
-            f'{typ}_{rigname}_*plusMinusAverage',
-            f'{typ}_{rigname}_*multDoubleLinear',
-            f'{typ}_{rigname}_*pointMatrixMult',
-            f'{typ}_{rigname}_*setRange',
-            f'{typ}_{rigname}_*pointOnCurveInfo',
-        ]
-        for pattern in fk_patterns:
-            for node in cmds.ls(pattern) or []:
-                rt_mya.remove(node)
-
-def cleanup_anim_effects(rigname, fk, ik):
-    '''
-    Clean up animation effect nodes.
-    Expressions are removed first via rt_mya.remove(), which disconnects
-    before deleting: cmds.delete on a connected expression cascades through
-    its whole connection web (loop network node, sibling FX expressions,
-    composeMatrix nodes).
-
-    Arguments
-        rigname (str): Name of rig component
-        fk (bool): Clean FK effects
-        ik (bool): Clean IK effects
-    '''
-    logger.trace(f'{rigname}: Cleanup animation effects')
-    # Delete animation node patterns (expressions first)
-    typ = rt_cst.TYPE_FX
-    node_patterns = [
-        f'{rigname}_*_wave*_expression',
-        f'{rigname}_*_noise_*_expression',
-        f'{rigname}_loop_time_expression',
-        f'{rigname}_loop_time',
-        f'{rigname}_curl*_multiplyDivide',
-        f'{typ}_{rigname}_wave_*',
-        f'{typ}_{rigname}_curl_*',
-        f'{typ}_{rigname}_dynOffset_*',
-        f'{typ}_{rigname}_loop_*',
-        f'{typ}_{rigname}_*_blender_plusMinusAverage',
-        f'{typ}_{rigname}_*_ikfk_blendColors',
-        f'{typ}_{rigname}_*_ikfk_remap_condition'
-    ]
-    for pattern in node_patterns:
-        nodes = cmds.ls(pattern) or []
-        for node in nodes:
-            rt_mya.remove(node)
-
-    cleanup_dangling_unit_conversions()
-
-def cleanup_dangling_unit_conversions():
-    '''
-    Sweep conversion nodes orphaned by deleting SDK animCurves or
-    expressions, otherwise they accumulate with every rebuild.
-    timeToUnitConversion / unitToTimeConversion are separate node types
-    from unitConversion (created for time-attribute connections) and
-    need sweeping too.
-    '''
-    conversions = cmds.ls(type=['unitConversion', 'timeToUnitConversion',
-                                'unitToTimeConversion']) or []
-    for uc in conversions:
-        # Deleting one conversion node can cascade-delete others still in
-        # this pre-captured list; skip any that Maya already removed so the
-        # .input/.output query below can't raise 'No object matches name'.
-        if not cmds.objExists(uc):
+        joints = rt_cst.JOINTS_BN.get(rigname)
+        if not joints or len(joints) < 2:
             continue
-        if not cmds.listConnections(f'{uc}.input', s=True, d=False) \
-                or not cmds.listConnections(f'{uc}.output', s=False, d=True):
-            cmds.delete(uc)
+        try:
+            positions = [cmds.xform(j, q=True, ws=True, translation=True)
+                         for j in joints]
+            frames = aim_frames(positions, aim_axis, up_axis)
+            logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
+            count += _apply_frames(joints, frames, dry_run)
+        except Exception as err:
+            logger.error(f'Orient: aim failed on {rigname}: {err}')
+    return count
 
 
-# SETUP ================================================================
-
-def setup_rig(fk, ik):
+def mirror_joints(dry_run):
     '''
-    Create groups, root control, cog control.
-    Connect root and cog.
-    Rename components for IK if necessary.
-    Make sure that RIGPARTS are set.
+    Behavior-mirror each L/R pair's BN chain.
+
+    Overwrites the target side with the mirror of the source side
+    (rt_cst.MIRROR_SOURCE_SIDE). Copies the source orientation as is, so it
+    does not remove twist; run orient_chains first for a clean source.
+    No-op when RIGPARTS has no L/R pair.
 
     Arguments
-        fk (bool): Setup FK components
-        ik (bool): Setup IK components
+        dry_run (bool): only log the intended changes, do not modify.
+
+    Return
+        int: joints re-oriented (or that would be, in a dry run).
     '''
-    logger.debug('-----------------------------------------------------')
-    logger.info('Setup rig components')
-
-    # The matrix OPM network needs matrixNodes; load it up front
-    rt_mya.ensure_plugins()
-
-    # NOTE: joint orientation / L-R mirroring is NOT done here. It is a
-    # separate Setup phase (rig_tail_orient, run from rig_tail.setup_tails
-    # or the Tail Rig Setup UI) that the user runs on the skeleton BEFORE
-    # building. Keeping it out of the build means a rebuild never silently
-    # re-orients joints.
-
-    # Sync IKFK_MODES with the build options before the switch attribute
-    # is created (connect_cog): IK-only builds must not offer 'FK'
-    if rt_cst.update_ikfk_modes(fk, ik):
-        logger.debug(f'IKFK_MODES updated for build options: {rt_cst.IKFK_MODES}')
-
-    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    control_grp = rt_nam.fstr('', rt_cst.CONTROL_GRP)
-    skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP)
-    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
-    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
-
-    if fk and not ik:
-        groups = [geometry_grp, control_grp, skeleton_grp, rig_systems_grp, clusters_grp]
-    else:
-        fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)
-        ik_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK)
-        groups = [geometry_grp, control_grp, skeleton_grp,
-                  fk_skeleton_grp, ik_skeleton_grp,
-                  rig_systems_grp, clusters_grp]
-    rt_ctl.create_root_cog()
-
-    # Create structure groups
-    for group in groups:
-        rt_mya.create_group(group, parent=root_grp)
-        if group == geometry_grp:
-            meshes = rt_mya.get_geometry_from_scene()
-            for geo in meshes:
-                # Refuse to create duplicate sibling names: Maya would
-                # auto-rename the incoming node, and the clashing shape
-                # names ('rivetsShape') break later short-name lookups
-                leaf = geo.split('|')[-1]
-                if cmds.objExists(f'{geometry_grp}|{leaf}'):
-                    logger.warning(
-                        f"Skip parenting '{geo}' under '{geometry_grp}': "
-                        f"a child named '{leaf}' already exists there. "
-                        f"Rename or delete one of the duplicates.")
-                    continue
-                rt_mya.parent_to(geo, geometry_grp)
-        elif group == control_grp:
-            controls = rt_mya.get_controls_from_scene()
-            for ctrl in controls:
-                rt_mya.parent_to(ctrl, control_grp)
-        elif group == skeleton_grp:
-            joints = rt_mya.get_joints_from_scene()
-            for joint in joints:
-                rt_mya.parent_to(joint, skeleton_grp)
-        else:
-            logger.trace(f"Group exists '{group}'")
-
-    if ik: # Replace names
-        rename_components()
-
-    rt_con.connect_root(fk, ik)
-    rt_con.connect_cog(fk, ik)
-    for rigname in rt_cst.RIGPARTS:
-        # Parts without joints were skipped by set_joints/set_joints_auto
-        if rigname not in rt_cst.JOINTS_BN:
-            logger.warning(f"{rigname}: No joints set, skipping setup")
+    axis = _cst('MIRROR_AXIS')
+    mode = ' [dry-run]' if dry_run else ''
+    pairs, _ = find_mirror_pairs(rt_cst.RIGPARTS)
+    if not pairs:
+        logger.info(f'Mirror{mode}: no L/R pairs in RIGPARTS, skipping')
+        return 0
+    count = 0
+    for source, target in pairs:
+        src = rt_cst.JOINTS_BN.get(source)
+        tgt = rt_cst.JOINTS_BN.get(target)
+        if not src or not tgt:
+            logger.warning(f'Mirror: {source} or {target} has no BN joints')
             continue
-        rt_ctl.create_basectrl(rigname)
-        rt_con.connect_basectrl(rigname, fk, ik)
+        try:
+            src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
+                        for j in src]
+            frames = mirror_frames(src_mats, axis)
+            logger.info(f'Mirror{mode}: {source} to {target} (axis={axis})')
+            count += _apply_frames(tgt, frames, dry_run)
+        except Exception as err:
+            logger.error(f'Mirror: failed on {source} to {target}: {err}')
+    return count
 
-def set_root(root):
+
+# PAIRING ==============================================================
+
+def find_mirror_pairs(rigparts):
     '''
-    Set the root name for the rig. A trailing group label is stripped
-    (e.g. tail_root_grp -> tail_root). When ROOT changes between
-    builds, the previous root group is renamed to the new name so the
-    rig is not split across two hierarchies.
+    Pair rig parts into (source, target) by their side prefix.
+
+    A pair exists when both an 'L_<base>' and an 'R_<base>' rig part are
+    present (prefix match is case-insensitive; the base must be identical).
+    The source side is rt_cst.MIRROR_SOURCE_SIDE (default 'R'); the other
+    side is the target that gets overwritten. Center and unpaired parts are
+    ignored.
 
     Arguments
-        root (str): New root name (with or without group suffix)
-    '''
-    if not root:
-        logger.error(f"Invalid argument '{root}'.")
-        return
-
-    rt_cst.ROOT = rt_nam.strip_group_suffix(root)
-    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    logger.debug(f"Set ROOT '{rt_cst.ROOT}'")
-
-    if cmds.objExists(root) and root != root_grp:
-        # User passed an existing group name: rename to template name
-        cmds.rename(root, root_grp)
-    elif not cmds.objExists(root_grp):
-        # ROOT changed since the rig was built: carry the existing
-        # root group over to the new name
-        prev_root_grp = find_existing_root_grp()
-        if prev_root_grp and prev_root_grp != root_grp:
-            logger.debug(
-                f"ROOT changed: rename root group "
-                f"'{prev_root_grp}' -> '{root_grp}'")
-            cmds.rename(prev_root_grp, root_grp)
-    if cmds.objExists(root_grp):
-        if cmds.nodeType(root_grp) != 'transform':
-            rt_mya.remove(root_grp)
-
-def find_existing_root_grp():
-    '''
-    Locate the root group of a previous build regardless of its name:
-    the parent of the structure groups (geometry/skeleton/controls),
-    which only ever live directly under the root group.
+        rigparts (list): RIGPARTS names.
 
     Return
-        str or None: Existing root group, or None if no rig is built
+        tuple: (pairs, paired_names).
+            pairs (list): [(source_rigname, target_rigname), ...].
+            paired_names (set): every rigname that belongs to a pair.
     '''
-    for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP,
-                     rt_cst.CONTROL_GRP):
-        grp = rt_nam.fstr('', template)
-        if cmds.objExists(grp):
-            parent = cmds.listRelatives(grp, p=True, typ='transform') or []
-            if parent:
-                return parent[0]
-    return None
-
-
-# JOINTS ===============================================================
-
-def set_joints_auto():
-    '''
-    Auto-detect joints for all RIGPARTS.
-    Search scene for joints matching naming convention.
-    '''
-    logger.debug('Auto-detect joints for all RIGPARTS')
-
-    for rigname in rt_cst.RIGPARTS:
-        # Try to find start joint using naming convention
-        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-
-        if not cmds.objExists(start_jnt):
-            # Fallback: search for any BN joint whose name resolves to
-            # exactly this rigname via the naming template, so 'tail'
-            # never grabs 'BN_R_tail_00_jnt' (that belongs to 'R_tail')
-            all_joints = cmds.ls(type='joint')
-            matching = [j for j in all_joints
-                        if rt_cst.TYPE_BN in j and
-                        rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname]
-            if matching:
-                start_jnt = matching[0]
-                logger.debug(f"{rigname}: Found start joint '{start_jnt}'")
-            else:
-                logger.warning(f"{rigname}: No joints found, skipping")
-                continue
-
-        # Set joints for this rigname (will auto-detect end)
-        set_joints(rigname, start_jnt=start_jnt, end_jnt=None)
-
-def _find_bn_start(rigname):
-    '''
-    Locate the BN start joint for a rig part, using the same detection as
-    set_joints_auto: the exact BN start-joint name first, then any BN
-    joint whose name resolves to exactly this rigname. Returns None when
-    the part has no joints.
-    '''
-    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-    if cmds.objExists(start_jnt):
-        return start_jnt
-    for j in cmds.ls(type='joint') or []:
-        if rt_cst.TYPE_BN in j and \
-                rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname:
-            return j
-    return None
-
-def detect_joints_bn():
-    '''
-    Populate rt_cst.JOINTS_BN for every RIGPART by chain detection only
-    -- no FK/IK duplication, no renaming. Used by the Setup phase
-    (rig_tail.setup_tails), which re-orients the raw BN skeleton before
-    any rig components exist; the build's set_joints_auto later creates
-    the FK/IK chains from the oriented BN.
-
-    Return
-        list: rignames whose BN chain was found and stored
-    '''
-    logger.debug('Detect BN joints for all RIGPARTS (Setup phase)')
-    found = []
-    for rigname in rt_cst.RIGPARTS:
-        start_jnt = _find_bn_start(rigname)
-        if not start_jnt:
-            logger.warning(f'{rigname}: No BN joints found, skipping')
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    groups = {}
+    for rp in rigparts:
+        m = _SIDE_RE.match(rp)
+        if not m:
             continue
-        chain = rt_jnt.get_joint_chain(start_jnt)
-        if not chain:
-            logger.warning(f'{rigname}: Empty joint chain from {start_jnt}')
-            continue
-        rt_cst.JOINTS_BN[rigname] = chain
-        found.append(rigname)
-        logger.debug(f'{rigname}: {len(chain)} BN joints detected')
-    return found
+        groups.setdefault(m.group(2), {})[m.group(1).upper()] = rp
 
-def set_joints(rigname, start_jnt=None, end_jnt=None):
+    pairs = []
+    paired = set()
+    for base, sides in groups.items():
+        if 'L' in sides and 'R' in sides:
+            target_side = 'L' if source_side == 'R' else 'R'
+            pairs.append((sides[source_side], sides[target_side]))
+            paired.add(sides['L'])
+            paired.add(sides['R'])
+    return pairs, paired
+
+
+# FRAMES ===============================================================
+
+def aim_frames(positions, aim_axis, up_axis):
     '''
-    Create FK, IK, and BN joint chains.
-    Set start and end joints. Store joint names in dict.
-    Detect joints and decide whether to rename or duplicate.
-    Assume that joints follow Naming Template.
-    Rebuild-safe: reuses cached joints if they still exist and are valid.
+    Per-joint world frames that aim down the chain with a twist-free up.
+
+    The up reference is the chain's best-fit plane normal (the summed cross
+    product of consecutive segments), stable for a near-planar chain. A
+    straight or degenerate chain falls back to the world axis most
+    perpendicular to the first segment. Each joint's up is that normal made
+    perpendicular to its own aim, so the up-axis stays consistent and the
+    tail bends in one plane.
 
     Arguments
-        rigname (str): Name of rig component
-        start_jnt (str): First joint in chain (auto-detected if None)
-        end_jnt (str): Last joint in chain (auto-detected if None)
-    '''
-    joints_list = [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]
-    types = [rt_cst.TYPE_BN, rt_cst.TYPE_FK, rt_cst.TYPE_IK]
-
-    # Check if cached joints are still valid
-    cache_valid = True
-    for i, joints in enumerate(joints_list):
-        if rigname in joints:
-            # Verify all cached joints still exist
-            if not all(cmds.objExists(j) for j in joints[rigname]):
-                logger.trace(f'{rigname}: Cached {types[i]} joints invalid, rebuilding')
-                cache_valid = False
-                del joints[rigname]
-        else:
-            cache_valid = False
-
-    # If all caches valid, skip rebuild
-    if cache_valid:
-        logger.debug(f"{rigname}: Using cached joints (all valid)")
-        return
-
-    # Detect or validate start joint
-    if not start_jnt:
-        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, 0)
-        logger.debug(f"{rigname}: Auto-detect start_jnt: {start_jnt}")
-
-    if not cmds.objExists(start_jnt):
-        logger.error(f"{rigname}: start_jnt '{start_jnt}' does not exist")
-        return
-    if end_jnt and not cmds.objExists(end_jnt):
-        logger.error(f"{rigname}: end_jnt '{end_jnt}' does not exist")
-        return
-
-    logger.debug(f"{rigname}: Setting joints - start:{start_jnt} end:{end_jnt}")
-
-    joint_chain = rt_jnt.get_joint_chain(start_jnt, end_jnt)
-    if not joint_chain:
-        logger.error(f"{rigname}: No joints found")
-        return
-    logger.trace(f'Joint Chain: {joint_chain}')
-
-    # Create/rename joints - always create BN
-    rt_cst.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, rt_cst.TYPE_BN)
-    logger.debug(f'{rigname}: Processed {rt_cst.TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
-    # Create IK/FK joints here since setup runs before build
-    rt_cst.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_FK)
-    rt_cst.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_IK)
-
-
-def create_rename_joints(rigname, joints, typ):
-    '''
-    Rename or duplicate joint chains safely.
-
-    TYPE_BN:
-        - joints are the authoritative BN chain
-        - rename in place only
-
-    TYPE_FK / TYPE_IK:
-        - duplicate BN root once
-        - delete existing target chain
-        - rename duplicated joints
-    '''
-    logger.trace(f"rigname:'{rigname}' joints:'{typ}'")
-
-    # BN: rename in place
-    if typ == rt_cst.TYPE_BN:
-        out = []
-        for jnt in joints:
-            NN = rt_nam.get_index_from_name(jnt)
-            new_name = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN)
-            if jnt != new_name:
-                jnt = cmds.rename(jnt, new_name)
-            if NN == 'ee':
-                break
-            out.append(jnt)
-        return out
-
-    # FK/IK: duplicate BN hierarchy
-    # BN root must already exist
-    bn_root = joints[0]
-    target_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
-
-    # Remove existing FK / IK chain cleanly
-    if cmds.objExists(target_root):
-        cmds.delete(target_root)
-
-    # Duplicate entire hierarchy once
-    dup_root = cmds.duplicate(bn_root, n=target_root, rc=True)[0]
-    # Collect duplicated joints in DAG order
-    dup_jnts = cmds.ls(dup_root, dag=True, type='joint')
-
-    out = []
-    for jnt in dup_jnts:
-        NN = rt_nam.get_index_from_name(jnt)
-        new_name = rt_nam.fstr(rigname, rt_cst.JOINT, typ, NN)
-        if jnt != new_name:
-            jnt = cmds.rename(jnt, new_name)
-        if NN == 'ee':
-            break
-        out.append(jnt)
-    return out
-
-
-# RENAME ===============================================================
-
-def rename(source, target):
-    '''
-    Safely rename Maya object.
-
-    Arguments
-        source (str): Current object name
-        target (str): Desired object name
-    '''
-    if cmds.objExists(source):
-        cmds.rename(source, target)
-        logger.debug(f"Renamed '{source}' -> '{target}'")
-    else:
-        logger.trace(f"Cancel rename '{source}' -> '{target}'. Source '{source}' does not exist.")
-
-def rigpart_has_joints(rigname):
-    '''
-    True if the scene contains BN joints for `rigname`, using the same
-    detection as set_joints_auto (exact BN start joint, or any BN joint
-    whose name resolves to exactly this rigname via the naming
-    template). Used to validate/warn about RIGPARTS entries that would
-    have nothing to build.
-
-    Arguments
-        rigname (str): Rig part name to check
+        positions (list): [[x, y, z], ...] joint world positions.
+        aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
+        up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
 
     Return
-        bool: True if BN joints exist for this rig part
+        list: one [X_row, Y_row, Z_row] world frame per joint.
     '''
-    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-    if cmds.objExists(start_jnt):
-        return True
-    all_joints = cmds.ls(type='joint') or []
-    return any(rt_cst.TYPE_BN in j and
-               rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname
-               for j in all_joints)
+    n = len(positions)
+    segs = [_sub(positions[i + 1], positions[i]) for i in range(n - 1)]
+    normal = [0.0, 0.0, 0.0]
+    for i in range(len(segs) - 1):
+        normal = _add(normal, _cross(segs[i], segs[i + 1]))
+    if _length(normal) < _EPS:
+        normal = _world_axis_perp(_norm(segs[0])) if segs else [0, 0, 1]
+    normal = _norm(normal)
+
+    frames = []
+    for i in range(n):
+        aim = _norm(segs[i] if i < n - 1 else segs[-1])
+        up = _sub(normal, _scale(aim, _dot(normal, aim)))
+        up = _norm(up) if _length(up) > _EPS else _world_axis_perp(aim)
+        frames.append(_assign_rows(aim, up, aim_axis, up_axis))
+    return frames
 
 
-def rename_rigpart(old, new):
+def mirror_frames(src_matrices, axis):
     '''
-    Rename a rig part in place: swap the rigname token `old` -> `new` in
-    every node that carries it (joints and any already-built rig nodes),
-    then update RIGPARTS and the joint caches so names stay consistent.
+    Behavior-mirror source world orientations for the target side.
 
-    The match is bounded to whole tokens, so renaming 'tail' does not
-    touch 'detail' or 'tail2'. Renames are keyed by UUID (stable across
-    renames) and rolled back if any single rename fails, so on failure the
-    scene is left unchanged. If ROOT equals the old rigname (e.g. a single
-    default tail whose root group shares the name), ROOT is updated too so
-    it keeps matching the renamed root group.
+    Negates the two axis components orthogonal to the symmetry-plane
+    normal in each source frame. That is an even (det +1) operation, so the
+    frame stays right-handed. Equal values on both sides then produce
+    symmetric motion.
 
     Arguments
-        old (str): Current rig part name
-        new (str): New rig part name
+        src_matrices (list): per-joint source world matrices (16 floats).
+        axis (str): symmetry-plane normal, 'x'|'y'|'z'.
 
     Return
-        (bool, str): (success, message). Nothing is changed on failure.
+        list: one [X_row, Y_row, Z_row] world frame per joint.
     '''
-    new = (new or '').strip()
-    if not new:
-        return False, 'New name is empty.'
-    if new == old:
-        return False, 'New name is unchanged.'
-    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', new):
-        return False, ('Invalid name. Use letters, digits and underscores; '
-                       'do not start with a digit.')
-
-    old_token = re.compile(rf'(?<![A-Za-z0-9]){re.escape(old)}(?![A-Za-z0-9])')
-    new_token = re.compile(rf'(?<![A-Za-z0-9]){re.escape(new)}(?![A-Za-z0-9])')
-
-    all_nodes = cmds.ls(long=True)
-    # Refuse if the new name is already used by any node (would collide)
-    if any(new_token.search(n.split('|')[-1]) for n in all_nodes):
-        return False, f"Name '{new}' is already used in the scene."
-
-    targets = [n for n in all_nodes if old_token.search(n.split('|')[-1])]
-    if not targets:
-        # Nothing built for this part yet: just migrate list/cache state
-        _migrate_rigpart_state(old, new, old_token)
-        return True, f"Renamed '{old}' -> '{new}' (no scene nodes yet)."
-
-    # UUIDs survive renames; resolve to the current path at each step so a
-    # parent rename never invalidates a pending child.
-    uuids = cmds.ls(targets, uuid=True)
-    done = []  # (uuid, old_short) for rollback
-    try:
-        for uuid in uuids:
-            cur = cmds.ls(uuid, long=True)
-            if not cur:
-                continue
-            short = cur[0].split('|')[-1]
-            new_short = old_token.sub(new, short)
-            if new_short == short:
-                continue
-            cmds.rename(cur[0], new_short)
-            done.append((uuid, short))
-    except Exception as e:
-        for uuid, old_short in reversed(done):
-            cur = cmds.ls(uuid, long=True)
-            if cur:
-                try:
-                    cmds.rename(cur[0], old_short)
-                except Exception:
-                    pass
-        logger.warning(f"Rename '{old}' -> '{new}' failed, reverted: {e}")
-        return False, f'Rename failed and was reverted: {e}'
-
-    _migrate_rigpart_state(old, new, old_token)
-    logger.debug(f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)")
-    return True, f"Renamed rig part '{old}' -> '{new}' ({len(done)} nodes)."
+    keep = {'x': 0, 'y': 1, 'z': 2}.get(str(axis).lower(), 0)
+    frames = []
+    for m in src_matrices:
+        rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]])
+        frames.append([[r[c] if c == keep else -r[c] for c in range(3)]
+                       for r in rows])
+    return frames
 
 
-def _migrate_rigpart_state(old, new, old_token):
-    '''Move RIGPARTS, ROOT (if it matched) and joint caches from old to new.'''
-    rt_cst.RIGPARTS = [new if p == old else p for p in rt_cst.RIGPARTS]
-    for jdict in (rt_cst.JOINTS_BN, rt_cst.JOINTS_FK,
-                  rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
-        if old in jdict:
-            jdict[new] = [old_token.sub(new, j) for j in jdict.pop(old)]
-    lb = rt_cst.LAST_BUILD
-    lb['rigparts'] = [new if p == old else p for p in lb.get('rigparts', [])]
-    jp = lb.get('joints_pos') or {}
-    if old in jp:
-        jp[new] = jp.pop(old)
-    if rt_cst.ROOT == old:
-        rt_cst.ROOT = new
-        lb['root'] = new
-
-
-def rename_components():
+def _assign_rows(aim, up, aim_axis, up_axis):
     '''
-    Rename IK related controls and attributes from old naming convention.
-    Handles legacy rig component names for compatibility.
+    Build a right-handed world rotation from an aim and up direction.
 
-    Only nodes whose names carry a legacy marker are touched: several
-    replacements ('Handle' -> 'handle', 'Sml' -> '_sml', ...) would
-    otherwise mangle names that already follow the current convention
-    (e.g. clusterHandle, splineHandle).
+    Returns three axis rows (Maya order: rows 0/1/2 are the local X/Y/Z
+    axes in world), placing aim on aim_axis, up on up_axis, and the cross
+    product on the remaining axis, flipped if needed to stay right-handed.
 
-    Warning: Uses hardcoded name replacements, check naming convention.
+    Arguments
+        aim (list): unit aim direction (down the chain).
+        up (list): unit up direction (perpendicular to aim).
+        aim_axis (str): local axis for aim, 'x'|'y'|'z'.
+        up_axis (str): local axis for up, 'x'|'y'|'z'.
+
+    Return
+        list: [X_row, Y_row, Z_row].
     '''
-    replace_names = {
-        'srt': 'grp',
-        'spineRig1_': '',
-        'spineRig': '',
-        'splineIk': 'ik',
-        'Handle': 'handle',
-        'Effector': 'effector',
-        'ikSplineCurve': 'ikspline_crv',
-        'fkSpline': 'ik',
-        'spineSpline': 'spline',
-        'floatSpline': 'float',
-        'cntrlBase': 'bot',
-        'cntrlMid': 'mid',
-        'rotMid': 'mid_rot',
-        'cntrlTop': 'top',
-        'Sml': '_sml',
-        '__' : '_',
-        'hierarchySwitch': 'switch'
-        }
-    # Substrings that only appear in legacy names; nodes without one
-    # are already on the current convention and are left alone
-    legacy_markers = ('spineRig', 'splineIk', 'ikSplineCurve', 'fkSpline',
-                      'spineSpline', 'floatSpline', 'cntrlBase', 'cntrlMid',
-                      'rotMid', 'cntrlTop', 'hierarchySwitch')
+    idx = {'x': 0, 'y': 1, 'z': 2}
+    a, u = idx[aim_axis], idx[up_axis]
+    t = 3 - a - u  # remaining axis index
+    third = _cross(aim, up)
+    rows = [None, None, None]
+    rows[a] = aim
+    rows[u] = up
+    rows[t] = third
+    # Keep right-handed (X cross Y == Z); flip the third axis if not.
+    if _dot(_cross(rows[0], rows[1]), rows[2]) < 0:
+        rows[t] = _scale(third, -1.0)
+    return rows
 
-    def legacy_rename(node):
-        if not any(marker in node for marker in legacy_markers):
-            return
-        node_name = node
-        for old_name, new_name in replace_names.items():
-            node_name = node_name.replace(old_name, new_name)
-        # Renames can invalidate names listed earlier (e.g. shapes of a
-        # renamed transform), so re-check existence
-        if node != node_name and cmds.objExists(node):
-            logger.trace(f"Rename legacy node '{node}' -> '{node_name}'")
-            cmds.rename(node, node_name)
 
-    dag_nodes = cmds.ls(dag=True)
-    transforms = cmds.ls(dag_nodes, type='transform')
+# APPLY ================================================================
 
-    # Remove old IKFK Switch attributes (change as necessary)
-    old_switches = ['hierarchySwitch', 'IKFK Switch']
-    for node in transforms:
-        for old_switch in old_switches:
-            if cmds.attributeQuery(old_switch, n=node, ex=1):
-                cmds.deleteAttr(node, at=old_switch)
-                rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
-                rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
+def _apply_frames(joints, frames, dry_run):
+    '''
+    Write world orientations onto joints, preserving world positions.
 
-    # Rename legacy DAG nodes
-    for node in dag_nodes:
-        legacy_rename(node)
+    Processes root to tip using each joint's own captured position, so
+    re-orienting a parent cannot move a child, and there is no re-parenting
+    to drift. The full world matrix is set directly (unambiguous, no
+    euler-order dependence); with jointOrient zeroed the orientation lands
+    in rotate, which is then moved into jointOrient with rotate cleared.
 
-    # Rename legacy utility nodes
-    non_dag_nodes = cmds.ls(dag=False)
-    util_nodes = ['condition', 'multiplyDivide', 'plusMinusAverage',
-                  'curveInfo', 'pointOnCurveInfo', 'blendTwoAttr',
-                  'multDoubleLinear', 'pointMatrixMult', 'setRange', 'clamp']
-    for util_typ in util_nodes:
-        util_node = cmds.ls(non_dag_nodes, type=util_typ)
-        for node in util_node:
-            legacy_rename(node)
+    Arguments
+        joints (list): chain joints, root first.
+        frames (list): matching [X_row, Y_row, Z_row] world frames.
+        dry_run (bool): only log, do not modify.
+
+    Return
+        int: joints re-oriented (or that would be, in a dry run).
+    '''
+    n = min(len(joints), len(frames))
+    positions = [cmds.xform(joints[i], q=True, ws=True, translation=True)
+                 for i in range(n)]
+    if dry_run:
+        for i in range(n):
+            before = cmds.xform(joints[i], q=True, ws=True, ro=True)
+            logger.info(f'  [dry-run] {joints[i]}: world rot '
+                        f'{[round(v, 2) for v in before]} to aligned')
+        return n
+
+    for i in range(n):
+        jnt = joints[i]
+        cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+        cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
+        cmds.xform(jnt, ws=True, matrix=_world_matrix(frames[i], positions[i]))
+        rot = cmds.getAttr(f'{jnt}.rotate')[0]
+        cmds.setAttr(f'{jnt}.jointOrient', rot[0], rot[1], rot[2])
+        cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+    logger.debug(f'  re-oriented {n} joints ({joints[0]} ...)')
+    return n
+
+
+def _world_matrix(rows, pos):
+    ''' 16-float row-major world matrix from axis rows and a position. '''
+    return [rows[0][0], rows[0][1], rows[0][2], 0.0,
+            rows[1][0], rows[1][1], rows[1][2], 0.0,
+            rows[2][0], rows[2][1], rows[2][2], 0.0,
+            pos[0], pos[1], pos[2], 1.0]
+
+
+# VECTORS ==============================================================
+
+def _sub(a, b): return [a[i] - b[i] for i in range(3)]
+def _add(a, b): return [a[i] + b[i] for i in range(3)]
+def _scale(a, s): return [x * s for x in a]
+def _dot(a, b): return sum(a[i] * b[i] for i in range(3))
+def _cross(a, b): return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
+def _length(a): return math.sqrt(_dot(a, a))
+
+
+def _norm(a):
+    ''' Normalize a vector; returns a zero vector when its length is ~0. '''
+    l = _length(a)
+    return [x / l for x in a] if l > _EPS else [0.0, 0.0, 0.0]
+
+
+def _world_axis_perp(aim):
+    ''' Unit world axis least aligned with aim, made perpendicular to it. '''
+    best = min(([1, 0, 0], [0, 1, 0], [0, 0, 1]), key=lambda ax: abs(_dot(ax, aim)))
+    return _norm(_sub(best, _scale(aim, _dot(best, aim))))

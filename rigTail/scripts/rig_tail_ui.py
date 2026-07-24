@@ -513,9 +513,9 @@ class RigTailUI(QtWidgets.QDialog):
         if root:
             stripped = rt_nam.strip_group_suffix(root)
             if stripped != rt_cst.ROOT:
-                import rig_tail_setup as rt_set
+                import rig_tail_cleanup as rt_cln
                 if cmds.objExists(stripped) and \
-                        stripped != rt_set.find_existing_root_grp():
+                        stripped != rt_cln.find_existing_root_grp():
                     QtWidgets.QMessageBox.warning(
                         self, 'Invalid Root Name',
                         f"'{stripped}' is already a node in the scene. "
@@ -637,7 +637,7 @@ class RigTailUI(QtWidgets.QDialog):
         import rig_tail as rt
 
         self.apply_root_name()
-        # Pass the raw text through; rt_set.set_root strips the group
+        # Pass the raw text through; rt_cln.set_root strips the group
         # label and renames the previous root group in the scene
         root = self.txt_root.text().strip() or None
 
@@ -654,8 +654,8 @@ class RigTailUI(QtWidgets.QDialog):
             return
 
         # Warn about rig parts with no joints instead of failing mid-build
-        import rig_tail_setup as rt_set
-        missing = [p for p in rt_cst.RIGPARTS if not rt_set.rigpart_has_joints(p)]
+        import rig_tail_cleanup as rt_cln
+        missing = [p for p in rt_cst.RIGPARTS if not rt_cln.rigpart_has_joints(p)]
         if missing:
             QtWidgets.QMessageBox.warning(self, 'Missing Joints',
                 'No BN joints found for: ' + ', '.join(missing) + '.\n'
@@ -788,8 +788,8 @@ class RigPartsEditor(QtWidgets.QDialog):
             return
         self.list_widget.addItem(text)
         # Validate/warn: an added name with no joints builds nothing
-        import rig_tail_setup as rt_set
-        if not rt_set.rigpart_has_joints(text):
+        import rig_tail_cleanup as rt_cln
+        if not rt_cln.rigpart_has_joints(text):
             QtWidgets.QMessageBox.warning(self, 'Missing Joints',
                 f"No BN joints found for rig part '{text}'.")
 
@@ -817,8 +817,8 @@ class RigPartsEditor(QtWidgets.QDialog):
         if not new or new == old:
             return
 
-        import rig_tail_setup as rt_set
-        success, message = rt_set.rename_rigpart(old, new)
+        import rig_tail_cleanup as rt_cln
+        success, message = rt_cln.rename_rigpart(old, new)
         if success:
             item.setText(new)
             # Backend already updated RIGPARTS/ROOT/caches; refresh main UI

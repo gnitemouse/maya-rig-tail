@@ -60,7 +60,7 @@ FORCE_REBUILD = False
 
 # SETUP PHASE ==========================================================
 # Skeleton-prep options, run by the separate 'Tail Rig Setup' step
-# (rig_tail_orient) BEFORE the build, never during it. Two independent
+# (rig_tail_setup) BEFORE the build, never during it. Two independent
 # operations:
 #
 # MIRROR_ORIENT - aim-orient each chain: re-aim every joint down its own
