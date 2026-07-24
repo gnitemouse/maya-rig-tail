@@ -27,6 +27,8 @@ Functions:
     set_group_visibility: Set group visibility
     set_joint_channels: Set a joint's channels (non-)keyable, no locking
     finalize_joint_channels: Apply set_joint_channels to all rig joints
+    set_joint_color: Colour a joint's wireframe via the drawing override
+    color_skeletons: Colour BN/IK/FK skeletons by type
     create_group: Create transform group
     create_condition: Create condition node
     create_condition_multi: Create multi-output condition
@@ -648,6 +650,65 @@ def finalize_joint_channels(keyable, visibility=None, joint_dicts=None):
     state = 'keyable' if keyable else 'non-keyable'
     vis = f', visibility={visibility}' if visibility is not None else ''
     logger.debug(f'Set {count} joints {state}{vis}')
+    return count
+
+
+def set_joint_color(joint, color):
+    """
+    Colour a joint's viewport wireframe via the drawing override.
+
+    Uses overrideColor (the index / "Wireframe - Index" colour), the same
+    mechanism controls use -- NOT the outliner colour, which only tints the
+    outliner text and does nothing in the viewport. A joint draws from its
+    own transform (no separate shape), so the override goes on the joint
+    itself. Locked or connected override plugs are skipped rather than
+    erroring.
+
+    Arguments:
+        joint (str): Joint node.
+        color (str|int): COLOR_OVERRIDE name, or a raw override index.
+    """
+    if not cmds.objExists(joint):
+        return
+    index = rt_cst.COLOR_OVERRIDE.get(color, color) if isinstance(color, str) \
+        else color
+    for plug, value in (('overrideEnabled', 1),
+                        ('overrideRGBColors', 0),
+                        ('overrideColor', index)):
+        attr = f'{joint}.{plug}'
+        if cmds.attributeQuery(plug, node=joint, exists=True) and \
+                cmds.getAttr(attr, settable=True):
+            cmds.setAttr(attr, value)
+
+
+def color_skeletons(bn_color=None, ik_color=None, fk_color=None):
+    """
+    Colour each cached rig joint by its chain type (BN / IK / FK; FX
+    follows the IK colour), so the three skeletons read apart at a glance.
+
+    Colours default to the rt_cst.*_COLOR settings; getattr fallbacks keep
+    it working in a session started before those constants existed
+    (rig_tail_constants is never reloaded).
+
+    Arguments:
+        bn_color/ik_color/fk_color (str|int|None): override the defaults.
+
+    Return
+        int: number of joints coloured.
+    """
+    bn = bn_color or getattr(rt_cst, 'BN_COLOR', 'blue')
+    ik = ik_color or getattr(rt_cst, 'IK_COLOR', 'orange')
+    fk = fk_color or getattr(rt_cst, 'FK_COLOR', 'purple')
+    mapping = [(rt_cst.JOINTS_BN, bn), (rt_cst.JOINTS_IK, ik),
+               (rt_cst.JOINTS_FK, fk), (rt_cst.JOINTS_FX, ik)]
+    count = 0
+    for jdict, color in mapping:
+        for joints in jdict.values():
+            for jnt in joints:
+                if cmds.objExists(jnt):
+                    set_joint_color(jnt, color)
+                    count += 1
+    logger.debug(f'Coloured {count} joints (BN={bn}, IK={ik}, FK={fk})')
     return count
 
 

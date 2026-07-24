@@ -96,6 +96,16 @@ ORIENT_UP_AXIS = 'z'
 # full teardown.
 JOINT_POS_TOLERANCE = 0.001
 
+# SKELETON DISPLAY =====================================================
+# Colour each joint chain by type via the drawing override (the viewport
+# wireframe / index colour, the same mechanism controls use -- NOT the
+# outliner colour, which only tints outliner text). Applied at the end of
+# the build. Colour names index COLOR_OVERRIDE below.
+COLOR_SKELETON = True
+BN_COLOR = 'blue'      # bind skeleton
+IK_COLOR = 'orange'    # IK skeleton
+FK_COLOR = 'purple'    # FK skeleton
+
 
 # ANIMATION EFFECTS ====================================================
 # Features: Build which features
@@ -451,6 +461,10 @@ def get_user_editable_config():
         'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
+        'COLOR_SKELETON': COLOR_SKELETON,
+        'BN_COLOR': BN_COLOR,
+        'IK_COLOR': IK_COLOR,
+        'FK_COLOR': FK_COLOR,
 
         # Naming Template: type labels
         'TYPE_BN': TYPE_BN,
@@ -584,6 +598,7 @@ def load_config(filepath=None):
     global MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
+    global COLOR_SKELETON, BN_COLOR, IK_COLOR, FK_COLOR
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
     global BASECTRL_GRP, BASECTRL, CTRLROOT_GRP, CTRL_GRP, CONTROL, GROUP, JOINT, SDK_GRP, SDK_JNT
@@ -630,6 +645,10 @@ def load_config(filepath=None):
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
+        COLOR_SKELETON = config.get('COLOR_SKELETON', COLOR_SKELETON)
+        BN_COLOR = config.get('BN_COLOR', BN_COLOR)
+        IK_COLOR = config.get('IK_COLOR', IK_COLOR)
+        FK_COLOR = config.get('FK_COLOR', FK_COLOR)
 
         # Type labels
         TYPE_BN = config.get('TYPE_BN', TYPE_BN)

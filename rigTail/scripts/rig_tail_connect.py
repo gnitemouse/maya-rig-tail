@@ -107,6 +107,11 @@ def connect_rig_tail(fk, ik):
     # connections that drive the joints must stay intact.
     rt_mya.finalize_joint_channels(keyable=False)
 
+    # Colour the three skeletons by type (BN blue, IK orange, FK purple)
+    # so they read apart in the viewport.
+    if getattr(rt_cst, 'COLOR_SKELETON', True):
+        rt_mya.color_skeletons()
+
     logger.debug('DONE Connected Rig Components')
     logger.debug('-----------------------------------------------------')
 

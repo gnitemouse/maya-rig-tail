@@ -86,34 +86,25 @@ importlib.reload(rig_tail)
 rig_tail.main_setup()
 '''
 
-# Manual Run: a developer console workflow rather than a UI launcher. It
-# loads the modules fresh from the SOURCE tree (edit a .py, click the
-# button, it re-imports and runs) and keeps module handles bound for
-# interactive testing in the Script Editor. Commented lines lay out the
-# full workflow -- setup, build, and test -- so the user can uncomment the
-# call they want. Raw string so the Windows TOOL_DIR backslashes survive.
-LAUNCH_MANUAL_COMMAND = r'''# Rig Tail -- Manual Run (import / build / setup / test from source)
+# Manual Run: a developer console workflow rather than a UI launcher. The
+# module is already on sys.path (the .mod registers scripts/), so no path
+# juggling is needed -- this button just force-reimports the modules for a
+# clean slate and keeps handles bound for interactive testing in the
+# Script Editor. Commented lines lay out the full workflow -- setup, build
+# and test -- so the user can uncomment the call they want.
+LAUNCH_MANUAL_COMMAND = '''# Rig Tail -- Manual Run (import / build / setup / test)
 import sys
-import os
 import importlib
 
-# Source scripts dir (edit this if your repo lives elsewhere).
-TOOL_DIR = os.path.expanduser(r'~\Documents\maya-rig-tail\rigTail\scripts')
-
-# Put this version's directory at the FRONT of sys.path
-# so that internal imports resolve to files in THIS directory.
-if TOOL_DIR in sys.path:
-    sys.path.remove(TOOL_DIR)
-sys.path.insert(0, TOOL_DIR)
-
-# Purge already loaded modules
+# Purge already-loaded rig_tail modules for a truly fresh import (this
+# also resets session state held in rig_tail_constants, then its
+# auto-load restores the saved config).
 for mod_name in list(sys.modules):
     if mod_name.startswith('rig_tail'):
         del sys.modules[mod_name]
 
-# Fresh import.
-# rig_tail pulls in the rest via its own imports;
-# explicit list keeps handles around for console testing
+# Fresh import. rig_tail pulls in the rest via its own imports; the
+# explicit list keeps handles around for console testing.
 rt = importlib.import_module('rig_tail')
 rt_con = importlib.import_module('rig_tail_connect')
 rt_cst = importlib.import_module('rig_tail_constants')
@@ -210,24 +201,41 @@ def _remove_existing_button(shelf, label):
                 cmds.deleteUI(child)
 
 
-def _add_shelf_button():
+def _icon_path(icons_dir, name):
+    '''Absolute path to a shipped icon, or the bare name as a fallback.
+
+    An absolute path is baked into the shelf button so the correct icon
+    always resolves, independent of the XBMLANGPATH icon-path cache (which
+    can otherwise leave a new icon falling back to a default). Falls back
+    to the bare name (resolved via the module icon path) if the file is
+    missing.'''
+    path = os.path.join(icons_dir, name)
+    return path if os.path.isfile(path) else name
+
+
+def _add_shelf_button(icons_dir):
     '''Add (or refresh) the TailSetup + TailRig + TailManual launchers.
 
     Three buttons, added left-to-right in the order they are used: Setup
     (orient/mirror the skeleton, black icon), Build (the builder, white
-    icon), and Manual Run (developer console workflow, grey icon).
+    icon), and Manual Run (developer console workflow, grey icon). Icons
+    are passed as absolute paths so each button shows its own colour.
     '''
     shelf = _current_shelf()
     _remove_existing_button(shelf, SHELF_SETUP_LABEL)
     _remove_existing_button(shelf, SHELF_BUTTON_LABEL)
     _remove_existing_button(shelf, SHELF_MANUAL_LABEL)
 
+    icon_setup = _icon_path(icons_dir, SHELF_ICON_SETUP)
+    icon_build = _icon_path(icons_dir, SHELF_ICON)
+    icon_manual = _icon_path(icons_dir, SHELF_ICON_MANUAL)
+
     cmds.shelfButton(
         parent=shelf,
         label=SHELF_SETUP_LABEL,
         annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
-        image=SHELF_ICON_SETUP,
-        image1=SHELF_ICON_SETUP,
+        image=icon_setup,
+        image1=icon_setup,
         sourceType='python',
         command=LAUNCH_SETUP_COMMAND,
     )
@@ -235,8 +243,8 @@ def _add_shelf_button():
         parent=shelf,
         label=SHELF_BUTTON_LABEL,
         annotation='Launch the Rig Tail Builder UI',
-        image=SHELF_ICON,
-        image1=SHELF_ICON,
+        image=icon_build,
+        image1=icon_build,
         sourceType='python',
         command=LAUNCH_COMMAND,
     )
@@ -244,9 +252,9 @@ def _add_shelf_button():
         parent=shelf,
         label=SHELF_MANUAL_LABEL,
         annotation='Rig Tail Manual Run: import / build / setup / test '
-                   'the modules from source (developer console workflow)',
-        image=SHELF_ICON_MANUAL,
-        image1=SHELF_ICON_MANUAL,
+                   'the modules (developer console workflow)',
+        image=icon_manual,
+        image1=icon_manual,
         sourceType='python',
         command=LAUNCH_MANUAL_COMMAND,
     )
@@ -261,7 +269,7 @@ def onMayaDroppedPythonFile(*args):
     try:
         module_dir = _copy_module(src_dir, modules_dir)
         _activate_for_session(module_dir)
-        shelf = _add_shelf_button()
+        shelf = _add_shelf_button(os.path.join(module_dir, 'icons'))
     except Exception as exc:  # surface a readable error to the user
         cmds.confirmDialog(
             title='Rig Tail install failed',
@@ -278,6 +286,8 @@ def onMayaDroppedPythonFile(*args):
         pos='midCenter', fade=True, fadeStayTime=3000)
 
     print('# Rig Tail: installed module to {0}'.format(module_dir))
+    print('# Rig Tail: shelf buttons -> {0}, {1}, {2} on "{3}"'.format(
+        SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_MANUAL_LABEL, shelf))
 
 
 # Allow running from the Script Editor as well as drag-and-drop.
