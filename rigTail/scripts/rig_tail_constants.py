@@ -37,14 +37,14 @@ LAST_BUILD = {
 # USER VARIABLES =======================================================
 
 # Rig Components: List all parts to be rigged, e.g.
-# RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
-#     'L_sidetail', 'R_sidetail',
-#     'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
-#     'R_tail1', 'R_tail2', 'R_tail3']
-RIGPARTS = ['tail']
+# RIGPARTS = ['tail']
+RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
+    'L_sidetail', 'R_sidetail',
+    'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
+    'R_tail1', 'R_tail2', 'R_tail3']
 
 # Root Name
-ROOT = 'tail'
+ROOT = 'squid'
 # Which systems to build. Held here rather than only in the UI so the
 # choice survives closing and reopening the window, like every other
 # setting.
@@ -55,18 +55,26 @@ BUILD_IK = True
 INDIV_FK = False
 # Build centralized main controller dashboard (for multiple tails)
 MAIN_CONTROLLER = False
-# Behavior-mirror matching 'L_'/'R_' tail chains during setup so left
-# and right sides move as mirror images (see rig_tail_orient). Only
-# acts when an L/R pair is present.
-MIRROR_ORIENT = True
-# Log intended mirror changes without modifying the joints.
-MIRROR_ORIENT_DRYRUN = False
+# Force Rebuild (even if joints are unchanged)
+FORCE_REBUILD = False
+
+# Aim-orient tail chains during setup (removes intra-chain twist so each
+# tail bends in a plane) and behavior-mirror matching 'L_'/'R_' pairs so
+# left/right sides move as mirror images (see rig_tail_orient). Off by
+# default: opt in once verified, since it re-orients joints.
+MIRROR_ORIENT = False
+# Only LOG intended orientation changes without modifying the joints.
+# On by default so the first run is always a safe preview.
+MIRROR_ORIENT_DRYRUN = True
 # Character symmetry-plane normal: 'x' = YZ plane (left/right along X).
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
 MIRROR_SOURCE_SIDE = 'R'
-# Force Rebuild (even if joints are unchanged)
-FORCE_REBUILD = False
+# Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
+# ORIENT_UP_AXIS aligns to the chain's plane normal.
+ORIENT_AIM_AXIS = 'x'
+ORIENT_UP_AXIS = 'z'
+
 # Max per-joint world position drift (scene units) still treated as
 # "unchanged" on re-rig. Building the rig drives joints through the OPM
 # network, which perturbs world positions by float noise; drift within
@@ -424,6 +432,8 @@ def get_user_editable_config():
         'MIRROR_ORIENT_DRYRUN': MIRROR_ORIENT_DRYRUN,
         'MIRROR_AXIS': MIRROR_AXIS,
         'MIRROR_SOURCE_SIDE': MIRROR_SOURCE_SIDE,
+        'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
+        'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
 
@@ -557,6 +567,7 @@ def load_config(filepath=None):
     global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
     global MIRROR_ORIENT, MIRROR_ORIENT_DRYRUN, MIRROR_AXIS, MIRROR_SOURCE_SIDE
+    global ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
     global GRP, CTRL, JNT, SDK, CRV, CSR, HDL, EFF, VIS, COND, CST
@@ -597,6 +608,8 @@ def load_config(filepath=None):
         MIRROR_ORIENT_DRYRUN = config.get('MIRROR_ORIENT_DRYRUN', MIRROR_ORIENT_DRYRUN)
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
+        ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
+        ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
 
