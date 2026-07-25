@@ -196,6 +196,18 @@ class RigTailSetupUI(QtWidgets.QDialog):
         combos_layout.addLayout(self._labeled_row('Up Axis (plane normal):', self.cmb_up))
         options_layout.addLayout(combos_layout)
 
+        # Visualize joint local axes (Maya displayLocalAxis) to check the
+        # orient result. Acts immediately on toggle; not a saved setting.
+        options_layout.addSpacing(6)
+        self.chk_show_axes = QtWidgets.QCheckBox('Show Joint Local Axes')
+        self.chk_show_axes.setToolTip(
+            "Draw each BN joint's local X/Y/Z axes in the viewport "
+            '(Maya displayLocalAxis) so the orient result is visible. '
+            'Toggles immediately; does not change any orientation.')
+        self.style_checkbox(self.chk_show_axes)
+        self.chk_show_axes.toggled.connect(self.toggle_joint_axes)
+        options_layout.addWidget(self.chk_show_axes)
+
         options_group.setLayout(options_layout)
         main_layout.addWidget(options_group)
         main_layout.addSpacing(8)
@@ -405,6 +417,20 @@ class RigTailSetupUI(QtWidgets.QDialog):
         else:
             QtWidgets.QMessageBox.critical(
                 self, 'Error', f'Failed to save configuration to:\n{filepath}')
+
+    def toggle_joint_axes(self, checked):
+        '''Show/hide the BN joints' local rotation axes in the viewport.'''
+        import rig_tail_setup as rt_set
+        try:
+            n = rt_set.show_joint_orients(bool(checked))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'Error',
+                f'Could not toggle joint axes:\n{str(e)}')
+            return
+        if checked and not n:
+            QtWidgets.QMessageBox.information(self, 'No joints',
+                'No BN joints found to display. Check RIGPARTS and that the '
+                'skeleton is in the scene.')
 
     def run_setup(self):
         '''Commit options and run the Setup phase on the skeleton.'''

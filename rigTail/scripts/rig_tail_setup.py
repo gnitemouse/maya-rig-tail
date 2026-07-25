@@ -171,6 +171,38 @@ def run_setup(dry_run=None):
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
 
 
+def show_joint_orients(show=True):
+    '''
+    Toggle the local-rotation-axis display on every BN chain joint.
+
+    A quick visual check of the orient result: Maya draws each joint's
+    local X/Y/Z as a coloured cross (the joint's displayLocalAxis). Detects
+    the BN joints for the current RIGPARTS first, so it works before or
+    after a run and never modifies orientation.
+
+    Arguments
+        show (bool): True to show the axes, False to hide them.
+
+    Return
+        int: number of joints toggled.
+    '''
+    rt_cln.detect_joints_bn()
+    val = 1 if show else 0
+    count = 0
+    for joints in rt_cst.JOINTS_BN.values():
+        for jnt in joints:
+            if cmds.objExists(jnt) and \
+                    cmds.attributeQuery('displayLocalAxis', node=jnt, exists=True):
+                try:
+                    cmds.setAttr(f'{jnt}.displayLocalAxis', val)
+                    count += 1
+                except Exception:
+                    pass
+    logger.info(f'Setup: joint local axes '
+                f'{"shown" if show else "hidden"} on {count} BN joints')
+    return count
+
+
 # OPERATIONS ===========================================================
 # Both operate on the BN skeleton only (rt_cst.JOINTS_BN).
 
