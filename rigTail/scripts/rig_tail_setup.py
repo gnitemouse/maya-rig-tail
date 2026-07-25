@@ -149,6 +149,17 @@ def run_setup(dry_run=None):
     if not dry_run:
         rt_mya.finalize_joint_channels(
             keyable=True, visibility=1, joint_dicts=[rt_cst.JOINTS_BN])
+        # Re-orienting the skeleton invalidates any rest pose a previous
+        # build stamped on the BN joints (Method D, rig_tail_restpose): the
+        # stored restMatrix now describes the OLD orientation, so the next
+        # build would drive the IK curve from a stale pose and the chain
+        # would jump. Clear it so the build recaptures from this corrected
+        # skeleton.
+        try:
+            import rig_tail_restpose as rt_rest
+            rt_rest.clear_rest_pose()
+        except Exception as err:
+            logger.warning(f'Setup: could not clear stored rest pose: {err}')
 
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
 
@@ -184,9 +195,56 @@ def orient_chains(dry_run):
             frames = aim_frames(positions, aim_axis, up_axis)
             logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
             count += _apply_frames(joints, frames, dry_run)
+            if not dry_run:
+                _report_twist(rigname, joints, positions, aim_axis, up_axis)
         except Exception as err:
             logger.error(f'Orient: aim failed on {rigname}: {err}')
     return count
+
+
+def _report_twist(rigname, joints, positions, aim_axis, up_axis):
+    '''
+    Log a chain's planarity and its residual per-joint twist AFTER orienting.
+
+    Reads back each joint's actual world matrix, so it reports what the
+    skeleton really ended up as (not what was intended). Twist is the roll
+    of the up axis about the aim axis between consecutive joints; a clean
+    aim-orient keeps it near zero. Planarity is the summed segment-normal
+    length over the summed segment length (0 = perfectly planar chain, near
+    1 = highly non-planar) - a non-planar chain cannot be made fully
+    twist-free about one plane normal, so a high value explains residual
+    twist that is not a bug.
+    '''
+    idx = {'x': 0, 'y': 1, 'z': 2}
+    ai, ui = idx.get(aim_axis, 0), idx.get(up_axis, 2)
+
+    # Planarity from positions.
+    segs = [_sub(positions[i + 1], positions[i]) for i in range(len(positions) - 1)]
+    seg_len = sum(_length(s) for s in segs) or 1.0
+    normal = [0.0, 0.0, 0.0]
+    for i in range(len(segs) - 1):
+        normal = _add(normal, _cross(segs[i], segs[i + 1]))
+    planarity = _length(normal) / (seg_len * seg_len)
+
+    # Residual twist from the joints' actual world axes.
+    rows = []
+    for j in joints:
+        m = cmds.xform(j, q=True, ws=True, matrix=True)
+        rows.append(([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]))
+    aims = [_norm(r[ai]) for r in rows]
+    ups = [_norm(r[ui]) for r in rows]
+    rolls = []
+    for i in range(len(joints) - 1):
+        a = aims[i]
+        u0 = _norm(_sub(ups[i], _scale(a, _dot(ups[i], a))))
+        u1 = _norm(_sub(ups[i + 1], _scale(a, _dot(ups[i + 1], a))))
+        if _length(u0) > _EPS and _length(u1) > _EPS:
+            rolls.append(math.degrees(math.acos(max(-1.0, min(1.0, _dot(u0, u1))))))
+    total = sum(rolls)
+    mx = max(rolls) if rolls else 0.0
+    logger.info(f'Orient: {rigname} residual twist total={total:.1f} '
+                f'max/seg={mx:.1f} deg, planarity={planarity:.3f} '
+                f'(aim={aim_axis}, up={up_axis}, {len(rolls)} segs)')
 
 
 def mirror_joints(dry_run):
