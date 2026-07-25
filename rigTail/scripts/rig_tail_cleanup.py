@@ -82,11 +82,12 @@ def cleanup_rig(fk, ik):
     # Control count changes invalidate the node layout for every part
     structure_changed = rt_cache.validate_cache_structure()
 
-    # Delete SDK animCurves
+    # Delete SDK animCurves in one call (a rebuild has hundreds of them,
+    # and per-node deletes each pay full command overhead)
     logger.trace(f"Cleaning up SDK curves")
     anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
-    for anim_curve in anim_curves:
-        cmds.delete(anim_curve)
+    if anim_curves:
+        cmds.delete(anim_curves)
     cleanup_dangling_unit_conversions()
 
     for rigname in rt_cst.RIGPARTS:
@@ -952,16 +953,19 @@ def rename_components():
             cmds.rename(node, node_name)
 
     dag_nodes = cmds.ls(dag=True)
-    transforms = cmds.ls(dag_nodes, type='transform')
 
-    # Remove old IKFK Switch attributes (change as necessary)
-    old_switches = ['hierarchySwitch', 'IKFK Switch']
-    for node in transforms:
-        for old_switch in old_switches:
-            if cmds.attributeQuery(old_switch, n=node, ex=1):
-                cmds.deleteAttr(node, at=old_switch)
-                rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
-                rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
+    # Remove old IKFK Switch attributes (change as necessary).
+    # One attribute-pattern ls per switch instead of an attributeQuery on
+    # every transform in the scene. The former 'IKFK Switch' entry is
+    # dropped: attribute long names cannot contain spaces, so the old
+    # per-node query could never have matched it.
+    old_switches = ['hierarchySwitch']
+    for old_switch in old_switches:
+        carriers = cmds.ls(f'*.{old_switch}', o=True, r=True) or []
+        for node in cmds.ls(carriers, type='transform'):
+            cmds.deleteAttr(node, at=old_switch)
+            rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
+            rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
 
     # Rename legacy DAG nodes
     for node in dag_nodes:

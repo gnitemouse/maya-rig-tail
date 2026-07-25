@@ -49,12 +49,89 @@ Functions:
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
+from contextlib import contextmanager
 from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import re
 
 logger = logger_setup(__name__)
+
+
+# BUILD PERFORMANCE SCOPE ==============================================
+
+# True while build_performance_scope() has the viewport refresh suspended.
+# cmds.refresh has no query for the suspend state, so it is tracked here
+# for force_refresh() to restore correctly.
+_REFRESH_SUSPENDED = False
+
+def _refresh(**kwargs):
+    """
+    cmds.refresh that tolerates batch/mayapy sessions, where refresh can
+    raise instead of no-op.
+    """
+    try:
+        cmds.refresh(**kwargs)
+    except RuntimeError as err:
+        logger.trace(f'refresh skipped: {err}')
+
+@contextmanager
+def build_performance_scope(name='rig_tail build'):
+    """
+    Context manager that makes a full build run fast:
+
+    - Viewport refresh suspended: the build touches thousands of nodes
+      and every one of them would otherwise trigger redraw work.
+    - Evaluation manager set to DG mode for the duration: in serial or
+      parallel mode each createNode/connectAttr invalidates the EM graph,
+      which is rebuilt over and over while the rig is assembled. The
+      previous mode is restored afterwards (one rebuild instead of many).
+    - One undo chunk: the build undoes as a single step instead of
+      flooding the undo queue with thousands of entries.
+
+    Re-entrant: a scope opened inside another one is a no-op, so the
+    entry points in rig_tail.py can each wrap their own pipeline.
+    Everything is restored in a finally block, so an aborted build
+    (abort_build raises) cannot leave the viewport suspended.
+    """
+    global _REFRESH_SUSPENDED
+    if _REFRESH_SUSPENDED:
+        yield
+        return
+
+    try:
+        em_mode = (cmds.evaluationManager(q=True, mode=True) or ['off'])[0]
+    except (RuntimeError, AttributeError):
+        em_mode = 'off'
+    cmds.undoInfo(openChunk=True, chunkName=name)
+    _refresh(suspend=True)
+    _REFRESH_SUSPENDED = True
+    if em_mode != 'off':
+        cmds.evaluationManager(mode='off')
+    try:
+        yield
+    finally:
+        if em_mode != 'off':
+            cmds.evaluationManager(mode=em_mode)
+        _REFRESH_SUSPENDED = False
+        _refresh(suspend=False)
+        cmds.undoInfo(closeChunk=True)
+        _refresh(force=True)
+
+def force_refresh():
+    """
+    Force a full evaluation/redraw even while build_performance_scope has
+    refresh suspended (temporarily resumes it), for the places that need
+    the DG settled mid-build (e.g. match_fk_to_ik_rest reading the IK
+    joints' final rest).
+    """
+    if _REFRESH_SUSPENDED:
+        _refresh(suspend=False)
+    try:
+        _refresh(force=True)
+    finally:
+        if _REFRESH_SUSPENDED:
+            _refresh(suspend=True)
 
 
 # PLUGINS ==============================================================
@@ -418,15 +495,35 @@ def reset_transforms(node, unlock=True):
         node (str): Node to reset
         unlock (bool): If True, unlock and break connections
     """
-    for attribute in ['translate', 'rotate', 'scale', 'shear', 'jointOrient']:
+    # Node-level lock/connection queries once, instead of an existence
+    # check, unlock and connection lookup per plug (this runs inside
+    # opm(), which the build calls constantly). translate/rotate/scale
+    # exist on every transform, jointOrient only on joints. Shear is not
+    # reset: its children are shearXY/XZ/YZ, so the old per-axis
+    # existence check never matched it anyway.
+    conns = cmds.listConnections(node, s=True, d=False, p=True, c=True) or []
+    connected = {conns[i].split('.', 1)[-1] for i in range(0, len(conns), 2)}
+    locked = set(cmds.listAttr(node, locked=True) or [])
+    attributes = ['translate', 'rotate', 'scale']
+    if cmds.objectType(node, i='joint'):
+        attributes.append('jointOrient')
+    for attribute in attributes:
         default_value = 1 if attribute == "scale" else 0
         for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
-                plug = f"{node}.{attribute}{axis}"
-                if unlock:
+            attr = f"{attribute}{axis}"
+            plug = f"{node}.{attr}"
+            # A lock on the compound parent also blocks the child plug
+            maybe_locked = attr in locked or attribute in locked
+            if unlock:
+                if maybe_locked:
+                    cmds.setAttr(plug, l=0)
+                if attr in connected:
                     break_connection(plug)
-                if not cmds.getAttr(plug, lock=True):
-                    cmds.setAttr(plug, default_value)
+                if maybe_locked and cmds.getAttr(plug, lock=True):
+                    continue  # still locked (compound parent)
+                cmds.setAttr(plug, default_value)
+            elif not maybe_locked:
+                cmds.setAttr(plug, default_value)
 
 
 def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, unlock=True):
@@ -504,14 +601,21 @@ def has_non_default_locked_attributes(node, attrcheck=None):
             if attribute not in attrvalid:
                 logger.error(f"Attribute invalid '{attribute}'")
 
-    for attribute in attrcheck:
-        default_value = 1 if attribute == "scale" else 0
-        for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
-                plug = f"{node}.{attribute}{axis}"
-                current_value = cmds.getAttr(plug)
-                if cmds.getAttr(plug, lock=True) and current_value != default_value:
-                    return True
+    # Only a locked plug can make this True, so query the locked
+    # attributes once instead of value+lock reads on every plug. This
+    # runs inside opm(), which the build calls for every SDK group and
+    # control, so the per-plug version dominated build time.
+    locked = cmds.listAttr(node, locked=True) or []
+    if not locked:
+        return False
+    defaults = {f'{attribute}{axis}': (1 if attribute == 'scale' else 0)
+                for attribute in attrcheck for axis in 'XYZ'}
+    for attr in locked:
+        default_value = defaults.get(attr)
+        if default_value is None:
+            continue
+        if cmds.getAttr(f'{node}.{attr}') != default_value:
+            return True
     return False
 
 
@@ -608,10 +712,12 @@ def set_joint_channels(joint, keyable, visibility=None):
         return
     k = 1 if keyable else 0
     cb = 0 if keyable else 1
+    # translate/rotate/scale exist on every transform-derived node, so
+    # skip the per-axis attributeQuery (this runs on every rig joint at
+    # the end of each build)
     for attribute in ['translate', 'rotate', 'scale']:
         for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=joint, ex=1):
-                cmds.setAttr(f"{joint}.{attribute}{axis}", k=k, cb=cb)
+            cmds.setAttr(f"{joint}.{attribute}{axis}", k=k, cb=cb)
     if cmds.attributeQuery('radius', n=joint, ex=1):
         cmds.setAttr(f"{joint}.radius", k=k, cb=cb)
     if visibility is not None:

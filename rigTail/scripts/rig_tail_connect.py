@@ -147,10 +147,10 @@ def match_fk_to_ik_rest(fk, ik):
     # spline onto its final shape before we read it (unlike mid-build, where the
     # driver->solver network was not yet complete and no eval could settle it).
     cmds.dgdirty(allPlugs=True)
-    try:
-        cmds.refresh(force=True)
-    except Exception as e:
-        logger.trace(f'refresh before FK match skipped: {e}')
+    # force_refresh punches through build_performance_scope's suspended
+    # viewport refresh (temporarily resumes it), so the settle still
+    # happens when the build runs inside the fast scope
+    rt_mya.force_refresh()
     for rigname in rt_cst.RIGPARTS:
         fk_joints = rt_cst.JOINTS_FK.get(rigname, [])
         ik_joints = rt_cst.JOINTS_IK.get(rigname, [])
