@@ -302,6 +302,8 @@ def mirror_joints(dry_run):
         int: joints re-oriented (or that would be, in a dry run).
     '''
     axis = _cst('MIRROR_AXIS')
+    aim_axis = _cst('ORIENT_AIM_AXIS')
+    up_axis = _cst('ORIENT_UP_AXIS')
     mode = ' [dry-run]' if dry_run else ''
     pairs, _ = find_mirror_pairs(rt_cst.RIGPARTS)
     if not pairs:
@@ -317,7 +319,7 @@ def mirror_joints(dry_run):
         try:
             src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
                         for j in src]
-            frames = mirror_frames(src_mats, axis)
+            frames = mirror_frames(src_mats, axis, aim_axis, up_axis)
             logger.info(f'Mirror{mode}: {source} to {target} (axis={axis})')
             count += _apply_frames(tgt, frames, dry_run)
         except Exception as err:
@@ -395,37 +397,67 @@ def aim_frames(positions, aim_axis, up_axis):
     normal = _norm(normal)
 
     frames = []
+    prev_up = None
     for i in range(n):
         aim = _norm(segs[i] if i < n - 1 else segs[-1])
         up = _sub(normal, _scale(aim, _dot(normal, aim)))
-        up = _norm(up) if _length(up) > _EPS else _world_axis_perp(aim)
+        if _length(up) <= _EPS:
+            # aim nearly parallel to the plane normal (a joint that bends out
+            # of plane, often the tip): reuse the previous joint's up so the
+            # frame stays continuous. Snapping to a world axis instead would
+            # flip that one joint AND break L/R mirror symmetry (a world axis
+            # is not mirrored between sides).
+            ref = prev_up if prev_up is not None else _world_axis_perp(aim)
+            up = _sub(ref, _scale(aim, _dot(ref, aim)))
+            if _length(up) <= _EPS:
+                up = _world_axis_perp(aim)
+        up = _norm(up)
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
+        prev_up = up
     return frames
 
 
-def mirror_frames(src_matrices, axis):
+def mirror_frames(src_matrices, axis, aim_axis, up_axis):
     '''
-    Behavior-mirror source world orientations for the target side.
+    Mirror source world orientations across the symmetry plane.
 
-    Negates the two axis components orthogonal to the symmetry-plane
-    normal in each source frame. That is an even (det +1) operation, so the
-    frame stays right-handed. Equal values on both sides then produce
-    symmetric motion.
+    The correct mirror reflects each axis vector ACROSS the symmetry plane
+    (negates the component along the plane normal), which flips handedness,
+    then rebuilds a right-handed frame. The previous version negated the two
+    components orthogonal to the normal instead - a 180-degree rotation about
+    the normal, not a reflection - which left the aim pointing the same way
+    as the source (into the body) and flipped the sides.
+
+    Only the source's aim and up vectors are reflected; the frame is then
+    reassembled with _assign_rows (the same right-handed assembly aim_frames
+    uses), so the mirrored side aims outward symmetrically and stays
+    consistent with an oriented source.
 
     Arguments
         src_matrices (list): per-joint source world matrices (16 floats).
         axis (str): symmetry-plane normal, 'x'|'y'|'z'.
+        aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
+        up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
 
     Return
         list: one [X_row, Y_row, Z_row] world frame per joint.
     '''
-    keep = {'x': 0, 'y': 1, 'z': 2}.get(str(axis).lower(), 0)
+    idx = {'x': 0, 'y': 1, 'z': 2}
+    keep = idx.get(str(axis).lower(), 0)
+    ai, ui = idx[aim_axis], idx[up_axis]
     frames = []
     for m in src_matrices:
         rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]])
-        frames.append([[r[c] if c == keep else -r[c] for c in range(3)]
-                       for r in rows])
+        aim = _norm(_reflect(rows[ai], keep))
+        up = _norm(_reflect(rows[ui], keep))
+        frames.append(_assign_rows(aim, up, aim_axis, up_axis))
     return frames
+
+
+def _reflect(vec, keep):
+    ''' Reflect a vector across the plane whose normal is axis index keep
+    (negate that one component). '''
+    return [(-v if i == keep else v) for i, v in enumerate(vec)]
 
 
 def _assign_rows(aim, up, aim_axis, up_axis):
