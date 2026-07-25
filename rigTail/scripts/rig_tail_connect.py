@@ -92,6 +92,10 @@ def connect_rig_tail(fk, ik):
         rt_mya.bind_geometry(rigname)
         # rt_test.dump_chain()
 
+    # Consolidated warning for parts whose mesh name did not match, so the
+    # geometry that never bound is easy to spot and rename.
+    rt_mya.report_missing_geometry(rt_cst.RIGPARTS)
+
     # After everything is connected the IK spline has reached its final
     # (low-CV driver) shape, so the IK joints now read their true rest -- match
     # FK onto it so the two modes agree and the tail does not pop on a switch.

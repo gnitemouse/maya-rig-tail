@@ -39,6 +39,8 @@ Functions:
     list_hierarchy: Iterative traversal helper
     has_non_default_locked_attributes: Check for locked attributes
     bind_geometry: Bind geometry to BN joints
+    find_geometry_for_rigname: Geometry matching a rig part by name
+    report_missing_geometry: Warn about rig parts with no matching mesh
     unbind_geometry: Unbind geometry from rig
     unbind_geometry_all: Unbind all geometry in scene
     bind_skincluster: Create skinCluster binding
@@ -1167,6 +1169,58 @@ def bind_geometry(rigname):
         logger.trace(f'{rigname}: No geometry named after rig part, skip bind')
 
 
+def find_geometry_for_rigname(rigname):
+    '''
+    Geometry transforms under the geometry group that match a rig part.
+
+    Uses the same name rule as bind_geometry/unbind_geometry
+    (geometry_matches_rigname: '<rigname>_geo', '<rigname>', or
+    '<rigname>_NN'). Full DAG paths, since descendant short names are
+    frequently ambiguous under a geometry group.
+
+    Arguments:
+        rigname (str): Rig component name.
+
+    Return:
+        list: full paths of matching geometry transforms (empty if none).
+    '''
+    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
+    if not cmds.objExists(geometry_grp):
+        return []
+    geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
+    return [g for g in geos
+            if geometry_matches_rigname(rigname, g) and is_geometry(g)]
+
+
+def report_missing_geometry(rignames):
+    '''
+    Warn about rig parts with no geometry matching the naming convention.
+
+    A part whose mesh is not named '<rigname>_geo' / '<rigname>' /
+    '<rigname>_NN' cannot be matched, so it is never unbound before Setup
+    re-orients (its mesh distorts) nor rebound by the build. Rather than
+    guess, this logs one consolidated warning listing every unmatched part
+    so its mesh can be renamed. No-op when there is no geometry group
+    (nothing to bind against).
+
+    Arguments:
+        rignames (list): Rig parts to check.
+
+    Return:
+        list: rignames with no matching geometry.
+    '''
+    if not cmds.objExists(rt_nam.fstr('', rt_cst.GEOMETRY_GRP)):
+        return []
+    missing = [rn for rn in rignames if not find_geometry_for_rigname(rn)]
+    if missing:
+        logger.warning(
+            f'Geometry not found for {len(missing)} rig part(s): '
+            f'{", ".join(missing)}. Their meshes do not follow the naming '
+            "convention ('<rigname>_geo', '<rigname>', or '<rigname>_NN'), "
+            'so they will not bind or deform - rename the meshes to match.')
+    return missing
+
+
 def unbind_geometry(rigname):
     '''
     Get geometry and unbind skinclusters.
@@ -1175,16 +1229,8 @@ def unbind_geometry(rigname):
         rigname (str): Rig component name
     '''
     logger.trace(f"{rigname}: Unbind geometry")
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    if cmds.objExists(geometry_grp):
-        # Full paths: descendant short names are frequently ambiguous
-        # under a geometry group (L_fin|body and R_fin|body both come
-        # back as 'body'), and an ambiguous name hits the wrong mesh
-        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
-        for geo in geos:
-            if geometry_matches_rigname(rigname, geo):
-                if is_geometry(geo):
-                    unbind_skincluster(geo)
+    for geo in find_geometry_for_rigname(rigname):
+        unbind_skincluster(geo)
 
 
 def unbind_geometry_all():

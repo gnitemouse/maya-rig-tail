@@ -104,7 +104,12 @@ def setup_tails(root=None, dry_run=None):
     found = rt_cln.detect_joints_bn()
     if not found:
         logger.warning('Setup: no BN joints found for any RIGPART')
-        return {'oriented': 0, 'mirrored': 0, 'dry_run': True}
+        return {'oriented': 0, 'mirrored': 0, 'dry_run': True, 'missing_geo': []}
+
+    # Warn about parts whose mesh does not follow the naming convention:
+    # they are not unbound before re-orienting (so their mesh distorts) nor
+    # rebound by the build. Reported so the meshes can be renamed.
+    missing_geo = rt_mya.report_missing_geometry(found)
 
     preview = dry_run if dry_run is not None \
         else bool(_cst('MIRROR_DRYRUN'))
@@ -112,7 +117,9 @@ def setup_tails(root=None, dry_run=None):
         for rigname in found:
             rt_mya.unbind_geometry(rigname)
 
-    return run_setup(dry_run=dry_run)
+    result = run_setup(dry_run=dry_run)
+    result['missing_geo'] = missing_geo
+    return result
 
 
 def run_setup(dry_run=None):

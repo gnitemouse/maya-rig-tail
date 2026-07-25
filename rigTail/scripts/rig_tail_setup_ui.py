@@ -433,11 +433,19 @@ class RigTailSetupUI(QtWidgets.QDialog):
             return
 
         preview = ' (preview only, nothing changed)' if result.get('dry_run') else ''
+        missing = result.get('missing_geo') or []
+        missing_msg = ''
+        if missing:
+            missing_msg = (
+                f"\n\nWARNING - no geometry found for {len(missing)} rig "
+                f"part(s):\n  {', '.join(missing)}\nTheir meshes are not "
+                "named '<rigname>_geo' / '<rigname>' / '<rigname>_NN', so "
+                'they will not bind or deform. Rename the meshes to match.')
         QtWidgets.QMessageBox.information(self, 'Setup complete',
             f"Oriented {result.get('oriented', 0)} joints, "
             f"mirrored {result.get('mirrored', 0)} joints{preview}.\n\n"
             'See the Script Editor log for per-chain details. '
-            'Build the rig next.')
+            f'Build the rig next.{missing_msg}')
         self.update_display()
         # Close on a real run, like the Builder does; keep the window up
         # after a dry run so the previewed settings can be run for real.
