@@ -234,6 +234,9 @@ def orient_chains(dry_run):
             frames = aim_frames(positions, aim_axis, up_axis)
             logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
             count += _apply_frames(joints, frames, dry_run)
+            # The end ('_ee_') joint is excluded from the chain, so align it
+            # to the chain's final frame or it keeps the stale orientation.
+            _orient_end_joint(joints[-1], frames[-1], dry_run)
             if not dry_run:
                 _report_twist(rigname, joints, positions, aim_axis, up_axis)
         except Exception as err:
@@ -319,12 +322,41 @@ def mirror_joints(dry_run):
         try:
             src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
                         for j in src]
+            before = [cmds.xform(j, q=True, ws=True, matrix=True) for j in tgt]
             frames = mirror_frames(src_mats, axis, aim_axis, up_axis)
             logger.info(f'Mirror{mode}: {source} to {target} (axis={axis})')
             count += _apply_frames(tgt, frames, dry_run)
+            _orient_end_joint(tgt[-1], frames[-1], dry_run)
+            if not dry_run:
+                _report_mirror_delta(target, tgt, before)
         except Exception as err:
             logger.error(f'Mirror: failed on {source} to {target}: {err}')
     return count
+
+
+def _report_mirror_delta(rigname, joints, before_mats):
+    '''
+    Log how much a mirror actually changed the target chain.
+
+    Mirroring changes only ORIENTATION, never position, so there is no
+    obvious visual move. This reports the per-joint angular change between
+    the pre- and post-mirror world orientation (max and how many joints
+    moved > 0.5 deg), so it is clear the step did something - a near-zero
+    delta means the target was already close to the source's mirror (common
+    after orient on a symmetric skeleton).
+    '''
+    deltas = []
+    for jnt, m0 in zip(joints, before_mats):
+        m1 = cmds.xform(jnt, q=True, ws=True, matrix=True)
+        # relative rotation angle from the trace of R0^T * R1 (rows are axes)
+        r0 = ([m0[0], m0[1], m0[2]], [m0[4], m0[5], m0[6]], [m0[8], m0[9], m0[10]])
+        r1 = ([m1[0], m1[1], m1[2]], [m1[4], m1[5], m1[6]], [m1[8], m1[9], m1[10]])
+        trace = sum(_dot(r0[k], r1[k]) for k in range(3))
+        deltas.append(math.degrees(math.acos(max(-1.0, min(1.0, (trace - 1.0) / 2.0)))))
+    moved = sum(1 for d in deltas if d > 0.5)
+    mx = max(deltas) if deltas else 0.0
+    logger.info(f'Mirror: {rigname} changed {moved}/{len(deltas)} joints '
+                f'(max {mx:.1f} deg from pre-mirror orientation)')
 
 
 # PAIRING ==============================================================
@@ -492,6 +524,52 @@ def _assign_rows(aim, up, aim_axis, up_axis):
 
 
 # APPLY ================================================================
+
+def _find_end_joint(parent):
+    ''' The '_ee_' child of a joint (the end/tip marker), or None. '''
+    for c in cmds.listRelatives(parent, typ='joint', children=True) or []:
+        if '_ee_' in c:
+            return c
+    return None
+
+
+def _orient_end_joint(parent, frame, dry_run):
+    '''
+    Orient the end ('_ee_') joint to continue the chain.
+
+    get_joint_chain stops before the '_ee_' joint, so orient_chains and
+    mirror_joints never touch it and it keeps the autorigger's stale
+    orientation - pointing a different way from the re-oriented chain. This
+    gives the end joint the last real joint's frame (the chain's final aim
+    and up) at its own position, so it lines up with the chain. Same
+    driver-detach as _apply_frames, since a built end joint is opm-driven.
+
+    Arguments
+        parent (str): last real joint of the chain.
+        frame (list): [X_row, Y_row, Z_row] to apply (the last joint's).
+        dry_run (bool): only log, do not modify.
+
+    Return
+        int: 1 if an end joint was oriented (or would be), else 0.
+    '''
+    ee = _find_end_joint(parent)
+    if not ee:
+        return 0
+    if dry_run:
+        logger.info(f'  [dry-run] {ee}: end joint aligned to chain')
+        return 1
+    pos = cmds.xform(ee, q=True, ws=True, translation=True)
+    rt_mya.disconnect_all(ee, source=True, destination=False)
+    rt_mya.reset_opm(ee)
+    cmds.setAttr(f'{ee}.rotate', 0, 0, 0)
+    cmds.setAttr(f'{ee}.jointOrient', 0, 0, 0)
+    cmds.xform(ee, ws=True, matrix=_world_matrix(frame, pos))
+    rot = cmds.getAttr(f'{ee}.rotate')[0]
+    cmds.setAttr(f'{ee}.jointOrient', rot[0], rot[1], rot[2])
+    cmds.setAttr(f'{ee}.rotate', 0, 0, 0)
+    logger.debug(f'  aligned end joint {ee} to chain')
+    return 1
+
 
 def _apply_frames(joints, frames, dry_run):
     '''
