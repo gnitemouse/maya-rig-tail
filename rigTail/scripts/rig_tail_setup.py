@@ -432,6 +432,15 @@ def _apply_frames(joints, frames, dry_run):
     euler-order dependence); with jointOrient zeroed the orientation lands
     in rotate, which is then moved into jointOrient with rotate cleared.
 
+    If the chain is already built, its BN joints are driven by the build's
+    offsetParentMatrix network. Setting a world matrix while opm is live
+    would bake the opm rotation into jointOrient (flipping the result) and
+    leave the build in a confused state. So each joint's INCOMING drivers
+    are detached and its opm reset to identity first, turning it back into a
+    plain joint - the geometry bind on the OUTGOING side is preserved, and
+    the build rebuilds the opm network afterwards. World positions are
+    captured up front, while the drivers are still live, so they are exact.
+
     Arguments
         joints (list): chain joints, root first.
         frames (list): matching [X_row, Y_row, Z_row] world frames.
@@ -452,6 +461,11 @@ def _apply_frames(joints, frames, dry_run):
 
     for i in range(n):
         jnt = joints[i]
+        # Detach build drivers (incoming only: keep the outgoing
+        # worldMatrix -> skinCluster geometry bind) and clear opm so the
+        # joint re-orients as a plain joint, root to tip.
+        rt_mya.disconnect_all(jnt, source=True, destination=False)
+        rt_mya.reset_opm(jnt)
         cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
         cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
         cmds.xform(jnt, ws=True, matrix=_world_matrix(frames[i], positions[i]))

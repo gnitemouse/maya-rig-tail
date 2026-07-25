@@ -439,6 +439,11 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'See the Script Editor log for per-chain details. '
             'Build the rig next.')
         self.update_display()
+        # Close on a real run, like the Builder does; keep the window up
+        # after a dry run so the previewed settings can be run for real.
+        # Options were saved above, and the window reads them back on open.
+        if not result.get('dry_run'):
+            self.close()
 
     def closeEvent(self, event):
         # Persist option state on close, like the Builder does
