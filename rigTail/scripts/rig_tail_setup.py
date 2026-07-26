@@ -262,12 +262,15 @@ def orient_chains(dry_run):
         try:
             positions = [cmds.xform(j, q=True, ws=True, translation=True)
                          for j in joints]
+            # Capture the end joint BEFORE re-orienting its parent, which
+            # would swing it (see _end_joint_position).
+            ee_pos = _end_joint_position(joints[-1])
             frames = aim_frames(positions, aim_axis, up_axis)
             logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
             count += _apply_frames(joints, frames, dry_run)
             # The end ('_ee_') joint is excluded from the chain, so align it
             # to the chain's final frame or it keeps the stale orientation.
-            _orient_end_joint(joints[-1], frames[-1], dry_run)
+            _orient_end_joint(joints[-1], frames[-1], dry_run, position=ee_pos)
             if not dry_run:
                 _report_twist(rigname, joints, positions, aim_axis, up_axis)
         except Exception as err:
@@ -371,6 +374,9 @@ def mirror_chains(dry_run, do_orient, do_positions):
             src_mats = [cmds.xform(j, q=True, ws=True, matrix=True)
                         for j in src]
             before = [cmds.xform(j, q=True, ws=True, matrix=True) for j in tgt]
+            # Capture the target's end joint BEFORE re-orienting its parent,
+            # which would swing it (see _end_joint_position).
+            tgt_ee_pos = _end_joint_position(tgt[-1])
 
             # Target orientation: the mirror of the source, or (orient off)
             # the target's own current orientation, kept unchanged.
@@ -389,9 +395,10 @@ def mirror_chains(dry_run, do_orient, do_positions):
                         f'(axis={axis}, {what})')
             count += _apply_frames(tgt, frames, dry_run, positions=positions)
 
-            # End joint: orient to the chain's final frame; move to the
-            # mirrored source-end position only when positions are mirrored.
-            ee_pos = None
+            # End joint: orient to the chain's final frame. Move it to the
+            # mirrored source-end position when positions are mirrored,
+            # otherwise pin it to where it started (never the swung position).
+            ee_pos = tgt_ee_pos
             if do_positions:
                 src_ee = _find_end_joint(src[-1])
                 if src_ee:
@@ -573,6 +580,10 @@ def roll_chain(rigname, degrees):
 
     rt_mya.unbind_geometry(rigname)
 
+    # Capture the end joint BEFORE re-orienting its parent, which would
+    # swing it (see _end_joint_position).
+    ee_pos = _end_joint_position(joints[-1])
+
     # Roll each joint's current frame about its own aim axis.
     frames = []
     for j in joints:
@@ -582,7 +593,7 @@ def roll_chain(rigname, degrees):
         up = _roll_about(_norm(rows[ui]), aim, degrees)
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
     count = _apply_frames(joints, frames, dry_run=False)
-    _orient_end_joint(joints[-1], frames[-1], dry_run=False)
+    _orient_end_joint(joints[-1], frames[-1], dry_run=False, position=ee_pos)
     _clear_rest_pose()
     logger.info(f'Roll: {rigname} rolled {degrees:g} deg about {aim_axis} '
                 f'({count} joints)')
@@ -696,6 +707,31 @@ def _find_end_joint(parent):
     return None
 
 
+def _end_joint_position(parent):
+    '''
+    World position of a joint's '_ee_' child, or None when it has none.
+
+    MUST be read BEFORE the parent is re-oriented. The end joint is a child
+    excluded from the chain, so it is not re-placed by _apply_frames: it
+    simply swings with its parent, because its local translate is a fixed
+    offset in the parent's space. Re-aiming the parent therefore moves the
+    end joint in world, and on a chain whose last bone ran along the
+    NEGATIVE aim axis it swings to the far side - the end joint ends up
+    pointing back up the chain. Capturing the position first and passing it
+    to _orient_end_joint pins the end joint where it belongs.
+
+    Arguments
+        parent (str): last real joint of the chain.
+
+    Return
+        list or None: [x, y, z] world position.
+    '''
+    ee = _find_end_joint(parent)
+    if not ee:
+        return None
+    return cmds.xform(ee, q=True, ws=True, translation=True)
+
+
 def _orient_end_joint(parent, frame, dry_run, position=None):
     '''
     Orient the end ('_ee_') joint to continue the chain.
@@ -707,12 +743,18 @@ def _orient_end_joint(parent, frame, dry_run, position=None):
     and up), so it lines up with the chain. Same driver-detach as
     _apply_frames, since a built end joint is opm-driven.
 
+    Callers must pass position, captured with _end_joint_position BEFORE
+    re-orienting the chain. The end joint swings with its parent, so by the
+    time this runs its current position is already wrong; reading it here
+    would bake in that swing.
+
     Arguments
         parent (str): last real joint of the chain.
         frame (list): [X_row, Y_row, Z_row] to apply (the last joint's).
         dry_run (bool): only log, do not modify.
-        position (list): world position to move the end joint to; None keeps
-            its current position (used when a mirror also reflects positions).
+        position (list): world position to place the end joint at, captured
+            before the chain was re-oriented. None falls back to its current
+            position, which is only correct when the parent has not moved.
 
     Return
         int: 1 if an end joint was oriented (or would be), else 0.

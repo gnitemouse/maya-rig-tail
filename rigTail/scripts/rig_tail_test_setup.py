@@ -54,6 +54,7 @@ Functions:
     test_find_mirror_pairs: L/R pairing honours the source side
   Scene tests (MUTATING)
     test_orient: ORIENT_JOINTS leaves valid frames aimed down the chain
+    test_end_joint: the '_ee_' joint keeps its position, stays down-chain
     test_mirror_orient: MIRROR_ORIENT makes the sides mirror orientations
     test_mirror_joints: MIRROR_JOINTS makes the sides mirror positions
     test_roll: roll_chain keeps positions and aim, rotates up by the angle
@@ -399,6 +400,54 @@ def test_orient(rigname=DEFAULT_CHAIN):
     return ok
 
 
+def test_end_joint(rigname=DEFAULT_CHAIN):
+    '''
+    Orient one chain and verify its end ('_ee_') joint.
+
+    The end joint is a child excluded from the chain, so it is not re-placed
+    by the orient: it swings with its parent. Its world position must be
+    preserved, and it must end up on the FAR side of the last joint - down
+    the chain, not back up it. A chain whose last bone ran along the negative
+    aim axis used to swing to the wrong side and stay there.
+    '''
+    joints = _chain_joints(rigname)
+    if not joints or len(joints) < 2:
+        print(f'  test_end_joint: no usable chain for {rigname}, skipping')
+        return None
+    ee = rt_set._find_end_joint(joints[-1])
+    if not ee:
+        print(f'  test_end_joint: {rigname} has no end joint, skipping')
+        return None
+
+    ai = _AX.get(rt_set._cst('ORIENT_AIM_AXIS'), 0)
+    before = cmds.xform(ee, q=True, ws=True, translation=True)
+    last_before = cmds.xform(joints[-1], q=True, ws=True, translation=True)
+    _run_setup_on([rigname], orient=True)
+    after = cmds.xform(ee, q=True, ws=True, translation=True)
+    last_after = cmds.xform(joints[-1], q=True, ws=True, translation=True)
+
+    ok = True
+    moved = math.dist(before, after)
+    ok &= _verdict(f'end joint {rigname} position kept', moved < POS_TOL,
+                   f'moved {moved:.5f} '
+                   f'({[round(v, 3) for v in before]} -> '
+                   f'{[round(v, 3) for v in after]})')
+
+    # The end joint must lie down-chain of the last joint: the direction to
+    # it agrees with the last joint's aim axis, not the reverse.
+    to_ee = rt_set._sub(after, last_after)
+    aim = _rows(cmds.xform(joints[-1], q=True, ws=True, matrix=True))[ai]
+    align = _ang(to_ee, aim)
+    ok &= _verdict(f'end joint {rigname} on the aim side', align < 90.0,
+                   f'angle to aim={align:.1f} deg (>90 means it flipped '
+                   'back up the chain)')
+
+    # Sanity: the last joint itself did not move either.
+    ok &= _verdict(f'end joint {rigname} parent position kept',
+                   math.dist(last_before, last_after) < POS_TOL)
+    return ok
+
+
 def test_mirror_orient(base=DEFAULT_PAIR_BASE):
     '''
     Mirror one L/R pair's ORIENTATION (MIRROR_ORIENT) and verify symmetry.
@@ -587,6 +636,7 @@ def run_scene(base=DEFAULT_PAIR_BASE, chain=DEFAULT_CHAIN):
           'OPM). Reload the scene before building. ***')
     tests = [
         (f'test_orient({chain})', lambda: test_orient(chain)),
+        (f'test_end_joint({chain})', lambda: test_end_joint(chain)),
         (f'test_mirror_orient({base})', lambda: test_mirror_orient(base)),
         (f'test_mirror_joints({base})', lambda: test_mirror_joints(base)),
         (f'test_roll({chain})', lambda: test_roll(chain)),
