@@ -6,14 +6,22 @@ PySide2 UI for the Tail Rig Setup phase, the optional skeleton-prep step
 that runs before the Tail Rig Builder. Nothing here affects the build; it
 only re-orients the raw BN skeleton so tails move coherently.
 
-Two operations, exposed as checkboxes:
-    Orient Chains (MIRROR_ORIENT): aim-orient each chain so a tail bends
+Three batch operations, exposed as checkboxes:
+    Orient Joints (ORIENT_JOINTS): aim-orient each chain so a tail bends
         in a plane (removes intra-chain twist).
-    Mirror Joints (MIRROR_JOINTS): behavior-mirror matching 'L_'/'R_'
-        pairs so the two sides move as mirror images.
-Dropdowns set the source side and the aim, up and mirror axes. Dry Run
-only logs the intended changes. Joint positions are never changed;
-affected geometry is unbound for the build to rebind.
+    Mirror Orient (MIRROR_ORIENT): reflect matching 'L_'/'R_' pairs'
+        orientation so the two sides face as mirror images.
+    Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
+        positions so the target side's joints sit at the exact mirror.
+Plus an interactive Roll Chain fix-up: pick a chain (dropdown, or Select to
+read it from the selected joint), then the left/right arrows roll it about
+its aim axis by the step angle - left subtracts, right adds - to turn a
+wrong-facing chain onto the right plane. It applies immediately with no
+confirmation dialog. Dropdowns set the source side and the aim, up and
+mirror axes. Dry Run
+only logs the intended batch changes. Orientation steps keep positions;
+Mirror Joints and Roll move joints. Affected geometry is unbound for the
+build to rebind.
 
 Run Setup calls rig_tail_setup.setup_tails. Values live in
 rig_tail_constants and round-trip through the same JSON config as the
@@ -155,23 +163,32 @@ class RigTailSetupUI(QtWidgets.QDialog):
         options_layout.addSpacing(6)
 
         # Operation toggles
-        self.chk_orient = QtWidgets.QCheckBox('Orient Chains (fix twist)')
+        self.chk_orient = QtWidgets.QCheckBox('Orient Joints (fix twist)')
         self.chk_orient.setToolTip(
             'Aim-orient every chain: re-aim each joint down its own chain '
             'with one up-axis (the chain plane normal), so the tail bends '
-            'in a plane. Removes intra-chain twist. (MIRROR_ORIENT)')
-        self.chk_mirror = QtWidgets.QCheckBox('Mirror Joints (L/R behavior)')
-        self.chk_mirror.setToolTip(
-            'Behavior-mirror each matching L_/R_ pair: overwrite the target '
-            "side's orientation with the mirror of the source side so the "
-            'two sides move as mirror images. Does not remove twist by '
-            'itself, so enable Orient Chains too. (MIRROR_JOINTS)')
+            'in a plane. Removes intra-chain twist. No mirroring. '
+            '(ORIENT_JOINTS)')
+        self.chk_mirror_orient = QtWidgets.QCheckBox('Mirror Orient (L/R orientation)')
+        self.chk_mirror_orient.setToolTip(
+            'Reflect each matching L_/R_ pair\'s ORIENTATION across the '
+            'symmetry plane, so the two sides face as mirror images. '
+            'Positions unchanged. Does not remove twist by itself, so enable '
+            'Orient Joints too. (MIRROR_ORIENT)')
+        self.chk_mirror_joints = QtWidgets.QCheckBox('Mirror Joints (L/R positions)')
+        self.chk_mirror_joints.setToolTip(
+            'Reflect each matching L_/R_ pair\'s POSITIONS across the '
+            'symmetry plane, so the target side\'s joints sit at the exact '
+            'mirror of the source side\'s. Moves joints. Enable only when the '
+            'sides are not already positional mirrors. (MIRROR_JOINTS)')
         self.chk_dryrun = QtWidgets.QCheckBox('Dry Run (preview only)')
         self.chk_dryrun.setToolTip(
-            'Only log the intended changes for both operations (orient and '
-            'mirror); do not modify any joints or unbind geometry. Use this '
-            'first to verify. (MIRROR_DRYRUN)')
-        for chk in (self.chk_orient, self.chk_mirror, self.chk_dryrun):
+            'Only log the intended changes for the batch operations (orient '
+            'and both mirrors); do not modify any joints or unbind geometry. '
+            'Use this first to verify. Does not apply to Roll Chain. '
+            '(MIRROR_DRYRUN)')
+        for chk in (self.chk_orient, self.chk_mirror_orient,
+                    self.chk_mirror_joints, self.chk_dryrun):
             self.style_checkbox(chk)
             options_layout.addWidget(chk)
         options_layout.addSpacing(6)
@@ -195,6 +212,95 @@ class RigTailSetupUI(QtWidgets.QDialog):
         combos_layout.addLayout(self._labeled_row('Aim Axis (down chain):', self.cmb_aim))
         combos_layout.addLayout(self._labeled_row('Up Axis (plane normal):', self.cmb_up))
         options_layout.addLayout(combos_layout)
+
+        # Interactive per-chain roll fix-up. Not a saved setting and not part
+        # of Run Setup: pick a chain (dropdown or Select from the viewport),
+        # set a step angle, and the left/right arrows roll that chain about
+        # its aim axis immediately, positions kept - left subtracts the step,
+        # right adds it. Use it after the batch orient/mirror to turn a
+        # wrong-facing chain onto its plane.
+        options_layout.addSpacing(6)
+        roll_group = self.create_group_box('Roll Chain (per-tail fix-up)')
+        roll_layout = QtWidgets.QVBoxLayout()
+        roll_layout.setSpacing(4)
+        roll_layout.setContentsMargins(8, 4, 8, 4)
+        self.cmb_roll_chain = QtWidgets.QComboBox()
+        self.cmb_roll_chain.setToolTip(
+            'The tail chain (RIGPART) to roll. The list follows RIGPARTS; '
+            'or click Select to read it from the selected joint(s).')
+        self.cmb_roll_chain.setStyleSheet('''
+            QComboBox {
+                background-color: #3a3a3a; color: #cccccc;
+                border: 1px solid #555555; border-radius: 4px; padding: 4px 8px;
+            }
+            QComboBox:focus { border-color: #F5D041; }
+        ''')
+        self.btn_roll_select = QtWidgets.QPushButton('Select')
+        self.btn_roll_select.setToolTip(
+            'Set the chain from the current viewport selection: reads the rig '
+            'part of the first selected joint (any joint of the chain works).')
+        self.style_button(self.btn_roll_select, 0)
+        self.btn_roll_select.setMaximumWidth(80)
+        self.btn_roll_select.clicked.connect(self.select_roll_chain)
+
+        # Step angle: a whole-number degree amount the arrows add/subtract.
+        # No up/down spin arrows - the left/right buttons drive it instead.
+        self.spn_roll = QtWidgets.QSpinBox()
+        self.spn_roll.setRange(0, 360)
+        self.spn_roll.setValue(90)
+        self.spn_roll.setSuffix(' deg')
+        self.spn_roll.setAlignment(QtCore.Qt.AlignCenter)
+        self.spn_roll.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.spn_roll.setToolTip(
+            'Step angle (whole degrees) the arrows roll by, e.g. 90. The '
+            'left arrow rolls the chain by minus this, the right arrow by '
+            'plus this, about the aim axis. Positions never change.')
+        self.spn_roll.setStyleSheet('''
+            QSpinBox {
+                background-color: #3a3a3a; color: #cccccc;
+                border: 1px solid #555555; border-radius: 4px; padding: 4px 8px;
+            }
+            QSpinBox:focus { border-color: #F5D041; }
+        ''')
+        self.btn_roll_minus = QtWidgets.QToolButton()
+        self.btn_roll_minus.setArrowType(QtCore.Qt.LeftArrow)
+        self.btn_roll_minus.setToolTip(
+            'Roll the selected chain by MINUS the step, now (immediate; '
+            'ignores Dry Run). Unbinds that chain\'s geometry and clears the '
+            'stored rest pose for the build to redo.')
+        self.btn_roll_plus = QtWidgets.QToolButton()
+        self.btn_roll_plus.setArrowType(QtCore.Qt.RightArrow)
+        self.btn_roll_plus.setToolTip(
+            'Roll the selected chain by PLUS the step, now (immediate; '
+            'ignores Dry Run). Unbinds that chain\'s geometry and clears the '
+            'stored rest pose for the build to redo.')
+        for btn in (self.btn_roll_minus, self.btn_roll_plus):
+            btn.setStyleSheet('''
+                QToolButton {
+                    background-color: #3a3a3a; color: #cccccc;
+                    border: 1px solid #555555; border-radius: 4px;
+                    min-width: 28px; min-height: 26px;
+                }
+                QToolButton:hover { background-color: #4a4a4a; border-color: #666666; }
+                QToolButton:pressed { background-color: #2a2a2a; }
+            ''')
+        self.btn_roll_minus.clicked.connect(lambda: self.apply_roll(-1))
+        self.btn_roll_plus.clicked.connect(lambda: self.apply_roll(1))
+
+        chain_row = QtWidgets.QHBoxLayout()
+        chain_row.addLayout(self._labeled_row('Chain:', self.cmb_roll_chain), 1)
+        chain_row.addWidget(self.btn_roll_select)
+        roll_layout.addLayout(chain_row)
+        roll_row = QtWidgets.QHBoxLayout()
+        roll_label = QtWidgets.QLabel('Roll (deg):')
+        roll_label.setMinimumWidth(170)
+        roll_row.addWidget(roll_label)
+        roll_row.addWidget(self.btn_roll_minus)
+        roll_row.addWidget(self.spn_roll, 1)
+        roll_row.addWidget(self.btn_roll_plus)
+        roll_layout.addLayout(roll_row)
+        roll_group.setLayout(roll_layout)
+        options_layout.addWidget(roll_group)
 
         # Visualize joint local axes (Maya displayLocalAxis) to check the
         # orient result. Acts immediately on toggle; not a saved setting.
@@ -311,24 +417,39 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def load_current_values(self):
         '''Refresh fields from rig_tail_constants (getattr for stale sessions).'''
-        self.chk_orient.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT', True)))
-        self.chk_mirror.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
+        self.chk_orient.setChecked(bool(getattr(rt_cst, 'ORIENT_JOINTS', True)))
+        self.chk_mirror_orient.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT', False)))
+        self.chk_mirror_joints.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
         self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
         self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
         self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))
         self._combo_set(self.cmb_aim, getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'))
         self._combo_set(self.cmb_up, getattr(rt_cst, 'ORIENT_UP_AXIS', 'z'))
+        self._refresh_roll_chains()
         self.update_display()
 
     def save_current_values(self):
         '''Write the UI state into rig_tail_constants.'''
-        rt_cst.MIRROR_ORIENT = self.chk_orient.isChecked()
-        rt_cst.MIRROR_JOINTS = self.chk_mirror.isChecked()
+        rt_cst.ORIENT_JOINTS = self.chk_orient.isChecked()
+        rt_cst.MIRROR_ORIENT = self.chk_mirror_orient.isChecked()
+        rt_cst.MIRROR_JOINTS = self.chk_mirror_joints.isChecked()
         rt_cst.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         rt_cst.MIRROR_AXIS = self.cmb_axis.currentText()
         rt_cst.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
         rt_cst.ORIENT_UP_AXIS = self.cmb_up.currentText()
+
+    def _refresh_roll_chains(self):
+        '''Repopulate the Roll Chain dropdown from RIGPARTS, keeping the
+        current selection if it still exists.'''
+        prev = self.cmb_roll_chain.currentText()
+        self.cmb_roll_chain.blockSignals(True)
+        self.cmb_roll_chain.clear()
+        self.cmb_roll_chain.addItems(list(rt_cst.RIGPARTS))
+        idx = self.cmb_roll_chain.findText(prev)
+        if idx >= 0:
+            self.cmb_roll_chain.setCurrentIndex(idx)
+        self.cmb_roll_chain.blockSignals(False)
 
     def _mirror_pairs(self):
         '''(pairs, unpaired-sided) preview using the selected source side.'''
@@ -351,8 +472,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         lines = [
             f'ROOT = {getattr(rt_cst, "ROOT", "")}',
             f'RIGPARTS ({len(parts)}): {", ".join(parts) if parts else "(empty)"}',
-            f'Orient chains: {self.chk_orient.isChecked()}   '
-            f'Mirror joints: {self.chk_mirror.isChecked()}   '
+            f'Orient joints: {self.chk_orient.isChecked()}   '
+            f'Mirror orient: {self.chk_mirror_orient.isChecked()}   '
+            f'Mirror joints: {self.chk_mirror_joints.isChecked()}   '
             f'Dry run: {self.chk_dryrun.isChecked()}',
             f'L/R pairs: {pair_txt}',
             f'aim={self.cmb_aim.currentText()}  up={self.cmb_up.currentText()}  '
@@ -366,6 +488,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         '''Reuse the Builder's RIGPARTS editor.'''
         dialog = rt_ui.RigPartsEditor(self)
         if dialog.exec() == QtWidgets.QDialog.Accepted:
+            self._refresh_roll_chains()
             self.update_display()
 
     def config_start_path(self):
@@ -432,6 +555,56 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 'No BN joints found to display. Check RIGPARTS and that the '
                 'skeleton is in the scene.')
 
+    def select_roll_chain(self):
+        '''Set the Roll Chain dropdown from the current viewport selection.'''
+        import rig_tail_setup as rt_set
+        try:
+            rigname = rt_set.rigname_from_selection()
+        except Exception as e:
+            cmds.warning(f'Roll: could not read selection: {e}')
+            return
+        if not rigname:
+            cmds.warning('Roll: no rig part in the selection. Select a joint '
+                         'of the tail chain, then click Select.')
+            return
+        idx = self.cmb_roll_chain.findText(rigname)
+        if idx < 0:
+            # rigname resolved but the dropdown is stale; refresh and retry.
+            self._refresh_roll_chains()
+            idx = self.cmb_roll_chain.findText(rigname)
+        if idx >= 0:
+            self.cmb_roll_chain.setCurrentIndex(idx)
+
+    def apply_roll(self, sign):
+        '''
+        Roll the selected chain by the step angle, immediately.
+
+        sign is +1 (right arrow, add) or -1 (left arrow, subtract). No
+        confirmation dialog - the roll just applies; feedback goes to the
+        Script Editor (rig_tail_setup.roll_chain logs it). Non-modal warnings
+        cover an empty selection or a zero step so a stray click is harmless.
+        '''
+        import rig_tail_setup as rt_set
+
+        rigname = self.cmb_roll_chain.currentText().strip()
+        if not rigname:
+            cmds.warning('Roll: no chain selected (RIGPARTS is empty).')
+            return
+        angle = self.spn_roll.value() * sign
+        if not angle:
+            return
+
+        # Persist the aim/up axes the roll uses, so it matches the dropdowns.
+        self.save_current_values()
+        try:
+            n = rt_set.roll_chain(rigname, angle)
+        except Exception as e:
+            cmds.warning(f'Roll failed on {rigname}: {e}')
+            return
+        if not n:
+            cmds.warning(f'Roll: no BN chain found for "{rigname}". Check '
+                         'RIGPARTS and that the skeleton is in the scene.')
+
     def run_setup(self):
         '''Commit options and run the Setup phase on the skeleton.'''
         import rig_tail_setup as rt_set
@@ -444,9 +617,20 @@ class RigTailSetupUI(QtWidgets.QDialog):
         self.save_current_values()
         dry = self.chk_dryrun.isChecked()
 
-        if not (self.chk_orient.isChecked() or self.chk_mirror.isChecked()):
-            QtWidgets.QMessageBox.warning(self, 'Nothing to do',
-                'Enable Orient Chains and/or Mirror Joints first.')
+        if not (self.chk_orient.isChecked()
+                or self.chk_mirror_orient.isChecked()
+                or self.chk_mirror_joints.isChecked()):
+            # No batch operation selected: Setup has nothing to do. Close the
+            # window rather than run - a real run would unbind geometry and
+            # clear the rest pose up front (before the flag check in
+            # run_setup), which is purely destructive with no orient/mirror
+            # to justify it. (Roll Chain is a separate, immediate action.)
+            QtWidgets.QMessageBox.warning(self, 'Setup not run',
+                'None of Orient Joints, Mirror Orient or Mirror Joints was '
+                'selected, so Setup was not run. Re-open Setup and enable at '
+                'least one operation (or use Roll Chain for a single-chain '
+                'fix-up).')
+            self.close()
             return
 
         try:

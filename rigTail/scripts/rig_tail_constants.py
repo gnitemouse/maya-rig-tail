@@ -60,36 +60,47 @@ FORCE_REBUILD = False
 
 # SETUP PHASE ==========================================================
 # Skeleton-prep options, run by the separate 'Tail Rig Setup' step
-# (rig_tail_setup) BEFORE the build, never during it. Two independent
-# operations:
+# (rig_tail_setup) BEFORE the build, never during it. Three batch
+# operations, each independent:
 #
-# MIRROR_ORIENT - aim-orient each chain: re-aim every joint down its own
+# ORIENT_JOINTS - aim-orient each chain: re-aim every joint down its own
 #   chain with a single up-axis (the chain's plane normal), removing the
-#   intra-chain twist so a tail bends in a plane.
-# MIRROR_JOINTS - behavior-mirror matching 'L_'/'R_' pairs: overwrite the
-#   target side's joint orientation with the mirror of the source side so
-#   the two sides move as mirror images.
+#   intra-chain twist so a tail bends in a plane. No mirroring; both sides
+#   are oriented from their own geometry.
+# MIRROR_ORIENT - reflect matching 'L_'/'R_' pairs' ORIENTATION across the
+#   symmetry plane, so the two sides face as mirror images. Positions kept.
+# MIRROR_JOINTS - reflect matching 'L_'/'R_' pairs' POSITIONS across the
+#   symmetry plane, so the target side's joints sit at the exact mirror of
+#   the source side's.
 #
-# Enable both (orient runs first, then mirror) for planar, symmetric
-# tails. Mirroring alone does not remove twist; it copies the source
-# orientation, twist and all. Both only re-orient joints (positions are
-# preserved) and only act when their inputs exist (MIRROR_JOINTS needs an
-# L/R pair).
-MIRROR_ORIENT = True
-# Default OFF pending Maya verification. The mirror math (mirror_frames)
-# was reworked to a true plane reflection (verified right-handed on a
-# worked example); enable per-run to test L/R symmetry, then flip this
-# default on once confirmed on a real rig.
+# ORIENT_JOINTS runs first, then the mirrors, so a mirror copies a clean
+# source. A typical run enables ORIENT_JOINTS + MIRROR_ORIENT (+ MIRROR_
+# JOINTS when the sides are positionally off). Mirroring orientation alone
+# does not remove twist; it copies the source's, twist and all. The mirrors
+# only act when an L/R pair exists. To turn a single wrong-facing chain onto
+# the right plane afterwards, use the interactive roll in the Setup UI
+# (rig_tail_setup.roll_chain) - it has no constant.
+ORIENT_JOINTS = True
+# Reflect L/R orientation. Default OFF pending Maya verification: the mirror
+# math (mirror_frames) was reworked to a true plane reflection (verified
+# right-handed on a worked example); enable per-run to test L/R symmetry,
+# then flip this default on once confirmed on a real rig.
+MIRROR_ORIENT = False
+# Reflect L/R positions across the symmetry plane (moves the target side's
+# joints). Default OFF; enable only when the two sides are not already
+# positional mirrors of each other.
 MIRROR_JOINTS = False
 # Only LOG the intended changes without modifying joints (safe preview);
-# covers both operations above (orient and mirror).
+# covers all batch operations above (orient and both mirrors).
 MIRROR_DRYRUN = False
-# Character symmetry-plane normal: 'x' = YZ plane (left/right along X).
+# Character symmetry-plane normal: 'x' = YZ plane (left/right along X). The
+# plane is assumed to pass through the world origin.
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
 MIRROR_SOURCE_SIDE = 'R'
 # Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
-# ORIENT_UP_AXIS aligns to the chain's plane normal.
+# ORIENT_UP_AXIS aligns to the chain's plane normal. The interactive roll
+# rolls about ORIENT_AIM_AXIS.
 ORIENT_AIM_AXIS = 'x'
 ORIENT_UP_AXIS = 'z'
 
@@ -456,6 +467,7 @@ def get_user_editable_config():
         'BUILD_IK': BUILD_IK,
         'INDIV_FK': INDIV_FK,
         'MAIN_CONTROLLER': MAIN_CONTROLLER,
+        'ORIENT_JOINTS': ORIENT_JOINTS,
         'MIRROR_ORIENT': MIRROR_ORIENT,
         'MIRROR_JOINTS': MIRROR_JOINTS,
         'MIRROR_DRYRUN': MIRROR_DRYRUN,
@@ -599,7 +611,7 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
-    global MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
+    global ORIENT_JOINTS, MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global COLOR_SKELETON, BN_COLOR, IK_COLOR, FK_COLOR
@@ -638,8 +650,18 @@ def load_config(filepath=None):
         MAIN_CONTROLLER = config.get(
             'MAIN_CONTROLLER', config.get(
                 'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MAIN_CONTROLLER)))
-        MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
-        MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
+        # Setup-phase keys were renamed. A new-format config has
+        # 'ORIENT_JOINTS'; read it straight. A legacy config predates the
+        # rename, where 'MIRROR_ORIENT' meant aim-orient and 'MIRROR_JOINTS'
+        # meant orient-mirror - migrate those to the new names (positions-
+        # mirror did not exist then, so new MIRROR_JOINTS stays default).
+        if 'ORIENT_JOINTS' in config:
+            ORIENT_JOINTS = config.get('ORIENT_JOINTS', ORIENT_JOINTS)
+            MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
+            MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
+        else:
+            ORIENT_JOINTS = config.get('MIRROR_ORIENT', ORIENT_JOINTS)
+            MIRROR_ORIENT = config.get('MIRROR_JOINTS', MIRROR_ORIENT)
         # 'MIRROR_ORIENT_DRYRUN' is the legacy key name for MIRROR_DRYRUN
         MIRROR_DRYRUN = config.get(
             'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))

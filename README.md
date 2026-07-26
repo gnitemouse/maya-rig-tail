@@ -16,7 +16,8 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 - **Main Controller** - Optional cog dashboard driving every tail at once,
   with a per-tail override (for multi-tail rigs)
 - **Setup phase** - Optional pre-build step that orients each chain (fixes
-  twist) and mirrors matching L/R tails so both sides move together
+  twist), mirrors matching L/R tails (orientation and/or positions), and
+  rolls individual chains onto the right plane
 - **JSON Configs** - Save/load custom configuration through UI
 
 ## Install
@@ -76,16 +77,30 @@ rig_tail.main()         # or launch the Builder UI
 
 Run before building, from the **TailSetup** shelf button or
 `rig_tail.main_setup()`. It re-orients the raw BN skeleton so tails move
-coherently, and never affects the build itself. Two independent options:
+coherently, and never affects the build itself. Three independent options:
 
-- **Orient Chains** (`MIRROR_ORIENT`): aim-orient each chain so a tail
+- **Orient Joints** (`ORIENT_JOINTS`): aim-orient each chain so a tail
   bends in one plane. Fixes joints whose orientation twists down the chain.
-- **Mirror Joints** (`MIRROR_JOINTS`): behavior-mirror matching `L_`/`R_`
-  tails so the two sides move as mirror images at equal values.
+- **Mirror Orient** (`MIRROR_ORIENT`): reflect matching `L_`/`R_` tails'
+  *orientation* so the two sides face as mirror images.
+- **Mirror Joints** (`MIRROR_JOINTS`): reflect matching `L_`/`R_` tails'
+  *positions*, so the target side's joints sit at the exact mirror of the
+  source side's.
 
-Only joint orientation changes; positions are preserved. Enable **Dry Run**
-first to log the intended changes without modifying anything, then apply
-and build. Skip this phase entirely if the skeleton is already oriented.
+A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
+only when the two sides are positionally off. Everything except Mirror
+Joints preserves joint positions. Enable **Dry Run** first to log the
+intended changes without modifying anything, then apply and build. Skip
+this phase entirely if the skeleton is already oriented.
+
+**Roll Chain** is a separate per-tail fix-up in the same window, for a
+chain that is cleanly oriented but facing the wrong way: pick the chain
+(or **Select** it from a selected joint) and use the left/right arrows to
+roll it onto the right plane. It applies immediately and never moves
+joints.
+
+A typical pass on a messy rig: run Orient Joints + Mirror Joints, roll any
+individual chains that face the wrong way, then build.
 
 ## Requirements
 

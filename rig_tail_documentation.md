@@ -13,10 +13,11 @@ The tool has two phases, run in order and launched from two shelf buttons
 (`TailSetup`, then `TailRig`):
 
 1. **Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`): a pre-build
-   step that orients and mirrors the raw BN skeleton so tails move
-   coherently. It changes only joint orientation, never positions, and
-   never runs during the build. If the skeleton is already well oriented,
-   skip it entirely; the build is unaffected.
+   step that orients, mirrors and rolls the raw BN skeleton so tails move
+   coherently, and never runs during the build. Most of it changes only
+   joint orientation; the one exception is `MIRROR_JOINTS`, which also
+   mirrors joint positions. If the skeleton is already well oriented, skip
+   the phase entirely; the build is unaffected.
 2. **Build** (`rig_tail` and the modules below): tear down any previous
    rig, then create joints, curves, controls, node networks, and bind the
    geometry.
@@ -35,8 +36,9 @@ The tool has two phases, run in order and launched from two shelf buttons
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail_setup` | `rt_set` | Skeleton orient / mirror, run before the build |
+| `rig_tail_setup` | `rt_set` | Skeleton orient / mirror / roll, run before the build |
 | `rig_tail_setup_ui` | - | Setup UI (Tail Rig Setup) |
+| `rig_tail_test_setup` | `rt_ts` | Tests for the Setup phase (math + scene) |
 
 ### Utility Modules
 
@@ -106,11 +108,36 @@ Launch the Tail Rig Setup UI.
 
 ## rig_tail_setup.py (rt_set)
 
-Setup phase: orient and mirror the BN skeleton before the build. Optional
-and never runs during the build. Two independent toggles in
-`rig_tail_constants`: `MIRROR_ORIENT` (aim-orient, removes intra-chain
-twist) and `MIRROR_JOINTS` (behavior-mirror `L_`/`R_` pairs). Positions
-are never changed; `MIRROR_DRYRUN` previews both operations without modifying.
+Setup phase: orient, mirror and roll the BN skeleton before the build.
+Optional and never runs during the build.
+
+Three independent batch toggles in `rig_tail_constants`:
+
+| Constant | Effect | Positions |
+|----------|--------|-----------|
+| `ORIENT_JOINTS` | Aim-orient each chain so a tail bends in one plane (removes intra-chain twist). No mirroring: both sides are oriented from their own geometry. | kept |
+| `MIRROR_ORIENT` | Reflect matching `L_`/`R_` pairs' **orientation** across the symmetry plane, so the two sides face as mirror images. | kept |
+| `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions** across the symmetry plane, so the target side's joints sit at the exact mirror of the source side's. | **moved** |
+
+`ORIENT_JOINTS` runs first, then the mirrors, so a mirror copies a clean
+source. `MIRROR_SOURCE_SIDE` (default `R`) picks which side is authored;
+the other is overwritten. `MIRROR_AXIS` is the symmetry-plane normal, and
+the plane is assumed to pass through the world origin. `MIRROR_DRYRUN`
+previews every batch operation without modifying anything.
+
+Plus one interactive per-chain fix-up, `roll_chain`, which has no constant:
+it rolls a single chain about its aim axis to turn a
+correctly-oriented-but-wrong-facing chain onto the right plane.
+
+Orientation is written into `jointOrient` with `rotate` left at zero.
+Re-orienting or moving a bound joint would drag the mesh, so affected
+geometry is unbound and left for the build to rebind, and any stored rest
+pose is cleared so the build recaptures it.
+
+> Note: these constants were renamed. `MIRROR_ORIENT` previously meant the
+> aim-orient (now `ORIENT_JOINTS`) and `MIRROR_JOINTS` previously meant the
+> orientation mirror (now `MIRROR_ORIENT`). Older config files are migrated
+> automatically on load.
 
 ### Functions
 
@@ -118,13 +145,25 @@ are never changed; `MIRROR_DRYRUN` previews both operations without modifying.
 Detect BN chains, unbind affected geometry, run the enabled steps.
 
 #### `run_setup(dry_run=None)`
-Run the enabled orient/mirror steps on `rt_cst.JOINTS_BN`.
+Run the enabled batch orient/mirror steps on `rt_cst.JOINTS_BN`.
 
 #### `orient_chains(dry_run)`
-Aim-orient every BN chain to remove intra-chain twist.
+Aim-orient every BN chain to remove intra-chain twist (`ORIENT_JOINTS`).
 
-#### `mirror_joints(dry_run)`
-Behavior-mirror each L/R pair's BN chain from the source side.
+#### `mirror_chains(dry_run, do_orient, do_positions)`
+Reflect each L/R pair's orientation and/or positions from the source side
+(`MIRROR_ORIENT` / `MIRROR_JOINTS`).
+
+#### `roll_chain(rigname, degrees)`
+Roll one chain about its aim axis by an angle, keeping positions. The
+interactive fix-up behind the Setup UI's Roll Chain arrows.
+
+#### `rigname_from_selection()`
+Resolve the RIGPART of the first selected node, so a chain can be picked by
+clicking a joint. Used by the Setup UI's Select button.
+
+#### `show_joint_orients(show=True)`
+Toggle `displayLocalAxis` on every BN chain joint, to eyeball the result.
 
 #### `find_mirror_pairs(rigparts)`
 Pair rig parts into (source, target) by `L_`/`R_` prefix.
@@ -132,8 +171,8 @@ Pair rig parts into (source, target) by `L_`/`R_` prefix.
 #### `aim_frames(positions, aim_axis, up_axis)`
 Per-joint world frames aimed down a chain with a twist-free up-axis.
 
-#### `mirror_frames(src_matrices, axis)`
-Behavior-mirror source world matrices for the target side.
+#### `mirror_frames(src_matrices, axis, aim_axis, up_axis)`
+Reflect source world orientations across the symmetry plane for the target.
 
 ---
 
@@ -236,12 +275,58 @@ Remove the stored rest pose (for re-capture or testing).
 
 ## rig_tail_setup_ui.py
 
-Setup UI (Tail Rig Setup window). Exposes the orient/mirror toggles,
-source-side and axis dropdowns, and Dry Run, then calls
-`rig_tail_setup.setup_tails`. Launched by `rig_tail.main_setup()`.
+Setup UI (Tail Rig Setup window). Exposes the three batch toggles
+(Orient Joints, Mirror Orient, Mirror Joints), the source-side and axis
+dropdowns, and Dry Run, then calls `rig_tail_setup.setup_tails`. Launched
+by `rig_tail.main_setup()`.
+
+The **Roll Chain** group is separate from Run Setup: pick a chain from the
+dropdown (or click **Select** to read it from the selected joint), set a
+step angle, and the left/right arrows roll that chain by minus/plus the
+step immediately. It applies on click with no confirmation dialog, and
+ignores Dry Run. **Show Joint Local Axes** draws each BN joint's axes so
+the result is visible in the viewport.
+
+Running Setup with no batch toggle enabled does nothing and closes the
+window with a warning, because a real run unbinds geometry and clears the
+rest pose before the toggles are consulted.
 
 #### `show_ui()`
 Build and show the Setup window, closing any previous instance.
+
+---
+
+## rig_tail_test_setup.py (rt_ts)
+
+Tests for the Setup phase, split by whether they need a scene.
+
+**Math tests** are deterministic and safe: they exercise the geometry
+helpers directly, so "is the mirror math correct?" is answered in
+isolation. **Scene tests** are MUTATING: they run the real entry points on
+the loaded skeleton and verify the result, so like a real Setup run they
+detach OPM drivers, unbind geometry and clear the rest pose — reload the
+scene afterwards before building. Each scene test saves and restores
+`RIGPARTS` and the Setup flags.
+
+### Functions
+
+#### `run_math()`
+Every math test, with a PASS/FAIL summary. Safe.
+
+#### `run_scene(base='fintail', chain='C_tail')`
+Every scene test, with a PASS/FAIL summary. **Mutating.**
+
+#### `check_mirror(base='fintail')`
+Focused mirror check: the mirror math plus one real L/R pair, orientation
+and positions. **Mutating.**
+
+#### `run_all()`
+`run_math()` plus a pointer to the mutating scene tests.
+
+Individual tests: `test_reflect`, `test_assign_rows`, `test_roll_about`,
+`test_aim_frames`, `test_mirror_frames`, `test_find_mirror_pairs` (math);
+`test_orient`, `test_mirror_orient`, `test_mirror_joints`, `test_roll`,
+`test_rigname_from_selection` (scene).
 
 ---
 
