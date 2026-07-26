@@ -1,0 +1,16 @@
+# Line endings: Unix (LF), everywhere, on every platform.
+#
+# 'text=auto' lets git detect text files and store them with LF in the
+# repository. 'eol=lf' also checks them out with LF, so editing on Windows
+# cannot reintroduce CRLF. Together they override core.autocrlf, so the
+# result no longer depends on any per-machine git setting.
+#
+# The repo previously held a mix (most .py files CRLF, a handful LF), which
+# made a one-line edit with a tool that rewrites whole files - sed -i, or a
+# Python open(...,'w') without newline= - show up as a diff touching every
+# line. Normalized in one pass when this file was added.
+* text=auto eol=lf
+
+# Binary: never inspect or convert these.
+*.png binary
+*.mb binary
