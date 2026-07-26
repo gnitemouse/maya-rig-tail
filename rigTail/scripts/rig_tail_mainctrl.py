@@ -176,8 +176,13 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
     rt_mya.add_attribute_enum(cog_ctrl, rt_cst.ALL_DIVIDER[0],
                               rt_cst.ALL_DIVIDER[1], rt_cst.ALL_DIVIDER[2])
     if ik:
+        # Same build-derived default as the per-tail switches: a tail whose
+        # override is Off follows this one, so leaving it on a stale mode
+        # would put the rig in that mode regardless of the per-tail default.
+        dv = rt_cst.IKFK_SWITCH[3]
         rt_mya.add_attribute_enum(cog_ctrl, all_attr('ikfk'), 'All IKFK',
-                                  rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
+                                  rt_cst.IKFK_SWITCH[2], dv)
+        rt_mya.set_attr_value(f'{cog_ctrl}.{all_attr("ikfk")}', dv)
     for attr, kwargs in routed_attr_specs(fk, ik):
         ln = all_attr(attr)
         if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):

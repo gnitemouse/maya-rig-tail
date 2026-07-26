@@ -345,6 +345,23 @@ def ikfk_fk_mode_index():
         idx = 3
     return idx
 
+def ikfk_default_index():
+    '''
+    The mode a freshly built rig should start in: FK when the build offers
+    it, otherwise SplineIK. Animators work in FK by default, and an IK-only
+    build has no FK mode to fall back to.
+
+    Applied to IKFK_SWITCH's default by update_ikfk_modes, so both the
+    per-tail cog switches and the dashboard's All IKFK pick it up.
+
+    Return:
+        int: index into IKFK_MODES (0 when the list is empty).
+    '''
+    idx = ikfk_fk_mode_index()
+    if idx is None:
+        idx = ikfk_mode_index('SplineIK')
+    return idx if idx is not None else 0
+
 def update_ikfk_modes(fk, ik):
     '''
     Derive the active IKFK_MODES from IKFK_MODES_ALL and build options:
@@ -356,20 +373,28 @@ def update_ikfk_modes(fk, ik):
     any sequence of build-option changes.
 
     Runs before every build (setup_rig) and when UI checkboxes change.
-    Rebuilds the derived IKFK_SWITCH enum when the list changes.
+    Rebuilds the derived IKFK_SWITCH enum and its default mode.
+
+    The default mode is build-derived (ikfk_default_index: FK when FK is
+    built, else SplineIK), so it is set here rather than read from the
+    config - a dv carried over from a config saved under different build
+    options would name the wrong mode, or one that no longer exists.
 
     Return:
         bool: True if IKFK_MODES changed
     '''
-    global IKFK_MODES
+    global IKFK_MODES, IKFK_SWITCH
     before = list(IKFK_MODES)
     if ik:
         IKFK_MODES = list(IKFK_MODES_ALL) if fk else list(IKFK_MODES_ALL[:3])
     else:
         IKFK_MODES = list()
     changed = IKFK_MODES != before
-    if changed:
-        rebuild_derived()
+    # Always refresh the default, even when the mode list itself did not
+    # change: rebuild_derived only runs on a change, and the dv may still be
+    # stale from a loaded config.
+    IKFK_SWITCH = IKFK_SWITCH[:3] + (ikfk_default_index(),)
+    rebuild_derived()
     return changed
 
 

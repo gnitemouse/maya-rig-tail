@@ -701,7 +701,7 @@ class RigPartsEditor(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Edit Rig Parts')
-        self.setMinimumSize(560, 420)
+        self.setMinimumSize(380, 380)
         self.setup_ui()
 
     LIST_STYLE = '''
@@ -710,20 +710,26 @@ class RigPartsEditor(QtWidgets.QDialog):
             color: #cccccc;
             border: 1px solid #555555;
             border-radius: 4px;
-            padding: 4px;
+            padding: 2px;
         }
         QListWidget::item {
-            padding: 4px;
+            padding: 2px 4px;
         }
         QListWidget::item:selected {
             background-color: #4A90E2;
         }
     '''
 
+    # The move column is just two arrows: keep it as narrow as the glyphs.
+    ARROW_W = 20
+    ARROW_H = 22
+    BUTTON_H = 26
+
     def setup_ui(self):
         '''Build the dialog layout.'''
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
         excluded = set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
         self.list_widget = self._make_list(
@@ -755,18 +761,20 @@ class RigPartsEditor(QtWidgets.QDialog):
             btn.setStyleSheet('''
                 QToolButton {
                     background-color: #3a3a3a; color: #cccccc;
-                    border: 1px solid #555555; border-radius: 4px;
-                    min-width: 30px; min-height: 28px;
+                    border: 1px solid #555555; border-radius: 3px;
                 }
                 QToolButton:hover { background-color: #4a4a4a; border-color: #666666; }
                 QToolButton:pressed { background-color: #2a2a2a; }
             ''')
+            btn.setFixedSize(self.ARROW_W, self.ARROW_H)
         self.btn_to_exclude.clicked.connect(
             lambda: self.move_selected(to_exclude=True))
         self.btn_to_include.clicked.connect(
             lambda: self.move_selected(to_exclude=False))
 
         move_col = QtWidgets.QVBoxLayout()
+        move_col.setSpacing(4)
+        move_col.setContentsMargins(2, 0, 2, 0)
         move_col.addStretch()
         move_col.addWidget(self.btn_to_exclude)
         move_col.addWidget(self.btn_to_include)
@@ -775,18 +783,22 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.lbl_include = QtWidgets.QLabel()
         self.lbl_exclude = QtWidgets.QLabel()
         include_col = QtWidgets.QVBoxLayout()
+        include_col.setSpacing(3)
         include_col.addWidget(self.lbl_include)
         include_col.addWidget(self.list_widget)
         exclude_col = QtWidgets.QVBoxLayout()
+        exclude_col.setSpacing(3)
         exclude_col.addWidget(self.lbl_exclude)
         exclude_col.addWidget(self.list_exclude)
 
         lists_layout = QtWidgets.QHBoxLayout()
+        lists_layout.setSpacing(0)
         lists_layout.addLayout(include_col, 1)
         lists_layout.addLayout(move_col)
         lists_layout.addLayout(exclude_col, 1)
 
         btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.setSpacing(4)
         self.btn_add = QtWidgets.QPushButton('Add')
         self.btn_rename = QtWidgets.QPushButton('Rename')
         self.btn_remove = QtWidgets.QPushButton('Remove')
@@ -801,20 +813,22 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.btn_add.clicked.connect(self.add_item)
         self.btn_rename.clicked.connect(self.rename_item)
         self.btn_remove.clicked.connect(self.remove_item)
-        self.parent().style_button(self.btn_add, 0)
-        self.parent().style_button(self.btn_rename, 0)
-        self.parent().style_button(self.btn_remove, 0)
-        btn_layout.addWidget(self.btn_add)
-        btn_layout.addWidget(self.btn_rename)
-        btn_layout.addWidget(self.btn_remove)
+        # Compact: these are small list actions, not primary buttons, so
+        # they keep the dialog narrow instead of stretching across it.
+        for btn in (self.btn_add, self.btn_rename, self.btn_remove):
+            self.parent().style_button(btn, 0)
+            btn.setFixedHeight(self.BUTTON_H)
+            btn.setMinimumWidth(0)
+            btn_layout.addWidget(btn, 1)
 
-        self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
+        self.btn_get_rigparts = QtWidgets.QPushButton('Get from Selected Joints')
         self.btn_get_rigparts.setToolTip(
             'Replace both lists with {rigname}s extracted from the joints '
             'selected in the scene (joints must follow the JOINT template). '
             'Everything lands in Include; any existing exclusion is cleared.')
         self.btn_get_rigparts.clicked.connect(self.get_rigparts_from_selection)
         self.parent().style_button(self.btn_get_rigparts, 2)
+        self.btn_get_rigparts.setFixedHeight(self.BUTTON_H)
 
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -822,9 +836,13 @@ class RigPartsEditor(QtWidgets.QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
 
-        hint = QtWidgets.QLabel(
-            'Excluded parts stay in RIGPARTS; the Setup phase just skips '
-            'them (the build still runs them all).')
+        # Deliberately not 'Setup/Build only runs on Included parts': the
+        # build still processes every part, and a label that claims
+        # otherwise would be the one place a user checks before relying on
+        # it. Reword once cleanup_rig's scene-wide animCurve sweep is scoped
+        # per-part and Exclude really does cover the build.
+        hint = QtWidgets.QLabel('Setup runs on Included parts only '
+                                '(Build runs all).')
         hint.setStyleSheet('color: #999999; font-size: 10px;')
         hint.setWordWrap(True)
 

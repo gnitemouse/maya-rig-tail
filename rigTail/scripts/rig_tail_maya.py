@@ -36,6 +36,7 @@ Functions:
     create_curveinfo: Create curveInfo node
     sdk: Create set driven key
     add_attribute_enum: Add enum attribute
+    set_attr_value: Set an attribute unless it is locked or driven
     list_hierarchy: Iterative traversal helper
     has_non_default_locked_attributes: Check for locked attributes
     bind_geometry: Bind geometry to BN joints
@@ -1103,6 +1104,35 @@ def attribute_is_proxy(node, attr):
         # isProxyAttribute is Maya 2019+. On older versions report False
         # so the attribute is edited in place, matching previous behaviour
         logger.trace(f"cannot query proxy state of '{node}.{attr}'")
+        return False
+
+def set_attr_value(plug, value):
+    """
+    Set an attribute, skipping it when Maya will not accept the value.
+
+    Used for the post-build states the build forces onto existing controls
+    (visibility toggles, the IKFK mode). A locked or driven channel is not
+    worth failing a build over - by the time these are applied the rig is
+    already wired - so warn and carry on rather than abort.
+
+    Arguments:
+        plug (str): node.attribute
+        value: Value to set
+
+    Return:
+        bool: True if the value was set
+    """
+    if not cmds.objExists(plug):
+        logger.warning(f"'{plug}' does not exist; cannot set it")
+        return False
+    if not cmds.getAttr(plug, settable=True):
+        logger.warning(f"'{plug}' is locked or driven; leaving it unchanged")
+        return False
+    try:
+        cmds.setAttr(plug, value)
+        return True
+    except RuntimeError as err:
+        logger.warning(f"could not set '{plug}' to {value}: {err}")
         return False
 
 def remove_attribute(node, attr):

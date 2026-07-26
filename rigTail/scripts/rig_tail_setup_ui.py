@@ -59,6 +59,25 @@ class RigTailSetupUI(QtWidgets.QDialog):
     # Display labels for MIRROR_BEHAVIOR; stored lower-case in constants.
     BEHAVIORS = ['Symmetric', 'Parallel']
 
+    # One size for every field-level widget, so the dropdowns, the spin box,
+    # the arrows and the Select button all line up. The settings dropdowns
+    # (behavior, source side, mirror/aim/up axis) are laid out flush right at
+    # FIELD_W, which is what puts them in a single column despite sitting in
+    # rows with different labels.
+    FIELD_W = 150       # dropdown / spin box width
+    FIELD_H = 28        # height of every dropdown, spin box, arrow, button
+    ARROW_W = 28        # roll arrows (square at FIELD_H)
+    LABEL_W = 170       # leading label column
+
+    FIELD_STYLE = '''
+        QComboBox, QSpinBox {
+            background-color: #3a3a3a; color: #cccccc;
+            border: 1px solid #555555; border-radius: 4px; padding: 2px 8px;
+        }
+        QComboBox:focus, QSpinBox:focus { border-color: #F5D041; }
+        QComboBox:disabled { color: #777777; border-color: #444444; }
+    '''
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Rig Tail Setup')
@@ -213,11 +232,13 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'The two differ by a 180 deg roll about the aim, so Roll Chain '
             'at 180 converts one into the other on a single chain. '
             '(MIRROR_BEHAVIOR)')
-        self.cmb_behavior.setMaximumWidth(120)
         self.chk_mirror_orient.toggled.connect(self._sync_behavior_enabled)
 
+        # Stretch before the combo so it lands flush right at FIELD_W, in the
+        # same column as the settings dropdowns below (see _labeled_row).
         mirror_orient_row = QtWidgets.QHBoxLayout()
-        mirror_orient_row.addWidget(self.chk_mirror_orient, 1)
+        mirror_orient_row.addWidget(self.chk_mirror_orient)
+        mirror_orient_row.addStretch(1)
         mirror_orient_row.addWidget(self.cmb_behavior)
 
         options_layout.addWidget(self.chk_orient)
@@ -255,25 +276,22 @@ class RigTailSetupUI(QtWidgets.QDialog):
         options_layout.addSpacing(6)
         roll_group = self.create_group_box('Roll Chain (per-tail fix-up)')
         roll_layout = QtWidgets.QVBoxLayout()
-        roll_layout.setSpacing(4)
+        # Tight: the Chain and Roll rows read as one control, not two
+        # sections.
+        roll_layout.setSpacing(2)
         roll_layout.setContentsMargins(8, 4, 8, 4)
         self.cmb_roll_chain = QtWidgets.QComboBox()
         self.cmb_roll_chain.setToolTip(
             'The tail chain (RIGPART) to roll. The list follows RIGPARTS; '
             'or click Select to read it from the selected joint(s).')
-        self.cmb_roll_chain.setStyleSheet('''
-            QComboBox {
-                background-color: #3a3a3a; color: #cccccc;
-                border: 1px solid #555555; border-radius: 4px; padding: 4px 8px;
-            }
-            QComboBox:focus { border-color: #F5D041; }
-        ''')
+        self.cmb_roll_chain.setStyleSheet(self.FIELD_STYLE)
+        self.cmb_roll_chain.setFixedHeight(self.FIELD_H)
         self.btn_roll_select = QtWidgets.QPushButton('Select')
         self.btn_roll_select.setToolTip(
             'Set the chain from the current viewport selection: reads the rig '
             'part of the first selected joint (any joint of the chain works).')
         self.style_button(self.btn_roll_select, 0)
-        self.btn_roll_select.setMaximumWidth(80)
+        self.btn_roll_select.setFixedSize(60, self.FIELD_H)
         self.btn_roll_select.clicked.connect(self.select_roll_chain)
 
         # Step angle: a whole-number degree amount the arrows add/subtract.
@@ -288,13 +306,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'Step angle (whole degrees) the arrows roll by, e.g. 90. The '
             'left arrow rolls the chain by minus this, the right arrow by '
             'plus this, about the aim axis. Positions never change.')
-        self.spn_roll.setStyleSheet('''
-            QSpinBox {
-                background-color: #3a3a3a; color: #cccccc;
-                border: 1px solid #555555; border-radius: 4px; padding: 4px 8px;
-            }
-            QSpinBox:focus { border-color: #F5D041; }
-        ''')
+        self.spn_roll.setStyleSheet(self.FIELD_STYLE)
+        self.spn_roll.setFixedHeight(self.FIELD_H)
         self.btn_roll_minus = QtWidgets.QToolButton()
         self.btn_roll_minus.setArrowType(QtCore.Qt.LeftArrow)
         self.btn_roll_minus.setToolTip(
@@ -312,21 +325,27 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 QToolButton {
                     background-color: #3a3a3a; color: #cccccc;
                     border: 1px solid #555555; border-radius: 4px;
-                    min-width: 28px; min-height: 26px;
                 }
                 QToolButton:hover { background-color: #4a4a4a; border-color: #666666; }
                 QToolButton:pressed { background-color: #2a2a2a; }
             ''')
+            btn.setFixedSize(self.ARROW_W, self.FIELD_H)
         self.btn_roll_minus.clicked.connect(lambda: self.apply_roll(-1))
         self.btn_roll_plus.clicked.connect(lambda: self.apply_roll(1))
 
+        # Both rows use the same leading label width and then fill the rest,
+        # so the Chain and Roll blocks span an identical width and their
+        # outer edges line up even though their contents differ.
         chain_row = QtWidgets.QHBoxLayout()
-        chain_row.addLayout(self._labeled_row('Chain:', self.cmb_roll_chain), 1)
+        chain_label = QtWidgets.QLabel('Chain:')
+        chain_label.setMinimumWidth(self.LABEL_W)
+        chain_row.addWidget(chain_label)
+        chain_row.addWidget(self.cmb_roll_chain, 1)
         chain_row.addWidget(self.btn_roll_select)
         roll_layout.addLayout(chain_row)
         roll_row = QtWidgets.QHBoxLayout()
         roll_label = QtWidgets.QLabel('Roll (deg):')
-        roll_label.setMinimumWidth(170)
+        roll_label.setMinimumWidth(self.LABEL_W)
         roll_row.addWidget(roll_label)
         roll_row.addWidget(self.btn_roll_minus)
         roll_row.addWidget(self.spn_roll, 1)
@@ -370,25 +389,30 @@ class RigTailSetupUI(QtWidgets.QDialog):
         main_layout.addLayout(button_layout)
 
     def _combo(self, items, tip):
+        '''A settings dropdown, at the shared field size.'''
         combo = QtWidgets.QComboBox()
         combo.addItems(items)
         combo.setToolTip(tip)
-        combo.setStyleSheet('''
-            QComboBox {
-                background-color: #3a3a3a; color: #cccccc;
-                border: 1px solid #555555; border-radius: 4px; padding: 4px 8px;
-            }
-            QComboBox:focus { border-color: #F5D041; }
-        ''')
+        combo.setStyleSheet(self.FIELD_STYLE)
+        combo.setFixedSize(self.FIELD_W, self.FIELD_H)
         combo.currentIndexChanged.connect(self.update_display)
         return combo
 
     def _labeled_row(self, label_text, widget):
+        '''
+        Label on the left, widget flush right at its fixed width.
+
+        The stretch between them is what aligns every settings dropdown into
+        one column: the rows carry labels of different lengths, so anchoring
+        the widgets to the right edge lines them up where anchoring them
+        after the label would not.
+        '''
         row = QtWidgets.QHBoxLayout()
         label = QtWidgets.QLabel(label_text)
-        label.setMinimumWidth(170)
+        label.setMinimumWidth(self.LABEL_W)
         row.addWidget(label)
-        row.addWidget(widget, 1)
+        row.addStretch(1)
+        row.addWidget(widget)
         return row
 
     # STYLING (mirrors rig_tail_ui) ====================================

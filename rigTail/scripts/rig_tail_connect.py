@@ -161,48 +161,133 @@ def match_fk_to_ik_rest(fk, ik):
             if cmds.objExists(fk_jnt) and cmds.objExists(ik_jnt):
                 cmds.matchTransform(fk_jnt, ik_jnt, pos=True, rot=True)
 
+def rootctrl_attr_specs(fk, ik, root_ctrl):
+    '''
+    The root control's VISIBILITY / DISPLAY attributes, in channel-box order.
+
+    One ordered list drives creation, ordering and the post-build values, so
+    the three cannot drift apart. Every build lands on this exact state:
+    geometry and controls shown, everything structural hidden, and the
+    export-geometry display override unlocked.
+
+    'Locators' is only included when the control already carries it. It
+    belongs to the incoming autorigger rig - this rig builds no locators
+    group for it to drive - so it is positioned and defaulted where it
+    exists, rather than invented as a dead attribute in a scene that never
+    had one.
+
+    Arguments
+        fk (bool): FK is being built
+        ik (bool): IK is being built
+        root_ctrl (str): the root control
+
+    Return
+        list: (ln, nn, group, value, en) per attribute, in order. group is
+        None for attributes that drive nothing; value is None for dividers
+        (locked, nothing to set); en is None for the 'Hide:Show' default.
+    '''
+    specs = [
+        ('visibilityDivider', 'VISIBILITY', None, None, None),
+        ('geo', 'Geometry', rt_nam.fstr('', rt_cst.GEOMETRY_GRP), 1, None),
+        ('controls', 'Controls', rt_nam.fstr('', rt_cst.CONTROL_GRP), 1, None),
+        ('rig_systems', 'Rig Systems',
+         rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP), 0, None),
+        ('skeleton', 'Skeleton', rt_nam.fstr('', rt_cst.SKELETON_GRP), 0, None),
+    ]
+    if fk and ik:
+        specs += [
+            ('ik_skeleton', 'IK Skeleton',
+             rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK), 0, None),
+            ('fk_skeleton', 'FK Skeleton',
+             rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK), 0, None),
+        ]
+    if cmds.attributeQuery('locators', n=root_ctrl, ex=1):
+        specs.append(('locators', 'Locators', None, 0, None))
+    specs += [
+        # Clusters is a visibility toggle, so it belongs above the DISPLAY
+        # divider. It used to be created after it on some rigs; enforce_
+        # attr_order below is what actually moves it back.
+        ('clusters', 'Clusters', rt_nam.fstr('', rt_cst.CLUSTERS_GRP), 0, None),
+        ('dispDivider', 'DISPLAY', None, None, None),
+    ]
+    # export_geo is only created when there is a geometry group to drive, so
+    # only claim a slot for it then - a reorder must not delete an attribute
+    # that the block below would not put back.
+    if cmds.objExists(rt_nam.fstr('', rt_cst.GEOMETRY_GRP)):
+        specs.append(
+            ('export_geo', 'Export Geometry', None, 0, 'Unlocked:Wireframe:Locked'))
+    return specs
+
+
+def enforce_attr_order(node, wanted):
+    '''
+    Make a node's dynamic attributes appear in the wanted order.
+
+    Maya appends each new attribute to the end of the channel box and offers
+    no reorder command, so an attribute introduced by a later version of the
+    build keeps whatever position it was first created at - which is how
+    'Clusters' ended up under DISPLAY on rigs built before it existed.
+    Deleting and re-adding is the only way to move one.
+
+    Only acts when the order is actually wrong, so a rebuild of an
+    up-to-date rig neither churns attributes nor drops their values. When it
+    does act, the caller must re-add every attribute (and remake its
+    connections) straight afterwards.
+
+    The test is that what is already there forms an exact PREFIX of the
+    wanted order, not merely that it is in the right relative order: any
+    attribute still missing gets appended at the end, so it can only land in
+    the right place if every attribute already present precedes it. A scene
+    holding just 'geo' and 'controls' therefore does need the rebuild -
+    'visibilityDivider' belongs in front of both, and adding it would
+    otherwise strand the VISIBILITY heading below them.
+
+    Arguments
+        node (str): Node holding the attributes
+        wanted (list): attribute long names, in the wanted order
+
+    Return
+        bool: True if attributes were deleted and need re-adding
+    '''
+    wanted_set = set(wanted)
+    existing = [a for a in (cmds.listAttr(node, ud=True) or [])
+                if a in wanted_set]
+    if existing == wanted[:len(existing)]:
+        return False
+    logger.info(f"'{node}': rebuilding {len(existing)} attribute(s) to fix "
+                f'channel box order')
+    for attr in existing:
+        rt_mya.remove_attribute(node, attr)
+    return True
+
+
 def connect_root(fk, ik):
     root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
     geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
     control_grp = rt_nam.fstr('', rt_cst.CONTROL_GRP)
-    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
-    skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP)
-    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
     logger.debug(f'Connect root \'{root_ctrl}\'')
     rt_mya.parent_to(root_ctrl, control_grp)
 
-    if fk and ik:
-        ik_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK)
-        fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)
-        rootctrl_attrs = [
-            ('divider', 'visibilityDivider', 'VISIBILITY', 0),
-            (geometry_grp, 'geo', 'Geometry', 1),
-            (control_grp, 'controls', 'Controls', 1),
-            (rig_systems_grp, 'rig_systems', 'Rig Systems', 0),
-            (skeleton_grp, 'skeleton', 'Skeleton', 1),
-            (ik_skeleton_grp, 'ik_skeleton', 'IK Skeleton', 1),
-            (fk_skeleton_grp, 'fk_skeleton', 'FK Skeleton', 1),
-            (clusters_grp, 'clusters', 'Clusters', 0),
-            ('divider', 'dispDivider', 'DISPLAY', 0)
-        ]
-    else:
-        rootctrl_attrs = [
-            ('divider', 'visibilityDivider', 'VISIBILITY', 0),
-            (geometry_grp, 'geo', 'Geometry', 1),
-            (control_grp, 'controls', 'Controls', 1),
-            (rig_systems_grp, 'rig_systems', 'Rig Systems', 0),
-            (skeleton_grp, 'skeleton', 'Skeleton', 0),
-            (clusters_grp, 'clusters', 'Clusters', 0),
-            ('divider', 'dispDivider', 'DISPLAY', 0)
-        ]
+    rootctrl_attrs = rootctrl_attr_specs(fk, ik, root_ctrl)
+    enforce_attr_order(root_ctrl, [s[0] for s in rootctrl_attrs])
 
-    for group, ln_attr, nn_attr, dv in rootctrl_attrs:
-        rt_mya.add_attribute_enum(root_ctrl, ln_attr, nn_attr, dv=dv)
-        if group != 'divider':
+    for ln_attr, nn_attr, group, value, en in rootctrl_attrs:
+        # export_geo is created here but wired further down, next to the
+        # display-override handling it belongs to.
+        if ln_attr == 'export_geo':
+            continue
+        rt_mya.add_attribute_enum(root_ctrl, ln_attr, nn_attr, en=en,
+                                  dv=(0 if value is None else value))
+        if group:
             if cmds.objExists(group):
                 cmds.connectAttr(f'{root_ctrl}.{ln_attr}', f'{group}.visibility', f=1)
             else:
                 logger.warning(f'Group \'{group}\' does not exist, skipping visibility connection.')
+        # Force the value, not just the default: a rebuild reuses the
+        # existing attribute, which would otherwise keep whatever the
+        # animator last set it to.
+        if value is not None:
+            rt_mya.set_attr_value(f'{root_ctrl}.{ln_attr}', value)
 
     if cmds.objExists(geometry_grp):
         rt_mya.add_attribute_enum(root_ctrl, ln='export_geo', nn='Export Geometry',
@@ -239,7 +324,9 @@ def connect_root(fk, ik):
                 cmds.setAttr(f'{geometry_grp}.overrideVisibility', 1)
             cmds.connectAttr(f'{root_ctrl}.export_geo',
                              f'{geometry_grp}.overrideDisplayType', f=1)
-            cmds.setAttr(f'{root_ctrl}.export_geo', 2)
+            # Unlocked (0). This used to force Locked (2), which left the
+            # geometry unselectable in the viewport after every build.
+            rt_mya.set_attr_value(f"{root_ctrl}.export_geo", 0)
         else:
             logger.warning(
                 f"'{geometry_grp}.overrideEnabled' is locked or driven "
@@ -456,10 +543,17 @@ def add_attributes_ikfk_switch(control, fk, ik):
 
     rt_mya.add_attribute_enum(control, rt_cst.TAIL_IKFK_DIVIDER[0], rt_cst.TAIL_IKFK_DIVIDER[1], rt_cst.TAIL_IKFK_DIVIDER[2])
 
+    # Start every build in the build-derived default mode: FK when FK was
+    # built, otherwise SplineIK (see rt_cst.ikfk_default_index, applied to
+    # IKFK_SWITCH by update_ikfk_modes). Set explicitly as well as
+    # defaulted, since a rebuild reuses the existing attribute and would
+    # otherwise keep whatever mode the switch was left in.
+    dv = rt_cst.IKFK_SWITCH[3]
     for rigname in rt_cst.RIGPARTS:
         ln_ikfk = rt_nam.fstr(rigname, rt_cst.IKFK)
         nn_ikfk = re.sub(r'[-_\s]+', ' ', ln_ikfk).title()
-        rt_mya.add_attribute_enum(control, ln_ikfk, nn_ikfk, rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
+        rt_mya.add_attribute_enum(control, ln_ikfk, nn_ikfk, rt_cst.IKFK_SWITCH[2], dv)
+        rt_mya.set_attr_value(f'{control}.{ln_ikfk}', dv)
 
 def add_proxy_attributes_to_controls(rigname, control, typ):
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
