@@ -78,7 +78,8 @@ def connect_rig_tail(fk, ik):
 
     clear_control_cache()
 
-    for rigname in rt_cst.RIGPARTS:
+    parts = rt_cache.active_parts()
+    for rigname in parts:
         # Parts without joints were skipped during setup and build
         if rigname not in rt_cst.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping connect")
@@ -94,7 +95,7 @@ def connect_rig_tail(fk, ik):
 
     # Consolidated warning for parts whose mesh name did not match, so the
     # geometry that never bound is easy to spot and rename.
-    rt_mya.report_missing_geometry(rt_cst.RIGPARTS)
+    rt_mya.report_missing_geometry(parts)
 
     # After everything is connected the IK spline has reached its final
     # (low-CV driver) shape, so the IK joints now read their true rest -- match
@@ -151,7 +152,7 @@ def match_fk_to_ik_rest(fk, ik):
     # viewport refresh (temporarily resumes it), so the settle still
     # happens when the build runs inside the fast scope
     rt_mya.force_refresh()
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in rt_cache.active_parts():
         fk_joints = rt_cst.JOINTS_FK.get(rigname, [])
         ik_joints = rt_cst.JOINTS_IK.get(rigname, [])
         if not fk_joints or not ik_joints or len(fk_joints) != len(ik_joints):
@@ -549,11 +550,17 @@ def add_attributes_ikfk_switch(control, fk, ik):
     # defaulted, since a rebuild reuses the existing attribute and would
     # otherwise keep whatever mode the switch was left in.
     dv = rt_cst.IKFK_SWITCH[3]
+    # The switch is created for the whole roster - an excluded part is not
+    # rebuilt but its rig still needs its switch in the channel box. Only
+    # the parts actually being rebuilt have their mode reset; an excluded
+    # part keeps the mode it was left in, like the rest of its state.
+    rebuilt = set(rt_cache.active_parts())
     for rigname in rt_cst.RIGPARTS:
         ln_ikfk = rt_nam.fstr(rigname, rt_cst.IKFK)
         nn_ikfk = re.sub(r'[-_\s]+', ' ', ln_ikfk).title()
         rt_mya.add_attribute_enum(control, ln_ikfk, nn_ikfk, rt_cst.IKFK_SWITCH[2], dv)
-        rt_mya.set_attr_value(f'{control}.{ln_ikfk}', dv)
+        if rigname in rebuilt:
+            rt_mya.set_attr_value(f'{control}.{ln_ikfk}', dv)
 
 def add_proxy_attributes_to_controls(rigname, control, typ):
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)

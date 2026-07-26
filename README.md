@@ -98,8 +98,9 @@ columns — move parts across with the arrow buttons or by double-clicking,
 as in Maya's channel editor. Excluded tails stay in `RIGPARTS` and keep
 their skin bound; Setup just leaves their joints alone, which is what you
 want when fixing one tail without disturbing the rest. Excluding one side
-of an L/R pair stops that pair mirroring. *This covers the Setup phase
-only — the build still processes every part.*
+of an L/R pair stops that pair mirroring. The exclusion covers the **build**
+too — an excluded tail's rig is neither torn down nor rebuilt — so a
+finished tail can be frozen while the rest of the roster is iterated on.
 
 A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
 only when the two sides are positionally off. Everything except Mirror

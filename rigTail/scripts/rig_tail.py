@@ -130,9 +130,9 @@ def build_rig_tail(fk, ik):
     # rest) have not. rig_tail_ik then builds the curve from this stored rest
     # instead of live positions, so rebuilds stay consistent. Guarded to
     # capture on the first build only; see rig_tail_restpose.
-    rt_rest.capture_rest_pose()
+    rt_rest.capture_rest_pose(rt_che.active_parts())
 
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in rt_che.active_parts():
         # Parts without joints were skipped during setup
         if rigname not in rt_cst.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping build")
@@ -254,6 +254,8 @@ def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
         rt.rig_tail_test('tail', root='tail_spline_grp', fk=False, ik=True)
     '''
     rt_cst.RIGPARTS = [root]
+    # Named outright, so build it even if the roster had it excluded
+    rt_che.include_parts([root])
     # build_performance_scope: viewport refresh suspended, evaluation
     # manager in DG mode, one undo chunk -- the build runs much faster
     # with no behaviour change (see rig_tail_maya)
@@ -301,6 +303,8 @@ def rig_tail_selected(root=None, fk=True, ik=True):
                 rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
                 if rigname and rigname not in rt_cst.RIGPARTS:
                     rt_cst.RIGPARTS.append(rigname)
+                # Selected outright, so build it even if it was excluded
+                rt_che.include_parts([rigname])
                 rt_cln.set_joints(rigname, jnt)
         rt_cln.cleanup_rig(fk, ik)
         rt_cln.setup_rig(fk, ik)

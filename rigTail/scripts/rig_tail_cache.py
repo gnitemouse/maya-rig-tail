@@ -16,7 +16,15 @@ or must be fully torn down. Rebuild is needed (joints changed) if any of:
         build. Stored positions are refreshed on every call, so float drift
         from the rig driving the joints never accumulates into a rebuild.
 
+Also owns the rig-part roster question every phase asks: which parts is
+this run acting on (active_parts), and which are held back (excluded_parts).
+Both live here because this is the leaf module Setup, cleanup, build and
+connect all already import.
+
 Functions:
+    active_parts: Parts the run acts on (RIGPARTS minus RIGPARTS_EXCLUDE)
+    excluded_parts: Parts held back from this run
+    include_parts: Lift the exclusion on explicitly named parts
     validate_cache: Clear cache if RIGPARTS or ROOT changed
     validate_cache_structure: Check if control counts changed
     validate_cache_joints: Check if cached joints still exist
@@ -35,6 +43,60 @@ logger = logger_setup(__name__)
 
 # Module-level control cache
 _CONTROL_CACHE = {}
+
+
+def active_parts():
+    """
+    Rig parts the build should act on: RIGPARTS minus RIGPARTS_EXCLUDE.
+
+    Every build phase (cleanup, setup, build, connect) iterates this
+    instead of RIGPARTS, so an excluded part is left exactly as it is -
+    neither torn down nor rebuilt. Excluded names stay in RIGPARTS, so
+    the roster-level questions (is the dashboard warranted, which cog
+    attributes exist, which override conditions are stale) still see them.
+
+    Falls back to the full RIGPARTS list on a session started before
+    active_rigparts existed, since rig_tail_constants is never reloaded.
+
+    Return:
+        list: included rig part names, in RIGPARTS order
+    """
+    getter = getattr(rt_cst, 'active_rigparts', None)
+    return getter() if callable(getter) else list(rt_cst.RIGPARTS)
+
+
+def excluded_parts():
+    """
+    Rig parts held back from the build, in RIGPARTS order.
+
+    Return:
+        list: excluded rig part names
+    """
+    active = set(active_parts())
+    return [p for p in rt_cst.RIGPARTS if p not in active]
+
+
+def include_parts(rignames):
+    """
+    Lift the exclusion on the given parts.
+
+    The entry points that name their parts outright (rig_tail_single,
+    rig_tail_selected) must build what was asked for: a stale entry in
+    RIGPARTS_EXCLUDE would otherwise make the build a silent no-op. The
+    roster-wide build (rig_tail_multiple) does not call this - there the
+    exclusion is the user's current choice.
+
+    Arguments:
+        rignames (list): Rig part names to include
+    """
+    excluded = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
+    named = set(rignames)
+    keep = [p for p in excluded if p not in named]
+    if len(keep) != len(excluded):
+        lifted = [p for p in excluded if p in named]
+        logger.debug(f"Building named parts: lifting exclusion on "
+                     f"{', '.join(lifted)}")
+        rt_cst.RIGPARTS_EXCLUDE = keep
 
 
 def validate_cache():

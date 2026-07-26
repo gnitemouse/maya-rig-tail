@@ -279,7 +279,10 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # Tight: the Chain and Roll rows read as one control, not two
         # sections.
         roll_layout.setSpacing(2)
-        roll_layout.setContentsMargins(8, 4, 8, 4)
+        # The group-box style adds 'padding-top: 10px', which pads the top
+        # only, so the bottom margin carries that 10 to keep the space above
+        # the Chain row and below the Roll row equal.
+        roll_layout.setContentsMargins(8, 4, 8, 14)
         self.cmb_roll_chain = QtWidgets.QComboBox()
         self.cmb_roll_chain.setToolTip(
             'The tail chain (RIGPART) to roll. The list follows RIGPARTS; '
@@ -465,6 +468,11 @@ class RigTailSetupUI(QtWidgets.QDialog):
             QCheckBox { spacing: 6px; }
             QCheckBox::indicator { width: 18px; height: 18px; }
         ''')
+        # Every checkbox row is FIELD_H tall, the same as the rows that
+        # carry a dropdown (Mirror Orient). A bare checkbox is shorter than
+        # its combo, so without this the layout spacing lands on rows of
+        # different heights and the gaps read as uneven.
+        checkbox.setMinimumHeight(self.FIELD_H)
 
     # STATE ============================================================
 
@@ -562,7 +570,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def open_rigparts_editor(self):
         '''Reuse the Builder's RIGPARTS editor.'''
-        dialog = rt_ui.RigPartsEditor(self)
+        dialog = rt_ui.RigPartsEditor(self, phase='Setup')
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self._refresh_roll_chains()
             self.update_display()

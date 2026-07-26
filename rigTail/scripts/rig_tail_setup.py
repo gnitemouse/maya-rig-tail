@@ -41,12 +41,14 @@ Orientation changes are written into jointOrient with rotate left at zero;
 MIRROR_JOINTS additionally moves world positions. MIRROR_DRYRUN logs the
 intended batch changes without touching anything.
 
-The batch operations run on rt_cst.active_rigparts() - RIGPARTS minus
-RIGPARTS_EXCLUDE - so single tails can be held back from the Setup UI's
-'Edit Rig Parts' editor. An excluded part keeps its BN chain detected (the
+The batch operations run on rig_tail_cache.active_parts() - RIGPARTS minus
+RIGPARTS_EXCLUDE - so single tails can be held back from the 'Edit Rig
+Parts' editor. An excluded part keeps its BN chain detected (the
 interactive roll still reaches it) but is never oriented, never mirrored,
 and never unbound; excluding one side of an L/R pair stops that pair
-mirroring altogether.
+mirroring altogether. The same exclusion holds the part back from the
+build, so a tail can be set up and rigged once and then left alone while
+the rest of the roster is iterated on.
 
 Re-orienting or moving a bound joint would drag the mesh. With
 PRESERVE_SKIN on (the default) the skin stays bound and is RE-BASELINED
@@ -73,6 +75,7 @@ import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_cst
 import rig_tail_cleanup as rt_cln
+import rig_tail_cache as rt_cache
 import rig_tail_maya as rt_mya
 import math
 import re
@@ -114,11 +117,10 @@ def _active():
     '''
     Rig parts the batch operations should act on (RIGPARTS minus excluded).
 
-    Falls back to the full RIGPARTS list on a session started before
-    active_rigparts existed, since rig_tail_constants is never reloaded.
+    The build asks the same question of the same helper, so Setup and
+    build always agree on which parts are in play.
     '''
-    getter = getattr(rt_cst, 'active_rigparts', None)
-    return getter() if callable(getter) else list(rt_cst.RIGPARTS)
+    return rt_cache.active_parts()
 
 
 # ENTRY ================================================================

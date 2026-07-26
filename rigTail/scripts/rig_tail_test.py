@@ -24,8 +24,10 @@ Usage:
     rt_test.test_time_evaluation()  # time-varying FX across frames
     rt_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
     rt_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
+    rt_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
 '''
 import math
+import re
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
@@ -402,6 +404,88 @@ def report_bend(rignames):
             for lbl in ('BN', 'FK', 'IK'))
         print(f'[BEND] {part:<16} {cells}')
     return snap
+
+
+def test_build_exclusion(rigname, root=None):
+    '''
+    An Excluded rig part survives a rebuild untouched (RIGPARTS_EXCLUDE).
+
+    MUTATING: runs one full rebuild with `rigname` excluded, so run it on a
+    scene you can reload. Everything else in RIGPARTS is rebuilt as usual;
+    this only checks that the excluded part was left alone.
+
+    Snapshots the part's nodes and its SDK animation curves, rebuilds, then
+    verifies nothing of its own went missing. The SDK curves are the point
+    of the check: cleanup_rig sweeps them in one scene-wide call, and
+    cleanup.excluded_sdk_curves is what holds this part's back.
+
+    RIGPARTS_EXCLUDE is restored afterwards whatever happens.
+
+    Usage:
+        import rig_tail_test as rt_test
+        rt_test.test_build_exclusion('C_tail')
+
+    Arguments:
+        rigname (str): Part to exclude from the rebuild.
+        root (str): Rig root; defaults to the scene's existing root group.
+
+    Return:
+        bool: True if the part came through the rebuild intact.
+    '''
+    import rig_tail as rig_tail
+    import rig_tail_cleanup as rt_cln
+    import rig_tail_cache as rt_cache
+
+    if rigname not in rt_cst.RIGPARTS:
+        print(f"[EXCLUDE] '{rigname}' is not in RIGPARTS")
+        return False
+
+    # Same whole-token rule cleanup uses to decide who owns a node
+    token = re.compile(rf'(?<![A-Za-z0-9]){re.escape(rigname)}(?![A-Za-z0-9])')
+
+    def _owned_nodes():
+        return {n for n in cmds.ls() if token.search(n.split('|')[-1])}
+
+    def _owned_curves():
+        curves = cmds.ls(type=['animCurveUU', 'animCurveUL',
+                               'animCurveUA', 'animCurveTT']) or []
+        return set(rt_cln.excluded_sdk_curves(curves))
+
+    saved_exclude = list(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
+    existing_root = rt_cln.find_existing_root_grp()
+    root_arg = root or existing_root or rt_cst.ROOT
+    try:
+        rt_cst.RIGPARTS_EXCLUDE = sorted(set(saved_exclude) | {rigname})
+        before_nodes = _owned_nodes()
+        before_curves = _owned_curves()
+        built = rt_cache.active_parts()
+        print(f'\n--- BUILD EXCLUSION ({rigname}) ---')
+        print(f'  {len(before_nodes)} node(s), {len(before_curves)} SDK '
+              f'curve(s) before; rebuilding {len(built)} other part(s)')
+        if rigname in built:
+            print('  FAIL: active_parts() still lists the excluded part')
+            return False
+
+        rig_tail.rig_tail_multiple(root=root_arg, fk=rt_cst.BUILD_FK,
+                                   ik=rt_cst.BUILD_IK)
+
+        lost_nodes = sorted(before_nodes - _owned_nodes())
+        survived = set(cmds.ls(list(before_curves))) if before_curves else set()
+        lost_curves = sorted(before_curves - survived)
+    finally:
+        rt_cst.RIGPARTS_EXCLUDE = saved_exclude
+
+    ok = not lost_nodes and not lost_curves
+    if lost_curves:
+        print(f'  FAIL: {len(lost_curves)} SDK curve(s) deleted, e.g. '
+              f'{", ".join(lost_curves[:5])}')
+    if lost_nodes:
+        print(f'  FAIL: {len(lost_nodes)} node(s) deleted, e.g. '
+              f'{", ".join(lost_nodes[:5])}')
+    if ok:
+        print(f'  PASS: all {len(before_nodes)} node(s) and '
+              f'{len(before_curves)} SDK curve(s) survived the rebuild')
+    return ok
 
 
 # TEST ORCHESTRATION =========================================

@@ -488,9 +488,16 @@ class RigTailUI(QtWidgets.QDialog):
     def update_display(self):
         '''Refresh the config-file textbox and configuration summary.'''
         self.txt_config.setText(rt_cst.LOADED_CONFIG or '')
-        display_text = '\n'.join([
+        lines = [
             f"ROOT = '{rt_cst.ROOT}'",
             f'RIGPARTS = {rt_cst.RIGPARTS}',
+        ]
+        # Excluded parts are not built, so say so here rather than leaving
+        # RIGPARTS reading as the build list it no longer is
+        excluded = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
+        if excluded:
+            lines.append(f'Excluded from build: {", ".join(excluded)}')
+        display_text = '\n'.join(lines + [
             f'IKFK_MODES = {rt_cst.IKFK_MODES}',
             f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
             'Control Sizes:',
@@ -611,7 +618,7 @@ class RigTailUI(QtWidgets.QDialog):
 
     def open_rigparts_editor(self):
         '''Open the RIGPARTS pop-up editor.'''
-        dialog = RigPartsEditor(self)
+        dialog = RigPartsEditor(self, phase='Build')
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 
@@ -646,6 +653,16 @@ class RigTailUI(QtWidgets.QDialog):
                 'RIGPARTS is empty. Add rig parts first.')
             return
 
+        # Every part excluded means the build has nothing to do; say so
+        # here rather than letting it run through and report success
+        import rig_tail_cache as rt_cache
+        parts = rt_cache.active_parts()
+        if not parts:
+            QtWidgets.QMessageBox.warning(self, 'Error',
+                'Every rig part is Excluded, so there is nothing to build.\n'
+                "Move at least one part back to Include in 'Edit Rig Parts'.")
+            return
+
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
         if not fk and not ik:
@@ -655,12 +672,12 @@ class RigTailUI(QtWidgets.QDialog):
 
         # Warn about rig parts with no joints instead of failing mid-build
         import rig_tail_cleanup as rt_cln
-        missing = [p for p in rt_cst.RIGPARTS if not rt_cln.rigpart_has_joints(p)]
+        missing = [p for p in parts if not rt_cln.rigpart_has_joints(p)]
         if missing:
             QtWidgets.QMessageBox.warning(self, 'Missing Joints',
                 'No BN joints found for: ' + ', '.join(missing) + '.\n'
-                'Add joints matching the naming template, or remove these '
-                'parts from RIGPARTS, then build again.')
+                'Add joints matching the naming template, or Exclude/remove '
+                'these parts in RIGPARTS, then build again.')
             return
 
         # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, FORCE_REBUILD,
@@ -692,14 +709,19 @@ class RigPartsEditor(QtWidgets.QDialog):
     Two lists side by side, moved between with the arrow buttons or by
     double-clicking an entry, in the manner of Maya's channel editor.
     Excluded parts stay in RIGPARTS - they keep their name, stay
-    renameable, and still resolve for L/R pairing - they are only held back
-    from the batch Setup operations (orient / mirror), and their geometry
-    is left bound. See rt_cst.RIGPARTS_EXCLUDE: the exclusion does NOT yet
-    cover the build, which still runs over the whole roster.
+    renameable, and still resolve for L/R pairing - they are simply left
+    alone: Setup does not orient or mirror them and leaves their geometry
+    bound, and the build neither tears their rig down nor rebuilds it.
+    See rt_cst.RIGPARTS_EXCLUDE.
+
+    The editor is shared by both windows, so `phase` names the caller
+    ('Setup' or 'Build') for the wording that would otherwise have to
+    describe both at once.
     '''
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, phase='Setup'):
         super().__init__(parent)
+        self.phase = phase
         self.setWindowTitle('Edit Rig Parts')
         self.setMinimumSize(380, 380)
         self.setup_ui()
@@ -734,14 +756,15 @@ class RigPartsEditor(QtWidgets.QDialog):
         excluded = set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
         self.list_widget = self._make_list(
             [p for p in rt_cst.RIGPARTS if p not in excluded],
-            'Rig parts the Setup phase will orient and mirror.')
+            f'Rig parts {self.phase} will process.')
         self.list_exclude = self._make_list(
             [p for p in rt_cst.RIGPARTS if p in excluded],
-            'Rig parts held back from the batch Setup operations. They keep '
-            'their place in RIGPARTS and their geometry stays bound; Setup '
-            'simply leaves their joints alone.\n'
-            'Note: the BUILD still processes these - exclusion covers the '
-            'Setup phase only.')
+            'Rig parts held back from both Setup and Build. They keep their '
+            'place in RIGPARTS and their geometry stays bound; Setup leaves '
+            'their joints alone, and the build neither tears their rig down '
+            'nor rebuilds it.\n'
+            'Use this to freeze a finished tail while the rest of the '
+            'roster is iterated on.')
         # Double-click sends an entry to the other side, like the channel
         # editor. Move buttons handle multi-selection.
         self.list_widget.itemDoubleClicked.connect(
@@ -752,11 +775,11 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.btn_to_exclude = QtWidgets.QToolButton()
         self.btn_to_exclude.setArrowType(QtCore.Qt.RightArrow)
         self.btn_to_exclude.setToolTip('Exclude the selected rig part(s) '
-                                       'from the Setup phase.')
+                                       'from Setup and Build.')
         self.btn_to_include = QtWidgets.QToolButton()
         self.btn_to_include.setArrowType(QtCore.Qt.LeftArrow)
         self.btn_to_include.setToolTip('Include the selected rig part(s) '
-                                       'in the Setup phase again.')
+                                       'in Setup and Build again.')
         for btn in (self.btn_to_exclude, self.btn_to_include):
             btn.setStyleSheet('''
                 QToolButton {
@@ -836,13 +859,12 @@ class RigPartsEditor(QtWidgets.QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
 
-        # Deliberately not 'Setup/Build only runs on Included parts': the
-        # build still processes every part, and a label that claims
-        # otherwise would be the one place a user checks before relying on
-        # it. Reword once cleanup_rig's scene-wide animCurve sweep is scoped
-        # per-part and Exclude really does cover the build.
-        hint = QtWidgets.QLabel('Setup runs on Included parts only '
-                                '(Build runs all).')
+        # Named for the window that opened the editor: both phases honour
+        # the exclusion, and this is the one place a user checks before
+        # relying on it, so it states the caller's own behaviour rather
+        # than describing both at once.
+        hint = QtWidgets.QLabel(
+            f'{self.phase} runs on Included parts only.')
         hint.setStyleSheet('color: #999999; font-size: 10px;')
         hint.setWordWrap(True)
 

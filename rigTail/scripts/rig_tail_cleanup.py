@@ -20,6 +20,7 @@ Functions:
     cleanup_rigname: full teardown of one rig part
     cleanup_connections: light teardown, break connections only
     cleanup_anim_effects: remove one part's FX expression/node network
+    excluded_sdk_curves: SDK curves the scene-wide sweep must spare
     cleanup_dangling_unit_conversions: sweep orphaned conversion nodes
     restore_fk_joint_chain: unwrap FK SDK stack back to a flat chain
     fk_sdk_structure_is_current: is the FK SDK layout the current one
@@ -55,9 +56,13 @@ logger = logger_setup(__name__)
 
 def cleanup_rig(fk, ik):
     '''
-    Safely clean up rig components defined in RIGPARTS.
+    Safely clean up rig components for the parts being built
+    (rig_tail_cache.active_parts(): RIGPARTS minus RIGPARTS_EXCLUDE).
     Handles constraints, skinClusters, controls, node networks.
     Called from build_rig_tail() before building new components.
+
+    An excluded part is not torn down here, so nothing scene-wide may
+    take its nodes either - see excluded_sdk_curves for the SDK sweep.
 
     Cleanup:
     1. Disconnect skeleton, delete joint constraints
@@ -83,14 +88,19 @@ def cleanup_rig(fk, ik):
     structure_changed = rt_cache.validate_cache_structure()
 
     # Delete SDK animCurves in one call (a rebuild has hundreds of them,
-    # and per-node deletes each pay full command overhead)
+    # and per-node deletes each pay full command overhead), minus the
+    # curves belonging to excluded parts - those parts are not rebuilt,
+    # so a sweep that took their curves would strip their variable-FK
+    # falloff and mode switching for good.
     logger.trace(f"Cleaning up SDK curves")
     anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
+    keep = excluded_sdk_curves(anim_curves)
+    anim_curves = [c for c in anim_curves if c not in keep]
     if anim_curves:
         cmds.delete(anim_curves)
     cleanup_dangling_unit_conversions()
 
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in rt_cache.active_parts():
         # Validate cache
         joints_changed = rt_cache.validate_cache_joints(rigname)
         # Unbind geometry before rebuild
@@ -420,6 +430,51 @@ def cleanup_anim_effects(rigname, fk, ik):
 
     cleanup_dangling_unit_conversions()
 
+def excluded_sdk_curves(anim_curves):
+    '''
+    The SDK animCurves that belong to excluded rig parts, so cleanup_rig's
+    one-call sweep can spare them.
+
+    A curve is claimed by the part its DRIVEN node belongs to: that node
+    is always part-local (an FK SDK group, a spline group's visibility),
+    whereas the driver side is often the shared cog. skipConversionNodes
+    steps over the unitConversion that Maya inserts on angle-unit SDKs, so
+    the real driven node is read, not 'unitConversion57'. Curves that drive
+    nothing are left out - they are orphans the sweep should take.
+
+    Matching is by whole name token, so excluding 'tail' does not also
+    spare 'detail'. A node is matched against the WHOLE roster and claimed
+    by the longest name that fits, so a roster holding both 'tail' and
+    'C_tail' still reads 'FK_C_tail_00_01_sdk' as C_tail's - matching the
+    excluded names alone would let the shorter name claim it.
+
+    Arguments
+        anim_curves (list): Candidate SDK animCurves from the scene
+
+    Return
+        set: Curves to keep.
+    '''
+    excluded = set(rt_cache.excluded_parts())
+    if not excluded or not anim_curves:
+        return set()
+
+    # Longest first: the first pattern that hits is the owning part
+    tokens = [(p, re.compile(rf'(?<![A-Za-z0-9]){re.escape(p)}(?![A-Za-z0-9])'))
+              for p in sorted(rt_cst.RIGPARTS, key=len, reverse=True)]
+    keep = set()
+    for crv in anim_curves:
+        driven = cmds.listConnections(crv, s=False, d=True, scn=True) or []
+        for node in driven:
+            short = node.split('|')[-1]
+            owner = next((p for p, t in tokens if t.search(short)), None)
+            if owner in excluded:
+                keep.add(crv)
+                break
+    if keep:
+        logger.debug(f'Keeping {len(keep)} SDK curves for excluded parts: '
+                     f'{", ".join(sorted(excluded))}')
+    return keep
+
 def cleanup_dangling_unit_conversions():
     '''
     Sweep conversion nodes orphaned by deleting SDK animCurves or
@@ -523,7 +578,7 @@ def setup_rig(fk, ik):
 
     rt_con.connect_root(fk, ik)
     rt_con.connect_cog(fk, ik)
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in rt_cache.active_parts():
         # Parts without joints were skipped by set_joints/set_joints_auto
         if rigname not in rt_cst.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping setup")
@@ -593,7 +648,9 @@ def set_joints_auto():
     '''
     logger.debug('Auto-detect joints for all RIGPARTS')
 
-    for rigname in rt_cst.RIGPARTS:
+    # Excluded parts are skipped: set_joints re-duplicates the FK/IK chains
+    # from BN, which would delete the joints their existing rig is built on.
+    for rigname in rt_cache.active_parts():
         # Try to find start joint using naming convention
         start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
 

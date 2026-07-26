@@ -143,23 +143,37 @@ orientation).
 
 ### Include / Exclude
 
-`RIGPARTS_EXCLUDE` holds rig parts the batch Setup operations should skip.
-Move parts between the **Include** and **Exclude** columns in the *Edit Rig
-Parts* editor (arrow buttons, or double-click an entry).
+`RIGPARTS_EXCLUDE` holds rig parts that **both** the batch Setup operations
+and the build should skip. Move parts between the **Include** and
+**Exclude** columns in the *Edit Rig Parts* editor (arrow buttons, or
+double-click an entry).
 
 Excluded names stay in `RIGPARTS` — they keep their place in the roster,
-stay renameable, and still resolve for L/R pairing. Setup simply leaves
-them alone: not oriented, not mirrored, and **not unbound**, so their skin
-survives a run aimed at another tail. Excluding one side of an `L_`/`R_`
-pair stops that pair mirroring altogether, which is the intended reading of
-"leave this tail alone". `rt_cst.active_rigparts()` returns the included
-parts, in `RIGPARTS` order.
+stay renameable, and still resolve for L/R pairing. Both phases simply
+leave them alone:
 
-> Scope: the **Setup phase only**. The build still runs over the whole
-> `RIGPARTS` list. `cleanup_rig` deletes SDK animation curves scene-wide, so
-> a part skipped by the build would lose its variable-FK curves without
-> getting them rebuilt; scoping that sweep per-part has to land before
-> Exclude can cover the build too.
+| Phase | What an excluded part gets |
+|-------|----------------------------|
+| Setup | Not oriented, not mirrored, and **not unbound**, so its skin survives a run aimed at another tail. Excluding one side of an `L_`/`R_` pair stops that pair mirroring altogether. |
+| Build | Not torn down and not rebuilt. Its controls, curves, clusters, SDK curves, FX network and geometry bind are all left as they are, and its IKFK mode is not reset. |
+
+Use it to freeze a finished tail while the rest of the roster is iterated
+on. `rig_tail_cache.active_parts()` returns the included parts in
+`RIGPARTS` order, and every phase iterates that instead of `RIGPARTS`;
+`rt_cst.active_rigparts()` is the underlying computation.
+
+Two things stay roster-wide on purpose. Anything the cog owns per tail (the
+IKFK switch, the dashboard override flag) is still created for excluded
+parts, because their rig is still in the scene and still needs those
+channels — cleanup only treats such a node as stale when its part leaves
+`RIGPARTS` entirely. And `cleanup_rig`'s one-call SDK animation-curve sweep
+spares the curves whose driven node belongs to an excluded part
+(`cleanup.excluded_sdk_curves`), since nothing is going to rebuild them.
+
+The entry points that name their parts outright — `rig_tail_single`,
+`rig_tail_selected` — lift the exclusion on what they were asked to build,
+so an explicit request is never a silent no-op. `rig_tail_multiple`
+honours the exclusion as it stands.
 
 Plus one interactive per-chain fix-up, `roll_chain`, which has no constant:
 it rolls a single chain about its aim axis to turn a

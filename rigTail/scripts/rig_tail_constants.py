@@ -43,17 +43,20 @@ RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
     'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
     'R_tail1', 'R_tail2', 'R_tail3']
 
-# Rig parts held back from the batch Setup phase. Names listed here stay in
-# RIGPARTS - they are still part of the rig roster, still renameable, and
-# still resolve for L/R pairing - they are just skipped by Setup's orient
-# and mirror steps, and their geometry is NOT unbound. Move parts between
+# Rig parts held back from BOTH the Setup phase and the build. Names listed
+# here stay in RIGPARTS - they are still part of the rig roster, still
+# renameable, and still resolve for L/R pairing - they are just left alone:
+# Setup skips their orient/mirror steps and leaves their geometry bound, and
+# the build neither tears their rig down nor rebuilds it. Move parts between
 # Include and Exclude in the 'Edit Rig Parts' editor.
 #
-# Scope: the SETUP phase only. The build still runs over the full RIGPARTS
-# list, because cleanup_rig deletes SDK animation curves scene-wide - a
-# part skipped by the build would lose its variable-FK curves without
-# getting them rebuilt. Scoping that sweep per-part is what has to land
-# before Exclude can cover the build too.
+# Roster-level work still covers every part, excluded or not: the cog keeps
+# an IKFK switch and a dashboard override flag per tail, and cleanup only
+# treats a dashboard node as stale when its part left RIGPARTS entirely.
+#
+# The entry points that name their parts outright (rig_tail_single,
+# rig_tail_selected) lift the exclusion on what they were asked to build,
+# so an explicit request is never a silent no-op.
 RIGPARTS_EXCLUDE = []
 
 # Root Name
@@ -186,10 +189,14 @@ def active_rigparts():
     '''
     RIGPARTS minus RIGPARTS_EXCLUDE, in RIGPARTS order.
 
-    The parts the batch Setup phase should act on. Excluded names stay in
-    RIGPARTS (see RIGPARTS_EXCLUDE) so pairing, renaming and the per-chain
-    Roll Chain fix-up still see the full roster; only the batch operations
-    and the geometry unbind honour the exclusion.
+    The parts the batch Setup phase and the build should act on. Excluded
+    names stay in RIGPARTS (see RIGPARTS_EXCLUDE) so pairing, renaming, the
+    per-chain Roll Chain fix-up and the cog's per-tail attributes still see
+    the full roster; the per-part work honours the exclusion.
+
+    Read it through rig_tail_cache.active_parts(), not directly: that
+    wrapper keeps working in a Maya session started before this function
+    existed, since rig_tail_constants is never reloaded.
 
     Return
         list: included rig part names.
