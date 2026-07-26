@@ -202,13 +202,14 @@ def set_control_color(control, color='neonblue'):
     '''
     index = rt_cst.COLOR_OVERRIDE[color]
     shapes = cmds.listRelatives(control, shapes=True, fullPath=True) or [control]
+    # The drawing-override plugs exist on every DAG node, so the settable
+    # check alone is enough (see rig_tail_maya.set_joint_color)
     for node in shapes:
         for plug, value in (('overrideEnabled', 1),
                             ('overrideRGBColors', 0),
                             ('overrideColor', index)):
             attr = f'{node}.{plug}'
-            if cmds.attributeQuery(plug, node=node, exists=True) and \
-                    cmds.getAttr(attr, settable=True):
+            if cmds.getAttr(attr, settable=True):
                 cmds.setAttr(attr, value)
 
 def create_control_shape(name, size=1, nr=(1,0,0), color='darkcyan', shape=None):
@@ -887,20 +888,19 @@ def set_attributes_visibility_fk(fk_controls):
     Arguments
         controls (list): List of FK control names
     '''
+    # translate/rotate/scale exist on every transform-derived node, so skip
+    # the per-axis attributeQuery (see rig_tail_maya.set_joint_channels)
     for ctrl in fk_controls:
         logger.trace(f"Set FK control attribute visibility for {ctrl}")
         # Hide translate
         for axis in 'XYZ':
-            if cmds.attributeQuery(f'translate{axis}', n=ctrl, ex=1):
-                cmds.setAttr(f'{ctrl}.translate{axis}', k=0, cb=0, l=1)
+            cmds.setAttr(f'{ctrl}.translate{axis}', k=0, cb=0, l=1)
         # Hide scale
         for axis in 'XYZ':
-            if cmds.attributeQuery(f'scale{axis}', n=ctrl, ex=1):
-                cmds.setAttr(f'{ctrl}.scale{axis}', k=0, cb=0, l=1)
+            cmds.setAttr(f'{ctrl}.scale{axis}', k=0, cb=0, l=1)
         # Show rotate
         for axis in 'XYZ':
-            if cmds.attributeQuery(f'rotate{axis}', n=ctrl, ex=1):
-                cmds.setAttr(f'{ctrl}.rotate{axis}', k=1, cb=0, l=0)
+            cmds.setAttr(f'{ctrl}.rotate{axis}', k=1, cb=0, l=0)
         # Show visibility
         rt_mya.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
 
@@ -913,25 +913,24 @@ def set_attributes_visibility_ik(ik_controls):
     Arguments
         ik_controls (dict): Dict of control types -> control lists
     '''
+    # translate/rotate/scale exist on every transform-derived node, so skip
+    # the per-axis attributeQuery (see rig_tail_maya.set_joint_channels)
     for mode, controls in ik_controls.items():
         for ctrl in controls:
             logger.trace(f"Set IK control attribute visibility for {ctrl}")
             # Show translate
             for axis in 'XYZ':
-                if cmds.attributeQuery(f'translate{axis}', n=ctrl, ex=1):
-                    cmds.setAttr(f'{ctrl}.translate{axis}', k=1, cb=0, l=0)
+                cmds.setAttr(f'{ctrl}.translate{axis}', k=1, cb=0, l=0)
             # Hide scale
             for axis in 'XYZ':
-                if cmds.attributeQuery(f'scale{axis}', n=ctrl, ex=1):
-                    cmds.setAttr(f'{ctrl}.scale{axis}', k=0, cb=0, l=1)
+                cmds.setAttr(f'{ctrl}.scale{axis}', k=0, cb=0, l=1)
             # Rotate: hidden and locked on Float controls, shown elsewhere
             if mode == 'float':
                 rk, rcb, rl = 0, 0, 1
             else:
                 rk, rcb, rl = 1, 0, 0
             for axis in 'XYZ':
-                if cmds.attributeQuery(f'rotate{axis}', n=ctrl, ex=1):
-                    cmds.setAttr(f'{ctrl}.rotate{axis}', k=rk, cb=rcb, l=rl)
+                cmds.setAttr(f'{ctrl}.rotate{axis}', k=rk, cb=rcb, l=rl)
             # Show visibility
             rt_mya.set_visibility(ctrl, 1, k=0, cb=1, l=0) # Unlock and show cb
 

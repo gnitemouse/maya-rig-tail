@@ -29,6 +29,7 @@ Functions:
     find_existing_root_grp: locate the current rig root group
     set_joints_auto: detect and (re)build BN/FK/IK chains for RIGPARTS
     set_joints: detect/build the chains for one rig part
+    _bn_start_finder: BN start-joint lookup sharing one scene scan
     detect_joints_bn: fill JOINTS_BN by chain detection only (Setup phase)
     create_rename_joints: rename BN in place, duplicate FK/IK from it
     rigpart_has_joints: does the scene hold BN joints for a rig part
@@ -50,6 +51,16 @@ import rig_tail_connect as rt_con
 import rig_tail_mainctrl as rt_mc
 
 logger = logger_setup(__name__)
+
+# Scene-wide sweeps are the most expensive thing cleanup does: each one
+# lists every conversion node in the scene and then queries two plugs per
+# node. cleanup_anim_effects used to trigger one per rig part, so an
+# eight-tail roster paid nine full sweeps that all found the same orphans.
+# While cleanup_rig holds the sweep deferred, callers only record that one
+# is due and it runs once at the end. Standalone callers still sweep
+# immediately, so the helper is safe to call on its own.
+_DEFER_CONVERSION_SWEEP = False
+_CONVERSION_SWEEP_PENDING = False
 
 
 # CLEANUP ==============================================================
@@ -98,19 +109,28 @@ def cleanup_rig(fk, ik):
     anim_curves = [c for c in anim_curves if c not in keep]
     if anim_curves:
         cmds.delete(anim_curves)
-    cleanup_dangling_unit_conversions()
 
-    for rigname in rt_cache.active_parts():
-        # Validate cache
-        joints_changed = rt_cache.validate_cache_joints(rigname)
-        # Unbind geometry before rebuild
-        rt_mya.unbind_geometry(rigname)
+    # One conversion sweep for the whole teardown instead of one per part
+    global _DEFER_CONVERSION_SWEEP
+    _DEFER_CONVERSION_SWEEP = True
+    try:
+        cleanup_dangling_unit_conversions()
 
-        # Rebuild check
-        if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
-            cleanup_rigname(rigname, fk, ik)
-        else:
-            cleanup_connections(rigname, fk, ik)
+        for rigname in rt_cache.active_parts():
+            # Validate cache
+            joints_changed = rt_cache.validate_cache_joints(rigname)
+            # Unbind geometry before rebuild
+            rt_mya.unbind_geometry(rigname)
+
+            # Rebuild check
+            if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
+                cleanup_rigname(rigname, fk, ik)
+            else:
+                cleanup_connections(rigname, fk, ik)
+    finally:
+        _DEFER_CONVERSION_SWEEP = False
+    if _CONVERSION_SWEEP_PENDING:
+        cleanup_dangling_unit_conversions()
 
     # Main controller dashboard: remove stale override conditions and,
     # when the dashboard is off, every dashboard attribute. Runs after
@@ -259,25 +279,21 @@ def cleanup_rigname(rigname, fk, ik):
     # so anchor the underscore after rigname: '{rigname}_*' cannot
     # bleed into another part whose name merely extends this one
     # ('tail' cleanup must not delete 'tail2' nodes)
+    # Every pattern goes to Maya in ONE cmds.ls. Each ls walks the whole
+    # scene, so the previous type x pattern nesting cost 55 full scans per
+    # rig part; a roster of tails multiplied that again. Names can match
+    # more than one pattern, so dedupe (dict keeps first-seen order).
     logger.trace(f"{rigname}: Cleaning up utility nodes")
-    for typ in types:
-        node_patterns = [
-            f'{typ}_{rigname}_*condition',
-            f'{typ}_{rigname}_*multiplyDivide',
-            f'{typ}_{rigname}_*plusMinusAverage',
-            f'{typ}_{rigname}_*multDoubleLinear',
-            f'{typ}_{rigname}_*pointMatrixMult',
-            f'{typ}_{rigname}_*blendTwoAttr',
-            f'{typ}_{rigname}_*clamp',
-            f'{typ}_{rigname}_*setRange',
-            f'{typ}_{rigname}_*choice',
-            f'{typ}_{rigname}_*curveInfo',
-            f'{typ}_{rigname}_*pointOnCurveInfo'
-        ]
-        for pattern in node_patterns:
-            nodes = cmds.ls(pattern) or []
-            for node in nodes:
-                rt_mya.remove(node)
+    node_types = ['condition', 'multiplyDivide', 'plusMinusAverage',
+                  'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
+                  'clamp', 'setRange', 'choice', 'curveInfo',
+                  'pointOnCurveInfo']
+    node_patterns = [f'{typ}_{rigname}_*{node_typ}'
+                     for typ in types for node_typ in node_types]
+    # Guard the unpack: cmds.ls() with no pattern returns the whole scene
+    found = cmds.ls(*node_patterns) if node_patterns else []
+    for node in dict.fromkeys(found):
+        rt_mya.remove(node)
 
     # 7. Delete curves, clusters, ikHandles
     logger.trace(f"{rigname}: Cleaning up curves and clusters")
@@ -314,7 +330,7 @@ def cleanup_rigname(rigname, fk, ik):
     basectrl_name = basectrl.rsplit(rt_cst.CTRL, 1)[0]
     rt_mya.remove(f'{basectrl_name}{rt_cst.VIS}{rt_cst.COND}')
 
-    # Clean up old items
+    # Clean up old items (one scene scan for every pattern, as above)
     patterns = list()
     for typ in types:
         patterns.extend([
@@ -322,14 +338,11 @@ def cleanup_rigname(rigname, fk, ik):
             f'{typ}_{rigname}_switch_*{rt_cst.VIS}{rt_cst.COND}',
             f'{typ}_{rigname}_measure_scale{rt_cst.GRP}'
         ])
-    # for p in patterns:
-    #     nodes = cmds.ls(p) or []
-    #     for node in nodes:
-    #         rt_mya.remove(node)
-    for p in patterns:
-        nodes = cmds.ls(p)
-        if nodes:
-            cmds.delete(nodes)
+    # Guard the unpack: cmds.ls() with no pattern returns the WHOLE scene,
+    # and this one feeds straight into cmds.delete
+    nodes = cmds.ls(*patterns) if patterns else []
+    if nodes:
+        cmds.delete(nodes)
 
 def cleanup_connections(rigname, fk, ik):
     '''
@@ -389,9 +402,9 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_*setRange',
             f'{typ}_{rigname}_*pointOnCurveInfo',
         ]
-        for pattern in fk_patterns:
-            for node in cmds.ls(pattern) or []:
-                rt_mya.remove(node)
+        # One scene scan for all seven patterns, deduped (see cleanup_rigname)
+        for node in dict.fromkeys(cmds.ls(*fk_patterns) or []):
+            rt_mya.remove(node)
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
@@ -423,10 +436,14 @@ def cleanup_anim_effects(rigname, fk, ik):
         f'{typ}_{rigname}_*_ikfk_blendColors',
         f'{typ}_{rigname}_*_ikfk_remap_condition'
     ]
-    for pattern in node_patterns:
-        nodes = cmds.ls(pattern) or []
-        for node in nodes:
-            rt_mya.remove(node)
+    # One scene scan for every pattern (see cleanup_rigname), then sort
+    # expressions to the front. Pattern order used to carry the
+    # "expressions first" rule implicitly; a single ls returns scene order
+    # instead, so sort on node type - which states the rule outright and
+    # holds even if an expression matches one of the later patterns.
+    nodes = list(dict.fromkeys(cmds.ls(*node_patterns) or []))
+    for node in sorted(nodes, key=lambda n: cmds.nodeType(n) != 'expression'):
+        rt_mya.remove(node)
 
     cleanup_dangling_unit_conversions()
 
@@ -482,7 +499,18 @@ def cleanup_dangling_unit_conversions():
     timeToUnitConversion / unitToTimeConversion are separate node types
     from unitConversion (created for time-attribute connections) and
     need sweeping too.
+
+    Deferred while cleanup_rig is running its per-part loop: the sweep is
+    scene-wide, so repeating it per rig part re-walked every conversion
+    node in the scene to find the same orphans each time. cleanup_rig runs
+    the one deferred sweep at the end (see _DEFER_CONVERSION_SWEEP).
     '''
+    global _CONVERSION_SWEEP_PENDING
+    if _DEFER_CONVERSION_SWEEP:
+        _CONVERSION_SWEEP_PENDING = True
+        return
+    _CONVERSION_SWEEP_PENDING = False
+
     conversions = cmds.ls(type=['unitConversion', 'timeToUnitConversion',
                                 'unitToTimeConversion']) or []
     for uc in conversions:
@@ -650,27 +678,64 @@ def set_joints_auto():
 
     # Excluded parts are skipped: set_joints re-duplicates the FK/IK chains
     # from BN, which would delete the joints their existing rig is built on.
+    find_start = _bn_start_finder()
     for rigname in rt_cache.active_parts():
-        # Try to find start joint using naming convention
-        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-
-        if not cmds.objExists(start_jnt):
-            # Fallback: search for any BN joint whose name resolves to
-            # exactly this rigname via the naming template, so 'tail'
-            # never grabs 'BN_R_tail_00_jnt' (that belongs to 'R_tail')
-            all_joints = cmds.ls(type='joint')
-            matching = [j for j in all_joints
-                        if rt_cst.TYPE_BN in j and
-                        rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname]
-            if matching:
-                start_jnt = matching[0]
-                logger.debug(f"{rigname}: Found start joint '{start_jnt}'")
-            else:
-                logger.warning(f"{rigname}: No joints found, skipping")
-                continue
+        start_jnt = find_start(rigname)
+        if not start_jnt:
+            logger.warning(f"{rigname}: No joints found, skipping")
+            continue
 
         # Set joints for this rigname (will auto-detect end)
         set_joints(rigname, start_jnt=start_jnt, end_jnt=None)
+
+def _bn_start_finder():
+    '''
+    Build a BN start-joint lookup that shares one scene scan across parts.
+
+    Detection is unchanged (see _find_bn_start), but the fallback's scene
+    scan is what got expensive: it used to run per rig part, and resolve
+    every joint's rigname through the naming template inside that loop, so
+    a roster of N tails cost N joint listings and N x (joints) template
+    matches. Here the exact name is still tried first - so a
+    conventionally named roster never scans at all - and the scan happens
+    at most once, on the first part that needs the fallback.
+
+    Return
+        callable: find(rigname) -> start joint name, or None
+    '''
+    index = None
+
+    def find(rigname):
+        nonlocal index
+        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
+        if cmds.objExists(start_jnt):
+            return start_jnt
+        if index is None:
+            index = _bn_joints_by_rigname()
+        found = index.get(rigname)
+        if found:
+            logger.debug(f"{rigname}: Found start joint '{found}'")
+        return found
+
+    return find
+
+def _bn_joints_by_rigname():
+    '''
+    Map each rig part to the first BN joint in the scene whose name
+    resolves to exactly that rigname via the naming template, so 'tail'
+    never grabs 'BN_R_tail_00_jnt' (that belongs to 'R_tail').
+
+    Return
+        dict: {rigname: joint name}
+    '''
+    found = {}
+    for j in cmds.ls(type='joint') or []:
+        if rt_cst.TYPE_BN not in j:
+            continue
+        rigname = rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT)
+        if rigname:
+            found.setdefault(rigname, j)
+    return found
 
 def _find_bn_start(rigname):
     '''
@@ -678,15 +743,11 @@ def _find_bn_start(rigname):
     set_joints_auto: the exact BN start-joint name first, then any BN
     joint whose name resolves to exactly this rigname. Returns None when
     the part has no joints.
+
+    Use _bn_start_finder() directly when resolving several parts in a row -
+    this wrapper cannot share its scene scan with the next call.
     '''
-    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-    if cmds.objExists(start_jnt):
-        return start_jnt
-    for j in cmds.ls(type='joint') or []:
-        if rt_cst.TYPE_BN in j and \
-                rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname:
-            return j
-    return None
+    return _bn_start_finder()(rigname)
 
 def detect_joints_bn():
     '''
@@ -701,8 +762,9 @@ def detect_joints_bn():
     '''
     logger.debug('Detect BN joints for all RIGPARTS (Setup phase)')
     found = []
+    find_start = _bn_start_finder()
     for rigname in rt_cst.RIGPARTS:
-        start_jnt = _find_bn_start(rigname)
+        start_jnt = find_start(rigname)
         if not start_jnt:
             logger.warning(f'{rigname}: No BN joints found, skipping')
             continue
@@ -860,13 +922,7 @@ def rigpart_has_joints(rigname):
     Return
         bool: True if BN joints exist for this rig part
     '''
-    start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
-    if cmds.objExists(start_jnt):
-        return True
-    all_joints = cmds.ls(type='joint') or []
-    return any(rt_cst.TYPE_BN in j and
-               rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT) == rigname
-               for j in all_joints)
+    return _find_bn_start(rigname) is not None
 
 
 def rename_rigpart(old, new):
@@ -1009,7 +1065,12 @@ def rename_components():
             logger.trace(f"Rename legacy node '{node}' -> '{node_name}'")
             cmds.rename(node, node_name)
 
-    dag_nodes = cmds.ls(dag=True)
+    # Ask Maya for the nodes that carry a legacy marker instead of listing
+    # every node in the scene and substring-testing each one in Python.
+    # This runs on every IK build, and the old form walked the full DAG
+    # (tens of thousands of nodes in a character scene) x 11 markers, plus
+    # a typed ls per utility type, to find the handful that ever match.
+    marker_patterns = [f'*{marker}*' for marker in legacy_markers]
 
     # Remove old IKFK Switch attributes (change as necessary).
     # One attribute-pattern ls per switch instead of an attributeQuery on
@@ -1024,16 +1085,13 @@ def rename_components():
             rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
             rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
 
-    # Rename legacy DAG nodes
-    for node in dag_nodes:
-        legacy_rename(node)
-
-    # Rename legacy utility nodes
-    non_dag_nodes = cmds.ls(dag=False)
+    # Rename legacy DAG nodes, then legacy utility nodes. Same two sets as
+    # before - DAG nodes, and non-DAG nodes of a utility type - just
+    # narrowed to marker-matching names by Maya rather than in Python.
     util_nodes = ['condition', 'multiplyDivide', 'plusMinusAverage',
                   'curveInfo', 'pointOnCurveInfo', 'blendTwoAttr',
                   'multDoubleLinear', 'pointMatrixMult', 'setRange', 'clamp']
-    for util_typ in util_nodes:
-        util_node = cmds.ls(non_dag_nodes, type=util_typ)
-        for node in util_node:
-            legacy_rename(node)
+    legacy_nodes = list(cmds.ls(*marker_patterns, dag=True) or [])
+    legacy_nodes += cmds.ls(*marker_patterns, type=util_nodes) or []
+    for node in dict.fromkeys(legacy_nodes):
+        legacy_rename(node)

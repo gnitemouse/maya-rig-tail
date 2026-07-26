@@ -5,6 +5,8 @@ author: Daisy Jane @gnitemouse
 Consolidated Maya wrappers and scene helpers for Rig Tail.
 
 Functions:
+    build_performance_scope: Suspend refresh/EM for the duration of a build
+    build_timer: Time each build phase and report them in one line
     obj_exists: Check if object exists
     remove: Delete object safely
     parent_to: Parent node to given parent
@@ -60,6 +62,7 @@ from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import re
+import time
 
 logger = logger_setup(__name__)
 
@@ -123,6 +126,70 @@ def build_performance_scope(name='rig_tail build'):
         _refresh(suspend=False)
         cmds.undoInfo(closeChunk=True)
         _refresh(force=True)
+
+@contextmanager
+def build_timer(name='build'):
+    """
+    Time each phase of a run and report them as one line at the end.
+
+    Without this a slow build is a single opaque wait: the phases differ by
+    an order of magnitude in cost and which one dominates depends entirely
+    on the scene (part count, chain length, how much of the previous rig
+    can be reused). Reported at INFO so it shows up in a normal run.
+
+    Usage:
+        with build_timer('rig_tail_multiple') as timer:
+            with timer.phase('cleanup'):
+                ...
+
+    Arguments:
+        name (str): Label for the run, normally the entry point's name
+
+    Yield:
+        _PhaseTimer: Call .phase(label) around each phase
+    """
+    timer = _PhaseTimer(name)
+    try:
+        yield timer
+    finally:
+        # Report even on an aborted build: knowing which phase it died in,
+        # and how long it had been running, is the point
+        timer.report()
+
+
+class _PhaseTimer:
+    """Accumulates wall-clock time per phase label. See build_timer."""
+
+    def __init__(self, name):
+        self.name = name
+        self.phases = []          # (label, seconds), in the order run
+        self.start = time.perf_counter()
+
+    @contextmanager
+    def phase(self, label):
+        """Time one phase. Re-entering a label adds to its total."""
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed = time.perf_counter() - started
+            for i, (existing, total) in enumerate(self.phases):
+                if existing == label:
+                    self.phases[i] = (label, total + elapsed)
+                    break
+            else:
+                self.phases.append((label, elapsed))
+
+    def report(self):
+        """Log one summary line: per-phase times and the total."""
+        total = time.perf_counter() - self.start
+        if not self.phases:
+            logger.info(f'{self.name}: {total:.1f}s')
+            return
+        parts = ' | '.join(f'{label} {secs:.1f}s'
+                           for label, secs in self.phases)
+        logger.info(f'{self.name} timing: {parts} | total {total:.1f}s')
+
 
 def force_refresh():
     """
@@ -567,7 +634,16 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
         # on a name clash and the ungroup below moves the node again, so a
         # stored name can come back pointing at a different node, or none
         src_children = cmds.listRelatives(source, typ='transform', f=True) or []
-        child_uids = cmds.ls(src_children, uuid=True) if src_children else []
+        if not src_children:
+            # Nothing to hold in place, so the maintain-offset dance (temp
+            # group, re-parent every child out and back, ungroup) is pure
+            # overhead. The build hits this constantly: create_sdk_groups
+            # matches every SDK group the moment it is created, while it
+            # is still empty.
+            apply_transform(source, target, pos, rot, scl)
+            opm(source)
+            return
+        child_uids = cmds.ls(src_children, uuid=True)
         tmp_grp = cmds.group(em=True, n=f"{source}_tmp")
         apply_transform(tmp_grp, target, pos, rot, scl)
 
@@ -648,9 +724,8 @@ def set_visibility(node, value, k=1, cb=1, l=0):
     if not cmds.objExists(node):
         logger.error(f"'{node}' does not exist.")
         return
-    if not cmds.attributeQuery('visibility', n=node, ex=1):
-        logger.error(f"'{node}.visibility' does not exist.")
-        return
+    # No attributeQuery for 'visibility': every DAG node has it, and this
+    # runs on every group, control and joint the build touches
     cmds.setAttr(f"{node}.visibility", l=0)
     cmds.setAttr(f"{node}.visibility", value)
     cmds.setAttr(f"{node}.visibility", k=k, cb=cb, l=l)
@@ -666,10 +741,11 @@ def set_transform_visibility(node, k=1, cb=1, l=0):
         cb (int): Channel box flag
         l (int): Lock flag
     """
+    # translate/rotate exist on every transform-derived node, so skip the
+    # per-axis attributeQuery (same reasoning as set_joint_channels)
     for attribute in ['translate', 'rotate']:
         for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=node, ex=1):
-                cmds.setAttr(f"{node}.{attribute}{axis}", k=k, cb=cb, l=l)
+            cmds.setAttr(f"{node}.{attribute}{axis}", k=k, cb=cb, l=l)
 
 
 def set_curve_visibility(curve, visibility=1):
@@ -680,10 +756,11 @@ def set_curve_visibility(curve, visibility=1):
         curve (str): Curve transform
         visibility (int): Visibility value
     """
+    # translate/rotate/scale exist on every transform-derived node, so skip
+    # the per-axis attributeQuery (same reasoning as set_joint_channels)
     for attribute in ['translate', 'rotate', 'scale']:
         for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=curve, ex=1):
-                cmds.setAttr(f"{curve}.{attribute}{axis}", k=0, cb=0, l=1)
+            cmds.setAttr(f"{curve}.{attribute}{axis}", k=0, cb=0, l=1)
     set_visibility(curve, visibility, k=1, cb=0, l=0)
 
 
@@ -695,10 +772,13 @@ def set_group_visibility(group, visibility=1):
         group (str): Group transform
         visibility (int): Visibility value
     """
+    # translate/rotate/scale exist on every transform-derived node, so skip
+    # the per-axis attributeQuery. create_group calls this for every group
+    # the build makes, and the FK SDK stack alone is (NUM_CTRL_FK + 1)
+    # groups per joint (same reasoning as set_joint_channels).
     for attribute in ['translate', 'rotate', 'scale']:
         for axis in 'XYZ':
-            if cmds.attributeQuery(f"{attribute}{axis}", n=group, ex=1):
-                cmds.setAttr(f"{group}.{attribute}{axis}", k=0, cb=0, l=1)
+            cmds.setAttr(f"{group}.{attribute}{axis}", k=0, cb=0, l=1)
     set_visibility(group, visibility, k=0, cb=1, l=0)
 
 
@@ -793,12 +873,14 @@ def set_joint_color(joint, color):
         return
     index = rt_cst.COLOR_OVERRIDE.get(color, color) if isinstance(color, str) \
         else color
+    # The drawing-override plugs exist on every DAG node, so the settable
+    # check alone is enough; colour_skeletons calls this for every rig
+    # joint of every part at the end of each build
     for plug, value in (('overrideEnabled', 1),
                         ('overrideRGBColors', 0),
                         ('overrideColor', index)):
         attr = f'{joint}.{plug}'
-        if cmds.attributeQuery(plug, node=joint, exists=True) and \
-                cmds.getAttr(attr, settable=True):
+        if cmds.getAttr(attr, settable=True):
             cmds.setAttr(attr, value)
 
 

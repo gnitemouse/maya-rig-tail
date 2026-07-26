@@ -259,13 +259,19 @@ def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
     # build_performance_scope: viewport refresh suspended, evaluation
     # manager in DG mode, one undo chunk -- the build runs much faster
     # with no behaviour change (see rig_tail_maya)
-    with rt_mya.build_performance_scope():
-        rt_cln.set_root(root)
-        rt_cln.set_joints(root, start_jnt, end_jnt)
-        rt_cln.cleanup_rig(fk, ik)
-        rt_cln.setup_rig(fk, ik)
-        build_rig_tail(fk, ik)
-        rt_con.connect_rig_tail(fk, ik)
+    # build_timer: logs where the time actually went, per phase
+    with rt_mya.build_performance_scope(), \
+            rt_mya.build_timer('rig_tail_single') as timer:
+        with timer.phase('cleanup'):
+            rt_cln.set_root(root)
+            rt_cln.set_joints(root, start_jnt, end_jnt)
+            rt_cln.cleanup_rig(fk, ik)
+        with timer.phase('setup'):
+            rt_cln.setup_rig(fk, ik)
+        with timer.phase('build'):
+            build_rig_tail(fk, ik)
+        with timer.phase('connect'):
+            rt_con.connect_rig_tail(fk, ik)
 
 def rig_tail_multiple(root=None, fk=True, ik=True):
     '''
@@ -276,14 +282,19 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
         fk (bool): Build FK components
         ik (bool): Build IK components
     '''
-    # See rig_tail_single for the performance scope rationale
-    with rt_mya.build_performance_scope():
-        rt_cln.set_root(root)
-        rt_cln.set_joints_auto()
-        rt_cln.cleanup_rig(fk, ik)
-        rt_cln.setup_rig(fk, ik)
-        build_rig_tail(fk, ik)
-        rt_con.connect_rig_tail(fk, ik)
+    # See rig_tail_single for the performance scope and timer rationale
+    with rt_mya.build_performance_scope(), \
+            rt_mya.build_timer('rig_tail_multiple') as timer:
+        with timer.phase('cleanup'):
+            rt_cln.set_root(root)
+            rt_cln.set_joints_auto()
+            rt_cln.cleanup_rig(fk, ik)
+        with timer.phase('setup'):
+            rt_cln.setup_rig(fk, ik)
+        with timer.phase('build'):
+            build_rig_tail(fk, ik)
+        with timer.phase('connect'):
+            rt_con.connect_rig_tail(fk, ik)
 
 def rig_tail_selected(root=None, fk=True, ik=True):
     '''
@@ -295,21 +306,26 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     if not selected:
         abort_build(logger, 'Select joint to rig tail')
 
-    # See rig_tail_single for the performance scope rationale
-    with rt_mya.build_performance_scope():
-        rt_cln.set_root(root)
-        for jnt in selected:
-            if cmds.objectType(jnt, i='joint'):
-                rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
-                if rigname and rigname not in rt_cst.RIGPARTS:
-                    rt_cst.RIGPARTS.append(rigname)
-                # Selected outright, so build it even if it was excluded
-                rt_che.include_parts([rigname])
-                rt_cln.set_joints(rigname, jnt)
-        rt_cln.cleanup_rig(fk, ik)
-        rt_cln.setup_rig(fk, ik)
-        build_rig_tail(fk, ik)
-        rt_con.connect_rig_tail(fk, ik)
+    # See rig_tail_single for the performance scope and timer rationale
+    with rt_mya.build_performance_scope(), \
+            rt_mya.build_timer('rig_tail_selected') as timer:
+        with timer.phase('cleanup'):
+            rt_cln.set_root(root)
+            for jnt in selected:
+                if cmds.objectType(jnt, i='joint'):
+                    rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
+                    if rigname and rigname not in rt_cst.RIGPARTS:
+                        rt_cst.RIGPARTS.append(rigname)
+                    # Selected outright, so build it even if it was excluded
+                    rt_che.include_parts([rigname])
+                    rt_cln.set_joints(rigname, jnt)
+            rt_cln.cleanup_rig(fk, ik)
+        with timer.phase('setup'):
+            rt_cln.setup_rig(fk, ik)
+        with timer.phase('build'):
+            build_rig_tail(fk, ik)
+        with timer.phase('connect'):
+            rt_con.connect_rig_tail(fk, ik)
 
 # SETUP: TAIL SKELETON =================================================
 

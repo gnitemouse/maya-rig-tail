@@ -349,6 +349,8 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
         prev_sdk_grp = None
         first_sdk_grp = None
         last_sdk_grp = None
+        # Read the joint's position label once, not once per SDK layer
+        joint_pos = cmds.getAttr(f'{jnt}.joint_pos')
 
         # Create NUM_CTRL_FK + 1 SDK groups
         for idx in range(rt_cst.NUM_CTRL_FK+1):
@@ -362,7 +364,7 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
 
             if idx > 0:
                 # Set joint_pos attribute on SDK group (copy from joint)
-                v = cmds.getAttr(f'{jnt}.joint_pos')
+                v = joint_pos
                 if cmds.attributeQuery('joint_pos', n=sdk_grp, ex=1):
                     cmds.setAttr(f'{sdk_grp}.joint_pos', l=0)
                     cmds.addAttr(f'{sdk_grp}.joint_pos', e=1, at='float',

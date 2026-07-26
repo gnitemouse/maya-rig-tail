@@ -153,51 +153,63 @@ def setup_tails(root=None, dry_run=None):
     if root:
         rt_cln.set_root(root)
 
-    # Detect over the FULL roster (cheap, non-destructive) so JOINTS_BN is
-    # populated for excluded parts too - the interactive roll_chain fix-up
-    # still needs them. Everything destructive below is filtered to the
-    # active parts.
-    found = rt_cln.detect_joints_bn()
-    if not found:
-        logger.warning('Setup: no BN joints found for any RIGPART')
-        return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
-                'missing_geo': [], 'excluded': []}
+    # Same performance scope the build entry points use (viewport refresh
+    # suspended, evaluation manager in DG mode, one undo chunk). Setup
+    # rewrites the world matrix of every joint in every chain, and each
+    # write would otherwise trigger a redraw and an EM graph rebuild -
+    # exactly the churn the build already avoids. See rig_tail_maya.
+    with rt_mya.build_performance_scope('rig_tail setup'), \
+            rt_mya.build_timer('setup_tails') as timer:
+        # Detect over the FULL roster (cheap, non-destructive) so JOINTS_BN
+        # is populated for excluded parts too - the interactive roll_chain
+        # fix-up still needs them. Everything destructive below is filtered
+        # to the active parts.
+        with timer.phase('detect'):
+            found = rt_cln.detect_joints_bn()
+        if not found:
+            logger.warning('Setup: no BN joints found for any RIGPART')
+            return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
+                    'missing_geo': [], 'excluded': []}
 
-    included = set(_active())
-    active = [p for p in found if p in included]
-    excluded = [p for p in found if p not in included]
-    if excluded:
-        logger.info(f'Setup: skipping {len(excluded)} excluded rig part(s): '
-                    f'{", ".join(excluded)}')
+        included = set(_active())
+        active = [p for p in found if p in included]
+        excluded = [p for p in found if p not in included]
+        if excluded:
+            logger.info(f'Setup: skipping {len(excluded)} excluded rig '
+                        f'part(s): {", ".join(excluded)}')
 
-    # Warn about parts whose mesh does not follow the naming convention:
-    # they are not unbound before re-orienting (so their mesh distorts) nor
-    # rebound by the build. Reported so the meshes can be renamed.
-    missing_geo = rt_mya.report_missing_geometry(active)
+        # Warn about parts whose mesh does not follow the naming convention:
+        # they are not unbound before re-orienting (so their mesh distorts)
+        # nor rebound by the build. Reported so the meshes can be renamed.
+        missing_geo = rt_mya.report_missing_geometry(active)
 
-    preview = dry_run if dry_run is not None \
-        else bool(_cst('MIRROR_DRYRUN'))
-    skinned = []
-    if not preview:
-        # Excluded parts are deliberately left bound: nothing is going to
-        # move their joints, so unbinding would only throw away their skin.
-        # With PRESERVE_SKIN on, already-skinned meshes are left bound too
-        # and re-baselined below instead of losing their painted weights.
-        for rigname in active:
-            if rt_mya.unbind_geometry(rigname):
-                skinned.append(rigname)
+        preview = dry_run if dry_run is not None \
+            else bool(_cst('MIRROR_DRYRUN'))
+        skinned = []
+        if not preview:
+            # Excluded parts are deliberately left bound: nothing is going
+            # to move their joints, so unbinding would only throw away
+            # their skin. With PRESERVE_SKIN on, already-skinned meshes are
+            # left bound too and re-baselined below instead of losing their
+            # painted weights.
+            with timer.phase('unbind'):
+                for rigname in active:
+                    if rt_mya.unbind_geometry(rigname):
+                        skinned.append(rigname)
 
-    result = run_setup(dry_run=dry_run)
+        with timer.phase('orient/mirror'):
+            result = run_setup(dry_run=dry_run)
 
-    # Now that the joints have moved, tell each preserved skinCluster that
-    # this is its rest pose. Until this runs the mesh is dragged out of
-    # shape by the re-orient.
-    for rigname in skinned:
-        rt_mya.rebaseline_skin(rigname)
+        # Now that the joints have moved, tell each preserved skinCluster
+        # that this is its rest pose. Until this runs the mesh is dragged
+        # out of shape by the re-orient.
+        with timer.phase('rebaseline'):
+            for rigname in skinned:
+                rt_mya.rebaseline_skin(rigname)
 
-    result['missing_geo'] = missing_geo
-    result['excluded'] = excluded
-    return result
+        result['missing_geo'] = missing_geo
+        result['excluded'] = excluded
+        return result
 
 
 def run_setup(dry_run=None):
@@ -652,25 +664,30 @@ def roll_chain(rigname, degrees):
     idx = {'x': 0, 'y': 1, 'z': 2}
     ai, ui = idx.get(aim_axis, 0), idx.get(up_axis, 2)
 
-    skinned = rt_mya.unbind_geometry(rigname)
+    # Rewrites every joint's world matrix, same as the batch orient, so it
+    # gets the same performance scope (see setup_tails)
+    with rt_mya.build_performance_scope('rig_tail roll'):
+        skinned = rt_mya.unbind_geometry(rigname)
 
-    # Capture the end joint BEFORE re-orienting its parent, which would
-    # swing it (see _end_joint_position).
-    ee_pos = _end_joint_position(joints[-1])
+        # Capture the end joint BEFORE re-orienting its parent, which would
+        # swing it (see _end_joint_position).
+        ee_pos = _end_joint_position(joints[-1])
 
-    # Roll each joint's current frame about its own aim axis.
-    frames = []
-    for j in joints:
-        m = cmds.xform(j, q=True, ws=True, matrix=True)
-        rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]])
-        aim = _norm(rows[ai])
-        up = _roll_about(_norm(rows[ui]), aim, degrees)
-        frames.append(_assign_rows(aim, up, aim_axis, up_axis))
-    count = _apply_frames(joints, frames, dry_run=False)
-    _orient_end_joint(joints[-1], frames[-1], dry_run=False, position=ee_pos)
-    if skinned:
-        rt_mya.rebaseline_skin(rigname)
-    _clear_rest_pose()
+        # Roll each joint's current frame about its own aim axis.
+        frames = []
+        for j in joints:
+            m = cmds.xform(j, q=True, ws=True, matrix=True)
+            rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]],
+                    [m[8], m[9], m[10]])
+            aim = _norm(rows[ai])
+            up = _roll_about(_norm(rows[ui]), aim, degrees)
+            frames.append(_assign_rows(aim, up, aim_axis, up_axis))
+        count = _apply_frames(joints, frames, dry_run=False)
+        _orient_end_joint(joints[-1], frames[-1], dry_run=False,
+                          position=ee_pos)
+        if skinned:
+            rt_mya.rebaseline_skin(rigname)
+        _clear_rest_pose()
     logger.info(f'Roll: {rigname} rolled {degrees:g} deg about {aim_axis} '
                 f'({count} joints)')
     return count

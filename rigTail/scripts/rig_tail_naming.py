@@ -24,6 +24,33 @@ import re
 
 logger = logger_setup(__name__)
 
+# Compiled f-string per naming template. fstr is the most-called function
+# in the build (every node name, in every phase, goes through it) and
+# eval() on a string re-parses and re-compiles the template on every call.
+# Compiling a given source string is deterministic, so only the code
+# object is cached; the evaluation itself still runs per call and still
+# sees the caller's live values. Bounded by the number of templates in
+# rig_tail_constants, so it needs no eviction.
+_TEMPLATE_CODE = {}
+
+
+def _template_code(template):
+    """
+    Compiled f-string expression for a naming template.
+
+    Arguments:
+        template (str): Naming template with placeholders
+
+    Return:
+        code: Compiled 'eval' code object for the template
+    """
+    code = _TEMPLATE_CODE.get(template)
+    if code is None:
+        code = compile(f"f'''{template}'''", '<rig_tail naming template>',
+                       'eval')
+        _TEMPLATE_CODE[template] = code
+    return code
+
 
 def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):
     """
@@ -59,7 +86,10 @@ def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):
         NN = f"{DFORMAT.format(int(NN))}"
     if nn != '' and nn != 'ee':
         nn = f"{DFORMAT.format(int(nn))}"
-    name_eval = eval(f"f'''{template}'''")
+    # eval on the cached code object, not on the template text: it runs in
+    # this frame either way, so the locals above are still what the
+    # placeholders resolve against
+    name_eval = eval(_template_code(template))
     # Clean double / leading / trailing underscores
     parts = name_eval.split('_')
     name = '_'.join([p for p in parts if p])

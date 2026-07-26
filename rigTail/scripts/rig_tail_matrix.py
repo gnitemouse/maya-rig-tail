@@ -82,13 +82,14 @@ def build_matrix_offset_network(rigname, fk, ik):
     # Zero everything before building network (no bind-time baking)
     identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
+    # jointOrient exists on every joint and these are all joints, so no
+    # per-joint attributeQuery
     for bn_jnt in joints:
         cmds.setAttr(f'{bn_jnt}.offsetParentMatrix', *identity, type='matrix')
         cmds.setAttr(f'{bn_jnt}.translate', 0, 0, 0)
         cmds.setAttr(f'{bn_jnt}.rotate', 0, 0, 0)
         cmds.setAttr(f'{bn_jnt}.scale', 1, 1, 1)
-        if cmds.attributeQuery('jointOrient', node=bn_jnt, exists=True):
-            cmds.setAttr(f'{bn_jnt}.jointOrient', 0, 0, 0)
+        cmds.setAttr(f'{bn_jnt}.jointOrient', 0, 0, 0)
 
     logger.debug(f'{rigname}: Building runtime matrix networks')
 
@@ -128,11 +129,23 @@ def _get_driver_joint(rigname, index, fk, ik):
     return None
 
 
+# Which output attribute composeMatrix carries, resolved once per session.
+# It is a property of the running Maya, not of the node, so the answer
+# cannot differ between nodes - but this is asked for every FX layer of
+# every BN joint of every rig part, which was up to two attributeQuery
+# calls each. None until the first detection.
+_COMPOSE_OUTPUT = None
+
+
 def _get_compose_output_attr(node):
     '''
     Detect composeMatrix output attribute name (Maya version-dependent).
     Maya 2020+: .outputMatrix
     Maya 2019-: .output
+
+    Detected once and cached for the session (see _COMPOSE_OUTPUT); an
+    unrecognized node is not cached, so a genuine oddity still warns every
+    time rather than poisoning the answer for the rest of the build.
 
     Arguments:
         node (str): composeMatrix node name
@@ -140,16 +153,20 @@ def _get_compose_output_attr(node):
     Return:
         str: Full attribute path (e.g. 'node.outputMatrix' or 'node.output')
     '''
+    global _COMPOSE_OUTPUT
+    if _COMPOSE_OUTPUT:
+        return f'{node}.{_COMPOSE_OUTPUT}'
     if cmds.attributeQuery('outputMatrix', node=node, exists=True):
-        return f'{node}.outputMatrix'
+        _COMPOSE_OUTPUT = 'outputMatrix'
     elif cmds.attributeQuery('output', node=node, exists=True):
-        return f'{node}.output'
+        _COMPOSE_OUTPUT = 'output'
     else:
         logger.warning(
             f'Unknown composeMatrix output attr on {node}, '
             f'defaulting to .outputMatrix'
         )
         return f'{node}.outputMatrix'
+    return f'{node}.{_COMPOSE_OUTPUT}'
 
 
 def _get_parent_squash_inverse(rigname, parent_index):
