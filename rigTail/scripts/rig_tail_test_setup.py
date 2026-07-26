@@ -15,8 +15,8 @@ Two kinds of test:
   SCENE tests - run on the loaded skeleton and are MUTATING: they re-orient
     / mirror / roll real joints through the same entry points the UI uses,
     then verify the result. Like a real Setup run they detach the build's
-    offsetParentMatrix drivers, unbind geometry and clear the rest pose, so
-    RELOAD THE SCENE afterwards before building. Each scene test saves and
+    offsetParentMatrix drivers, re-baseline (or unbind) geometry and clear
+    the rest pose, so RELOAD THE SCENE afterwards. Each scene test saves and
     restores RIGPARTS and the Setup flags so your config is left untouched.
         run_scene()
 
@@ -39,6 +39,8 @@ Usage:
     rt_ts.test_roll('C_tail', 90)
     rt_ts.test_rigname_from_selection('C_tail')
 
+    rt_ts.check_skin('C_tail')       # safe: what is bound, and drift
+
 Functions:
   Runners
     run_math: every math test (safe), with a PASS/FAIL summary
@@ -60,7 +62,11 @@ Functions:
         for either MIRROR_BEHAVIOR
     test_mirror_joints: MIRROR_JOINTS makes the sides mirror positions
     test_roll: roll_chain keeps positions and aim, rotates up by the angle
+    test_skin_rebaseline: PRESERVE_SKIN keeps a bound mesh and its weights
+        exactly where they were through a re-orient
     test_rigname_from_selection: a selected joint resolves to its RIGPART
+  Reports (read-only)
+    check_skin: what is bound to a rig part, and its rest-pose drift
 '''
 import math
 
@@ -609,6 +615,138 @@ def test_roll(rigname=DEFAULT_CHAIN, angle=90.0):
     return ok
 
 
+def _mesh_points(geo):
+    ''' World-space vertex positions of a mesh, as a flat list. '''
+    return cmds.xform(f'{geo}.vtx[*]', q=True, ws=True, t=True)
+
+
+def _sample_weights(skincluster, geo, count=20):
+    '''
+    Painted weights for a spread of vertices: {vertex index: [weights]}.
+    A sample, not the whole mesh - enough to catch a rebind, cheap on a
+    dense body mesh.
+    '''
+    total = cmds.polyEvaluate(geo, v=True)
+    if not isinstance(total, int) or total < 1:
+        return {}
+    step = max(1, total // count)
+    return {i: cmds.skinPercent(skincluster, f'{geo}.vtx[{i}]', q=True, v=True)
+            for i in range(0, total, step)}
+
+
+def test_skin_rebaseline(rigname=DEFAULT_CHAIN):
+    '''
+    PRESERVE_SKIN: re-orienting a BOUND chain must not move the mesh or
+    touch its weights.
+
+    The point of the re-baseline. Snapshots the deformed mesh and a sample
+    of its painted weights, runs a real orient over the bound skeleton, and
+    checks the mesh landed back on its modelled shape with the same
+    skinCluster and the same weights. Without the re-baseline the mesh is
+    dragged by however far the joints turned; with the old behaviour the
+    cluster is deleted and the weights are gone.
+
+    Skips (returns None) when the part has no skinned geometry - bind the
+    mesh first, or run this on a part that is bound.
+    '''
+    import rig_tail_maya as rt_mya
+    if not rt_mya.preserve_skin():
+        print('  test_skin_rebaseline: PRESERVE_SKIN is off, skipping')
+        return None
+    geos = [g for g in rt_mya.find_geometry_for_rigname(rigname)
+            if rt_mya.find_skincluster(g)]
+    if not geos:
+        print(f'  test_skin_rebaseline: no skinned geometry for {rigname}, '
+              f'skipping')
+        return None
+
+    before = {}
+    for geo in geos:
+        skincluster = rt_mya.find_skincluster(geo)
+        before[geo] = (skincluster, _mesh_points(geo),
+                       _sample_weights(skincluster, geo))
+
+    _run_setup_on([rigname], orient=True)
+
+    ok = True
+    for geo, (skincluster, points, weights) in before.items():
+        leaf = geo.split('|')[-1]
+        now = rt_mya.find_skincluster(geo)
+        ok &= _verdict(f'skin {leaf} cluster kept', now == skincluster,
+                       f"was '{skincluster}', now '{now}'")
+        if now != skincluster:
+            continue
+
+        after = _mesh_points(geo)
+        drift = 0.0
+        if len(after) == len(points):
+            for i in range(0, len(points), 3):
+                drift = max(drift, math.dist(points[i:i + 3], after[i:i + 3]))
+            ok &= _verdict(f'skin {leaf} mesh did not move', drift < POS_TOL,
+                           f'max vertex move={drift:.5f}')
+        else:
+            ok &= _verdict(f'skin {leaf} vertex count kept', False,
+                           f'{len(points) // 3} -> {len(after) // 3}')
+
+        after_w = _sample_weights(skincluster, geo)
+        same = all(len(after_w.get(v, [])) == len(w)
+                   and all(abs(x - y) < 1e-5 for x, y in zip(w, after_w[v]))
+                   for v, w in weights.items())
+        ok &= _verdict(f'skin {leaf} weights unchanged', same,
+                       f'{len(weights)} vertices sampled')
+    return ok
+
+
+def check_skin(rigname=DEFAULT_CHAIN):
+    '''
+    Read-only report: what is bound to a rig part and how far its rest pose
+    has drifted. Run before test_skin_rebaseline to see the starting state,
+    or after a build to explain a mesh that sits in the wrong place.
+
+    Non-mutating - queries only.
+    '''
+    import rig_tail_maya as rt_mya
+    joints = rt_mya._chain_influence_joints(rigname) \
+        if _chain_joints(rigname) else []
+    geos = rt_mya.find_geometry_for_rigname(rigname)
+    print(f'\n--- SKIN CHECK ({rigname}) ---')
+    print(f'PRESERVE_SKIN={rt_mya.preserve_skin()}, '
+          f'{len(joints)} chain joint(s), {len(geos)} matching mesh(es)')
+    if not geos:
+        print('  no geometry matches this rig part '
+              "('<rigname>_geo', '<rigname>', '<rigname>_NN')")
+        return False
+
+    ok = True
+    for geo in geos:
+        leaf = geo.split('|')[-1]
+        skincluster = rt_mya.find_skincluster(geo)
+        if not skincluster:
+            print(f"  {leaf}: NOT SKINNED - the build will bind it fresh")
+            continue
+        indices = rt_mya.skin_influence_indices(skincluster)
+        total = len(cmds.skinCluster(skincluster, q=True, inf=True) or [])
+        bound = [j for j in joints if j.split('|')[-1] in indices]
+        missing = [j for j in joints if j.split('|')[-1] not in indices]
+        drift = 0.0
+        for jnt in bound:
+            index = indices[jnt.split('|')[-1]]
+            pos, _ = rt_mya._rest_drift(
+                cmds.getAttr(f'{skincluster}.bindPreMatrix[{index}]'), jnt)
+            drift = max(drift, pos)
+        print(f"  {leaf}: '{skincluster}', {total} influence(s), "
+              f'{len(bound)}/{len(joints)} of this chain, '
+              f'max rest drift={drift:.5f}')
+        if missing:
+            print(f'    not influences (mesh will not follow them): '
+                  f'{", ".join(j.split("|")[-1] for j in missing)}')
+        if drift > POS_TOL:
+            print(f'    rest pose is STALE by {drift:.5f} - the mesh is '
+                  f'dragged; rebaseline_skin({rigname!r}) fixes it')
+            ok = False
+    return ok
+
+
 def test_rigname_from_selection(rigname=DEFAULT_CHAIN):
     '''
     rigname_from_selection resolves the RIGPART from a selected joint.
@@ -673,14 +811,16 @@ def run_scene(base=DEFAULT_PAIR_BASE, chain=DEFAULT_CHAIN):
     Run every MUTATING scene test on the loaded skeleton and print a summary.
 
     Re-orients, mirrors and rolls real joints: like a real Setup run it
-    detaches offsetParentMatrix drivers, unbinds geometry and clears the
-    rest pose. RELOAD THE SCENE afterwards before building.
+    detaches offsetParentMatrix drivers, re-baselines (or unbinds) geometry
+    and clears the rest pose. RELOAD THE SCENE afterwards before building.
     '''
-    print('\n*** run_scene MUTATES the skeleton (unbinds geometry, detaches '
-          'OPM). Reload the scene before building. ***')
+    print('\n*** run_scene MUTATES the skeleton (re-baselines or unbinds '
+          'geometry, detaches OPM). Reload the scene before building. ***')
     tests = [
         (f'test_orient({chain})', lambda: test_orient(chain)),
         (f'test_end_joint({chain})', lambda: test_end_joint(chain)),
+        (f'test_skin_rebaseline({chain})',
+         lambda: test_skin_rebaseline(chain)),
         (f'test_mirror_orient({base})', lambda: test_mirror_orient(base)),
         (f'test_mirror_joints({base})', lambda: test_mirror_joints(base)),
         (f'test_roll({chain})', lambda: test_roll(chain)),

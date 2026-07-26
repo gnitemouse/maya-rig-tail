@@ -48,11 +48,15 @@ interactive roll still reaches it) but is never oriented, never mirrored,
 and never unbound; excluding one side of an L/R pair stops that pair
 mirroring altogether.
 
-Re-orienting or moving a bound joint would drag the mesh, so the affected
-geometry is unbound first and left for the build to rebind.
+Re-orienting or moving a bound joint would drag the mesh. With
+PRESERVE_SKIN on (the default) the skin stays bound and is RE-BASELINED
+afterwards - each moved joint's new world matrix is written into the
+skinCluster's bindPreMatrix, so the new pose becomes the rest pose and
+every painted weight survives. With it off, the affected geometry is
+unbound first and left for the build to rebind, losing its weights.
 
 Functions:
-    setup_tails: entry point; detect joints, unbind geo, run the phase
+    setup_tails: entry point; detect joints, run the phase, re-baseline skin
     run_setup: run the enabled batch orient/mirror steps on rt_cst.JOINTS_BN
     orient_chains: aim-orient every BN chain to remove twist (ORIENT_JOINTS)
     mirror_chains: reflect each L/R pair's orientation and/or positions
@@ -90,6 +94,7 @@ _CST_DEFAULTS = {
     'MIRROR_BEHAVIOR': 'symmetric',  # 'symmetric' | 'parallel' (see mirror_frames)
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
     'ORIENT_UP_AXIS': 'z',          # local axis aligned to the plane normal
+    'PRESERVE_SKIN': True,          # re-baseline skinned meshes, never unbind
 }
 for _name, _value in _CST_DEFAULTS.items():
     if not hasattr(rt_cst, _name):
@@ -124,8 +129,10 @@ def setup_tails(root=None, dry_run=None):
 
     Detects the BN chains for every RIGPART, then runs the enabled
     orientation steps (run_setup). Re-orienting a bound joint distorts the
-    mesh, so the affected geometry is unbound first and left for the build
-    to rebind. Run this once on the raw skeleton, verify, then build.
+    mesh, so skinned geometry is re-baselined onto the new pose afterwards
+    (PRESERVE_SKIN, weights kept) or, with that off, unbound first and left
+    for the build to rebind. Run this once on the raw skeleton, verify,
+    then build.
 
     Usage:
         import rig_tail_setup as rt_set
@@ -168,13 +175,24 @@ def setup_tails(root=None, dry_run=None):
 
     preview = dry_run if dry_run is not None \
         else bool(_cst('MIRROR_DRYRUN'))
+    skinned = []
     if not preview:
         # Excluded parts are deliberately left bound: nothing is going to
         # move their joints, so unbinding would only throw away their skin.
+        # With PRESERVE_SKIN on, already-skinned meshes are left bound too
+        # and re-baselined below instead of losing their painted weights.
         for rigname in active:
-            rt_mya.unbind_geometry(rigname)
+            if rt_mya.unbind_geometry(rigname):
+                skinned.append(rigname)
 
     result = run_setup(dry_run=dry_run)
+
+    # Now that the joints have moved, tell each preserved skinCluster that
+    # this is its rest pose. Until this runs the mesh is dragged out of
+    # shape by the re-orient.
+    for rigname in skinned:
+        rt_mya.rebaseline_skin(rigname)
+
     result['missing_geo'] = missing_geo
     result['excluded'] = excluded
     return result
@@ -606,8 +624,10 @@ def roll_chain(rigname, degrees):
     A uniform roll adds no relative twist between joints.
 
     Meant to be run on demand from the UI after the batch orient/mirror.
-    Unbinds the chain's geometry first (a bound joint would drag the mesh)
-    and clears any stored rest pose, both left for the build to redo.
+    A bound joint would drag the mesh, so the chain's geometry is either
+    re-baselined onto the rolled pose (PRESERVE_SKIN, weights kept) or
+    unbound and left for the build to rebind. Clears the stored rest pose
+    either way.
 
     Arguments
         rigname (str): the RIGPART whose chain to roll.
@@ -630,7 +650,7 @@ def roll_chain(rigname, degrees):
     idx = {'x': 0, 'y': 1, 'z': 2}
     ai, ui = idx.get(aim_axis, 0), idx.get(up_axis, 2)
 
-    rt_mya.unbind_geometry(rigname)
+    skinned = rt_mya.unbind_geometry(rigname)
 
     # Capture the end joint BEFORE re-orienting its parent, which would
     # swing it (see _end_joint_position).
@@ -646,6 +666,8 @@ def roll_chain(rigname, degrees):
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
     count = _apply_frames(joints, frames, dry_run=False)
     _orient_end_joint(joints[-1], frames[-1], dry_run=False, position=ee_pos)
+    if skinned:
+        rt_mya.rebaseline_skin(rigname)
     _clear_rest_pose()
     logger.info(f'Roll: {rigname} rolled {degrees:g} deg about {aim_axis} '
                 f'({count} joints)')

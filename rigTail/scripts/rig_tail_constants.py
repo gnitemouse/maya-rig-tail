@@ -71,6 +71,28 @@ MAIN_CONTROLLER = True
 # Force Rebuild (even if joints are unchanged)
 FORCE_REBUILD = False
 
+# SKIN =================================================================
+# Keep existing skinClusters and their painted weights.
+#
+# The rig binds geometry named after each rig part to that part's BN
+# joints, with a plain closest-distance bind. That is only ever right the
+# FIRST time: once weights have been painted, a rebind throws the paint
+# work away, and a mesh shared with the rest of the character (a body
+# skinned to head and limb joints as well as to a tail) loses those
+# influences entirely.
+#
+# With this on:
+#   - Setup does NOT unbind before re-orienting. It re-baselines instead,
+#     writing each moved joint's new world matrix into the skinCluster's
+#     bindPreMatrix so the new pose becomes the rest pose (weights kept).
+#   - A rebuild does NOT unbind, and binding a mesh that is already
+#     skinned adds any missing rig joints as influences at weight 0
+#     instead of deleting the cluster. New influences start weightless, so
+#     paint them in - the mesh will not follow the tail until you do.
+# With it off the old behaviour returns: unbind, re-orient, rebind from
+# scratch, weights lost.
+PRESERVE_SKIN = True
+
 # SETUP PHASE ==========================================================
 # Skeleton-prep options, run by the separate 'Tail Rig Setup' step
 # (rig_tail_setup) BEFORE the build, never during it. Three batch

@@ -44,6 +44,11 @@ Functions:
     report_missing_geometry: Warn about rig parts with no matching mesh
     unbind_geometry: Unbind geometry from rig
     unbind_geometry_all: Unbind all geometry in scene
+    preserve_skin: Read the PRESERVE_SKIN setting
+    find_skincluster: First skinCluster in a node's history
+    skin_influence_indices: Influence -> sparse logical index map
+    add_missing_influences: Add rig joints to a cluster at weight 0
+    rebaseline_skin: Accept the joints' current pose as the skin's rest
     bind_skincluster: Create skinCluster binding
     unbind_skincluster: Unbind skinCluster from node
 """
@@ -1306,7 +1311,8 @@ def bind_geometry(rigname):
             if is_geometry(geo):
                 geo_leaf = geo.split('|')[-1]
                 bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
-                                 f'{geo_leaf}_skinCluster')
+                                 f'{geo_leaf}_skinCluster',
+                                 preserve=preserve_skin())
                 bound.append(geo_leaf)
     if not bound:
         logger.trace(f'{rigname}: No geometry named after rig part, skip bind')
@@ -1364,16 +1370,38 @@ def report_missing_geometry(rignames):
     return missing
 
 
-def unbind_geometry(rigname):
+def unbind_geometry(rigname, force=False):
     '''
     Get geometry and unbind skinclusters.
 
+    With rt_cst.PRESERVE_SKIN on, geometry that already carries a
+    skinCluster is LEFT BOUND and returned instead: its weights are paint
+    work that an unbind destroys. The caller is responsible for the pose
+    those meshes are left in -- Setup re-baselines them (rebaseline_skin)
+    after moving the joints, and the build's bind_geometry reuses the
+    cluster rather than rebuilding it.
+
     Arguments:
         rigname (str): Rig component name
+        force (bool): Unbind even when PRESERVE_SKIN is on
+
+    Return:
+        list: geometry deliberately left bound (empty when everything was
+        unbound).
     '''
     logger.trace(f"{rigname}: Unbind geometry")
+    preserve = not force and preserve_skin()
+    kept = []
     for geo in find_geometry_for_rigname(rigname):
+        if preserve and find_skincluster(geo):
+            kept.append(geo)
+            continue
         unbind_skincluster(geo)
+    if kept:
+        logger.debug(f'{rigname}: PRESERVE_SKIN, keeping the skin on '
+                     f'{len(kept)} mesh(es): '
+                     f'{", ".join(g.split("|")[-1] for g in kept)}')
+    return kept
 
 
 def unbind_geometry_all():
@@ -1414,7 +1442,234 @@ def _delete_orphan_bindposes(poses):
             cmds.delete(pose)
 
 
-def bind_skincluster(joints, node, name):
+# SKIN PRESERVATION ----------------------------------------------------
+
+def preserve_skin():
+    '''
+    Read rt_cst.PRESERVE_SKIN, defaulting to on.
+
+    rig_tail_constants is never reloaded (it holds session state), so a
+    Maya session started before this setting existed does not have it;
+    fall back to the shipped default rather than silently rebinding.
+
+    Return:
+        bool: True when existing skinClusters must be kept.
+    '''
+    return bool(getattr(rt_cst, 'PRESERVE_SKIN', True))
+
+
+def find_skincluster(node):
+    '''
+    First skinCluster in a node's history.
+
+    Arguments:
+        node (str): Geometry transform or shape
+
+    Return:
+        str or None: skinCluster node name.
+    '''
+    if not cmds.objExists(node):
+        return None
+    skins = cmds.ls(cmds.listHistory(node), type='skinCluster') or []
+    return skins[0] if skins else None
+
+
+def _leaf(name):
+    ''' Short name of a DAG path ('|geo|body' -> 'body'). '''
+    return name.split('|')[-1]
+
+
+def skin_influence_indices(skincluster):
+    '''
+    Map each influence to its logical index on the skinCluster.
+
+    Influence indices are SPARSE -- a mesh that has had influences added
+    and removed over its life ends up with gaps (0,1,2,3,14,15,26...) --
+    so bindPreMatrix[i] has to be found through the matrix connections,
+    never by counting the influence list.
+
+    Arguments:
+        skincluster (str): skinCluster node
+
+    Return:
+        dict: {short joint name: logical index}
+    '''
+    conns = cmds.listConnections(f'{skincluster}.matrix', s=True, d=False,
+                                 p=True, c=True) or []
+    indices = {}
+    # Pairs: [<skinCluster>.matrix[i], <joint>.worldMatrix[0], ...]
+    for i in range(0, len(conns) - 1, 2):
+        dest, src = conns[i], conns[i + 1]
+        try:
+            index = int(dest.rsplit('[', 1)[-1].rstrip(']'))
+        except ValueError:
+            continue
+        indices[_leaf(src.split('.')[0])] = index
+    return indices
+
+
+def add_missing_influences(skincluster, joints):
+    '''
+    Add joints that are not yet influences of the skinCluster, at weight 0.
+
+    Adding at weight 0 leaves every existing weight exactly as painted:
+    the new joints simply do nothing until they are painted in. The
+    alternative -- deleting the cluster and rebinding -- is what destroys
+    an artist's work on a shared mesh.
+
+    Arguments:
+        skincluster (str): skinCluster node
+        joints (list): Joints that should influence the mesh
+
+    Return:
+        list: joints actually added
+    '''
+    existing = {_leaf(i) for i in
+                (cmds.skinCluster(skincluster, q=True, inf=True) or [])}
+    added = []
+    for jnt in joints:
+        if _leaf(jnt) in existing or not cmds.objExists(jnt):
+            continue
+        try:
+            # lw/wt: join the cluster contributing nothing. The lock is
+            # released again so the weights stay paintable.
+            cmds.skinCluster(skincluster, e=True, ai=jnt, lw=True, wt=0.0)
+            if cmds.attributeQuery('liw', node=jnt, exists=True):
+                cmds.setAttr(f'{jnt}.liw', 0)
+            added.append(jnt)
+        except Exception as err:
+            logger.warning(f"Could not add '{jnt}' as an influence of "
+                           f"'{skincluster}': {err}")
+    return added
+
+
+def _chain_influence_joints(rigname):
+    '''
+    The rig part's BN joints plus its end ('ee') joint.
+
+    get_joint_chain stops before the end joint, so JOINTS_BN excludes it --
+    but Setup re-orients it too and it is frequently an influence, so a
+    re-baseline that skipped it would leave the mesh's tip behind.
+
+    Arguments:
+        rigname (str): Rig component name
+
+    Return:
+        list: joints to re-baseline
+    '''
+    joints = list(rt_cst.JOINTS_BN.get(rigname) or [])
+    if not joints:
+        return []
+    for child in cmds.listRelatives(joints[-1], c=True, typ='joint') or []:
+        if child not in joints:
+            joints.append(child)
+    return joints
+
+
+def _rest_drift(bind_pre, joint):
+    '''
+    How far a joint has moved since the skinCluster was baselined.
+
+    bindPreMatrix holds the inverse of the joint's world matrix at bind
+    time, so bindPreMatrix * worldMatrix is the identity while the joint
+    sits where it was bound; its translation is the drift.
+
+    Arguments:
+        bind_pre (list): Stored bindPreMatrix (16 floats)
+        joint (str): Influence joint
+
+    Return:
+        tuple: (position drift in scene units, max rotation-term delta)
+    '''
+    delta = om.MMatrix(bind_pre) * om.MMatrix(
+        cmds.getAttr(f'{joint}.worldMatrix[0]'))
+    pos = om.MVector(delta[12], delta[13], delta[14]).length()
+    rot = max(abs(delta[r * 4 + c] - (1.0 if r == c else 0.0))
+              for r in range(3) for c in range(3))
+    return pos, rot
+
+
+def rebaseline_skin(rigname, tolerance=None):
+    '''
+    Accept the joints' CURRENT pose as the skin's rest pose.
+
+    Setup re-orients, and may move, the BN joints. With the skin left
+    bound that drags the mesh -- so instead of unbinding (which throws the
+    painted weights away), write each moved influence's new world matrix
+    into the skinCluster's bindPreMatrix. The skinCluster then reads the
+    new pose as the pose it was bound in, and the mesh snaps back to its
+    modelled shape with every weight intact.
+
+    Only the rig part's own joints are re-baselined. Other influences on a
+    shared mesh (a body skinned to head and limb joints as well) did not
+    move and are left alone. Joints still within tolerance are skipped, so
+    a run that changed nothing writes nothing.
+
+    Arguments:
+        rigname (str): Rig component name
+        tolerance (float): Position drift treated as unchanged. Defaults
+            to rt_cst.JOINT_POS_TOLERANCE.
+
+    Return:
+        int: influences re-baselined
+    '''
+    joints = _chain_influence_joints(rigname)
+    if not joints:
+        return 0
+    if tolerance is None:
+        tolerance = getattr(rt_cst, 'JOINT_POS_TOLERANCE', 0.001)
+
+    total = 0
+    for geo in find_geometry_for_rigname(rigname):
+        skincluster = find_skincluster(geo)
+        if not skincluster:
+            continue
+        indices = skin_influence_indices(skincluster)
+        updated, max_drift = 0, 0.0
+        for jnt in joints:
+            index = indices.get(_leaf(jnt))
+            if index is None:
+                continue
+            plug = f'{skincluster}.bindPreMatrix[{index}]'
+            pos, rot = _rest_drift(cmds.getAttr(plug), jnt)
+            max_drift = max(max_drift, pos)
+            if pos <= tolerance and rot <= 1e-5:
+                continue
+            cmds.setAttr(plug, cmds.getAttr(f'{jnt}.worldInverseMatrix[0]'),
+                         type='matrix')
+            updated += 1
+        _reset_bindpose(skincluster, joints)
+        total += updated
+        if updated:
+            logger.info(f'{rigname}: re-baselined {updated} influence(s) on '
+                        f"'{_leaf(geo)}' (max move {max_drift:.4f}); "
+                        f'skin weights kept')
+        else:
+            logger.debug(f"{rigname}: '{_leaf(geo)}' rest pose unchanged, "
+                         f'no re-baseline needed')
+    return total
+
+
+def _reset_bindpose(skincluster, joints):
+    '''
+    Re-stamp the bindPose for joints whose rest pose was just rewritten,
+    so 'Go to Bind Pose' and any later rebind agree with the skinCluster.
+    Best-effort: a missing or shared bindPose is not worth failing over.
+
+    Arguments:
+        skincluster (str): skinCluster node
+        joints (list): Joints that moved
+    '''
+    poses = cmds.listConnections(f'{skincluster}.bindPose',
+                                 s=True, d=False) or []
+    for pose in poses:
+        try:
+            cmds.dagPose(*joints, reset=True, n=pose)
+        except Exception as err:
+            logger.debug(f"Could not reset bindPose '{pose}': {err}")
+
+
+def bind_skincluster(joints, node, name, preserve=False):
     '''
     Bind joints to the node (an object such as curve or geo),
     creating a skinCluster with the given name.
@@ -1426,10 +1681,18 @@ def bind_skincluster(joints, node, name):
         maximumInfluences: 4
         toSelectedBones: True
 
+    An existing skinCluster with exactly these influences is always
+    reused. One with a DIFFERENT influence set is deleted and rebuilt,
+    unless preserve is on -- then the rig joints are added to it at
+    weight 0 and its weights survive. Only geometry passes preserve: the
+    IK/FK driver curves are rig-owned, rebuilt with the rig, and must be
+    bound to exactly their own joints.
+
     Arguments:
         joints (list): List of joints
         node (str): Object to bind
         name (str): Name for skinCluster
+        preserve (bool): Keep an existing cluster with other influences
 
     Return:
         str: skinCluster node name
@@ -1448,6 +1711,25 @@ def bind_skincluster(joints, node, name):
         existing_influences = cmds.skinCluster(existing_skin[0], q=True, inf=True)
         if existing_influences is not None and set(existing_influences) == set(joints):
             logger.debug(f'Reusing existing skinCluster: {existing_skin[0]}')
+            return existing_skin[0]
+        elif existing_influences is not None and preserve:
+            # A different influence set is the normal case for a mesh the
+            # rig shares with the rest of the character, or one whose
+            # weights have been painted. Join the existing cluster instead
+            # of replacing it: deleting it here is what destroys the paint.
+            added = add_missing_influences(existing_skin[0], joints)
+            if added:
+                logger.warning(
+                    f"'{_leaf(node)}' is already skinned "
+                    f"('{existing_skin[0]}'), so PRESERVE_SKIN kept its "
+                    f"weights and added {len(added)} rig joint(s) as "
+                    f"influences at WEIGHT 0 - the mesh will not follow "
+                    f"this rig part until they are painted in. Set "
+                    f"PRESERVE_SKIN = False to rebind from scratch instead "
+                    f"(which deletes the existing weights).")
+            else:
+                logger.debug(f'Reusing existing skinCluster (superset of the '
+                             f'rig joints): {existing_skin[0]}')
             return existing_skin[0]
         else:
             # Different joints or failed query, need to unbind first

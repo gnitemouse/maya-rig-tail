@@ -166,9 +166,11 @@ it rolls a single chain about its aim axis to turn a
 correctly-oriented-but-wrong-facing chain onto the right plane.
 
 Orientation is written into `jointOrient` with `rotate` left at zero.
-Re-orienting or moving a bound joint would drag the mesh, so affected
-geometry is unbound and left for the build to rebind, and any stored rest
-pose is cleared so the build recaptures it.
+Re-orienting or moving a bound joint would drag the mesh, so affected geometry
+is re-baselined onto the new pose afterwards (`PRESERVE_SKIN`, painted weights
+kept — see Skin Preservation under rig_tail_maya) or, with that off, unbound and
+left for the build to rebind. Any stored rest pose is cleared either way, so the
+build recaptures it.
 
 > Note: these constants were renamed. `MIRROR_ORIENT` previously meant the
 > aim-orient (now `ORIENT_JOINTS`) and `MIRROR_JOINTS` previously meant the
@@ -178,7 +180,8 @@ pose is cleared so the build recaptures it.
 ### Functions
 
 #### `setup_tails(root=None, dry_run=None)`
-Detect BN chains, unbind affected geometry, run the enabled steps.
+Detect BN chains, run the enabled steps, then re-baseline the skinned meshes
+(or, with `PRESERVE_SKIN` off, unbind them up front instead).
 
 #### `run_setup(dry_run=None)`
 Run the enabled batch orient/mirror steps on `rt_cst.JOINTS_BN`.
@@ -344,9 +347,9 @@ Tests for the Setup phase, split by whether they need a scene.
 helpers directly, so "is the mirror math correct?" is answered in
 isolation. **Scene tests** are MUTATING: they run the real entry points on
 the loaded skeleton and verify the result, so like a real Setup run they
-detach OPM drivers, unbind geometry and clear the rest pose — reload the
-scene afterwards before building. Each scene test saves and restores
-`RIGPARTS` and the Setup flags.
+detach OPM drivers, re-baseline (or unbind) geometry and clear the rest
+pose — reload the scene afterwards before building. Each scene test saves
+and restores `RIGPARTS` and the Setup flags.
 
 ### Functions
 
@@ -363,10 +366,15 @@ and positions. **Mutating.**
 #### `run_all()`
 `run_math()` plus a pointer to the mutating scene tests.
 
+#### `check_skin(rigname='C_tail')`
+Read-only report: which meshes match the rig part, whether they are skinned,
+how many of the chain's joints are influences, and how far the skinCluster's
+rest pose has drifted from where the joints now are. Safe.
+
 Individual tests: `test_reflect`, `test_assign_rows`, `test_roll_about`,
 `test_aim_frames`, `test_mirror_frames`, `test_find_mirror_pairs` (math);
-`test_orient`, `test_mirror_orient`, `test_mirror_joints`, `test_roll`,
-`test_rigname_from_selection` (scene).
+`test_orient`, `test_end_joint`, `test_mirror_orient`, `test_mirror_joints`,
+`test_roll`, `test_skin_rebaseline`, `test_rigname_from_selection` (scene).
 
 ---
 
@@ -514,14 +522,47 @@ Add enum attribute to node.
 #### `bind_geometry(rigname)`
 Search for geometry matching rigname and bind to BN joints.
 
-#### `unbind_geometry(rigname)`
-Unbind geometry from rig.
+#### `unbind_geometry(rigname, force=False)`
+Unbind geometry from rig. With `PRESERVE_SKIN` on, already-skinned meshes are
+left bound and returned instead; `force=True` unbinds regardless.
 
 #### `unbind_geometry_all()`
 Unbind all geometry in scene.
 
-#### `bind_skincluster(joints, node, name)`
-Create skinCluster binding.
+### Skin Preservation
+
+`PRESERVE_SKIN` (default on) stops the rig throwing away painted weights. A
+closest-distance rebind is only ever right the first time: afterwards it wipes
+the paint work, and on a mesh the rig shares with the rest of the character it
+drops the other influences entirely.
+
+#### `preserve_skin()`
+Read the `PRESERVE_SKIN` setting, defaulting to on (constants are never
+reloaded, so an old session lacks it).
+
+#### `find_skincluster(node)`
+First skinCluster in a node's history.
+
+#### `skin_influence_indices(skincluster)`
+Map each influence to its logical index. Indices are sparse on a mesh that has
+had influences added and removed, so `bindPreMatrix[i]` must be found through
+the `matrix` connections, never by counting influences.
+
+#### `add_missing_influences(skincluster, joints)`
+Add rig joints to an existing cluster at weight 0, leaving every painted weight
+untouched. New influences do nothing until they are painted in.
+
+#### `rebaseline_skin(rigname, tolerance=None)`
+Accept the joints' current pose as the skin's rest pose, by writing each moved
+influence's new world matrix into `bindPreMatrix`. Lets Setup re-orient a bound
+skeleton without unbinding. Only the rig part's own joints are re-baselined;
+other influences on a shared mesh did not move and are left alone.
+
+#### `bind_skincluster(joints, node, name, preserve=False)`
+Create skinCluster binding. A cluster with exactly these influences is always
+reused; one with a different influence set is deleted and rebuilt unless
+`preserve` is on. Only geometry passes `preserve` — the IK/FK driver curves are
+rig-owned and must be bound to exactly their own joints.
 
 #### `unbind_skincluster(node, delete_history=True)`
 Unbind skinCluster from node.
