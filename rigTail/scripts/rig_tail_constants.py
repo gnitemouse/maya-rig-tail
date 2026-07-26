@@ -43,6 +43,19 @@ RIGPARTS = ['L_fintail', 'R_fintail', 'C_fintail',
     'L_tail3', 'L_tail2', 'L_tail1', 'C_tail',
     'R_tail1', 'R_tail2', 'R_tail3']
 
+# Rig parts held back from the batch Setup phase. Names listed here stay in
+# RIGPARTS - they are still part of the rig roster, still renameable, and
+# still resolve for L/R pairing - they are just skipped by Setup's orient
+# and mirror steps, and their geometry is NOT unbound. Move parts between
+# Include and Exclude in the 'Edit Rig Parts' editor.
+#
+# Scope: the SETUP phase only. The build still runs over the full RIGPARTS
+# list, because cleanup_rig deletes SDK animation curves scene-wide - a
+# part skipped by the build would lose its variable-FK curves without
+# getting them rebuilt. Scoping that sweep per-part is what has to land
+# before Exclude can cover the build too.
+RIGPARTS_EXCLUDE = []
+
 # Root Name
 ROOT = 'squid'
 # Which systems to build. Held here rather than only in the UI so the
@@ -98,6 +111,21 @@ MIRROR_DRYRUN = False
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
 MIRROR_SOURCE_SIDE = 'R'
+# How the mirrored side is rolled about its aim axis (MIRROR_ORIENT only).
+# The aim axis must keep pointing down the chain (the spline IK and the
+# advanced twist depend on it), so the only freedom left is the roll, and
+# there are exactly two right-handed choices, 180 degrees apart:
+#   'symmetric' - the same channel value moves the target as the exact
+#       mirror of the source: both tails curl up together, both curl
+#       outward together. Equivalent to Maya's mirrorJoint -mirrorBehavior.
+#       The default, and what animators normally expect.
+#   'parallel'  - the same channel value moves the target the opposite way,
+#       so a splayed pair reads as one curling up while the other curls
+#       down. (Formally: the mirror of the source driven by the NEGATED
+#       angle, since this frame is the symmetric one rolled 180 degrees.)
+# The two differ by a 180-degree roll about the aim axis, so the Setup UI's
+# Roll Chain fix-up at 180 converts one into the other on a single chain.
+MIRROR_BEHAVIOR = 'symmetric'
 # Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
 # ORIENT_UP_AXIS aligns to the chain's plane normal. The interactive roll
 # rolls about ORIENT_AIM_AXIS.
@@ -131,6 +159,22 @@ EFFECTS = {
     'noise': True,
     'loop': True
     }
+
+def active_rigparts():
+    '''
+    RIGPARTS minus RIGPARTS_EXCLUDE, in RIGPARTS order.
+
+    The parts the batch Setup phase should act on. Excluded names stay in
+    RIGPARTS (see RIGPARTS_EXCLUDE) so pairing, renaming and the per-chain
+    Roll Chain fix-up still see the full roster; only the batch operations
+    and the geometry unbind honour the exclusion.
+
+    Return
+        list: included rig part names.
+    '''
+    excluded = set(RIGPARTS_EXCLUDE or [])
+    return [p for p in RIGPARTS if p not in excluded]
+
 
 def effects_enabled():
     ''' Return True if EFFECTS are enabled. '''
@@ -460,6 +504,7 @@ def get_user_editable_config():
     return {
         # Rig Components
         'RIGPARTS': RIGPARTS,
+        'RIGPARTS_EXCLUDE': RIGPARTS_EXCLUDE,
         # User Variables
         'ROOT': ROOT,
         'EFFECTS': EFFECTS,
@@ -473,6 +518,7 @@ def get_user_editable_config():
         'MIRROR_DRYRUN': MIRROR_DRYRUN,
         'MIRROR_AXIS': MIRROR_AXIS,
         'MIRROR_SOURCE_SIDE': MIRROR_SOURCE_SIDE,
+        'MIRROR_BEHAVIOR': MIRROR_BEHAVIOR,
         'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
         'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
         'FORCE_REBUILD': FORCE_REBUILD,
@@ -610,9 +656,10 @@ def load_config(filepath=None):
     Returns True on success, False if the file is missing or unreadable.
     '''
     global LOADED_CONFIG
-    global RIGPARTS, ROOT, EFFECTS, INDIV_FK, MAIN_CONTROLLER, FORCE_REBUILD
+    global RIGPARTS, RIGPARTS_EXCLUDE, ROOT, EFFECTS, INDIV_FK
+    global MAIN_CONTROLLER, FORCE_REBUILD
     global ORIENT_JOINTS, MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
-    global MIRROR_SOURCE_SIDE, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
+    global MIRROR_SOURCE_SIDE, MIRROR_BEHAVIOR, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global COLOR_SKELETON, BN_COLOR, IK_COLOR, FK_COLOR
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
@@ -641,6 +688,12 @@ def load_config(filepath=None):
 
         # Update globals from config
         RIGPARTS = config.get('RIGPARTS', RIGPARTS)
+        # Drop any excluded name the loaded RIGPARTS no longer contains, so
+        # a stale exclusion cannot linger invisibly (the editor only ever
+        # shows names that are in RIGPARTS).
+        RIGPARTS_EXCLUDE = [p for p in config.get('RIGPARTS_EXCLUDE',
+                                                  RIGPARTS_EXCLUDE)
+                            if p in RIGPARTS]
         ROOT = config.get('ROOT', ROOT)
         EFFECTS = config.get('EFFECTS', EFFECTS)
         BUILD_FK = config.get('BUILD_FK', BUILD_FK)
@@ -667,6 +720,12 @@ def load_config(filepath=None):
             'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
+        # Deliberately NOT migrated: a config saved before MIRROR_BEHAVIOR
+        # existed was written by code that always produced 'parallel' frames,
+        # but MIRROR_ORIENT defaulted off then, so such a config almost never
+        # carries a mirrored result worth preserving. A missing key therefore
+        # takes the module default ('symmetric') rather than the old maths.
+        MIRROR_BEHAVIOR = config.get('MIRROR_BEHAVIOR', MIRROR_BEHAVIOR)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)

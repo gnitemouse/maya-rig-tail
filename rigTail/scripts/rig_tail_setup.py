@@ -17,7 +17,11 @@ have a toggle in rig_tail_constants:
                    are oriented from their own geometry.
     MIRROR_ORIENT  reflect matching 'L_'/'R_' pairs' ORIENTATION across the
                    symmetry plane, so the two sides face as mirror images.
-                   Positions unchanged.
+                   Positions unchanged. MIRROR_BEHAVIOR picks how the
+                   mirrored side is rolled about its aim: 'symmetric' (the
+                   same channel value moves the sides as exact mirrors -
+                   both curl up together) or 'parallel' (the same channel
+                   value moves them opposite ways). See mirror_frames.
     MIRROR_JOINTS  reflect matching 'L_'/'R_' pairs' POSITIONS across the
                    symmetry plane, so the target side's joints sit at the
                    exact mirror of the source side's.
@@ -36,6 +40,13 @@ toggle:
 Orientation changes are written into jointOrient with rotate left at zero;
 MIRROR_JOINTS additionally moves world positions. MIRROR_DRYRUN logs the
 intended batch changes without touching anything.
+
+The batch operations run on rt_cst.active_rigparts() - RIGPARTS minus
+RIGPARTS_EXCLUDE - so single tails can be held back from the Setup UI's
+'Edit Rig Parts' editor. An excluded part keeps its BN chain detected (the
+interactive roll still reaches it) but is never oriented, never mirrored,
+and never unbound; excluding one side of an L/R pair stops that pair
+mirroring altogether.
 
 Re-orienting or moving a bound joint would drag the mesh, so the affected
 geometry is unbound first and left for the build to rebind.
@@ -76,6 +87,7 @@ _CST_DEFAULTS = {
     'MIRROR_DRYRUN': False,         # only log intended changes; do not modify
     'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
+    'MIRROR_BEHAVIOR': 'symmetric',  # 'symmetric' | 'parallel' (see mirror_frames)
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
     'ORIENT_UP_AXIS': 'z',          # local axis aligned to the plane normal
 }
@@ -91,6 +103,17 @@ _EPS = 1e-9
 def _cst(name):
     ''' Read a Setup setting, falling back to the installed default. '''
     return getattr(rt_cst, name, _CST_DEFAULTS.get(name))
+
+
+def _active():
+    '''
+    Rig parts the batch operations should act on (RIGPARTS minus excluded).
+
+    Falls back to the full RIGPARTS list on a session started before
+    active_rigparts existed, since rig_tail_constants is never reloaded.
+    '''
+    getter = getattr(rt_cst, 'active_rigparts', None)
+    return getter() if callable(getter) else list(rt_cst.RIGPARTS)
 
 
 # ENTRY ================================================================
@@ -115,29 +138,45 @@ def setup_tails(root=None, dry_run=None):
             When true nothing is unbound or modified.
 
     Return
-        dict: summary from run_setup, {'oriented', 'mirrored', 'dry_run'}.
+        dict: summary from run_setup, plus 'missing_geo' (parts with no
+        matching mesh) and 'excluded' (parts held back by RIGPARTS_EXCLUDE).
     '''
     if root:
         rt_cln.set_root(root)
 
+    # Detect over the FULL roster (cheap, non-destructive) so JOINTS_BN is
+    # populated for excluded parts too - the interactive roll_chain fix-up
+    # still needs them. Everything destructive below is filtered to the
+    # active parts.
     found = rt_cln.detect_joints_bn()
     if not found:
         logger.warning('Setup: no BN joints found for any RIGPART')
-        return {'oriented': 0, 'mirrored': 0, 'dry_run': True, 'missing_geo': []}
+        return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
+                'missing_geo': [], 'excluded': []}
+
+    included = set(_active())
+    active = [p for p in found if p in included]
+    excluded = [p for p in found if p not in included]
+    if excluded:
+        logger.info(f'Setup: skipping {len(excluded)} excluded rig part(s): '
+                    f'{", ".join(excluded)}')
 
     # Warn about parts whose mesh does not follow the naming convention:
     # they are not unbound before re-orienting (so their mesh distorts) nor
     # rebound by the build. Reported so the meshes can be renamed.
-    missing_geo = rt_mya.report_missing_geometry(found)
+    missing_geo = rt_mya.report_missing_geometry(active)
 
     preview = dry_run if dry_run is not None \
         else bool(_cst('MIRROR_DRYRUN'))
     if not preview:
-        for rigname in found:
+        # Excluded parts are deliberately left bound: nothing is going to
+        # move their joints, so unbinding would only throw away their skin.
+        for rigname in active:
             rt_mya.unbind_geometry(rigname)
 
     result = run_setup(dry_run=dry_run)
     result['missing_geo'] = missing_geo
+    result['excluded'] = excluded
     return result
 
 
@@ -163,8 +202,10 @@ def run_setup(dry_run=None):
     mir_orient = bool(_cst('MIRROR_ORIENT'))
     mir_joints = bool(_cst('MIRROR_JOINTS'))
     mode = ' [dry-run]' if dry_run else ''
+    behavior = f' ({_behavior()})' if mir_orient else ''
     logger.info(f'Setup{mode}: orient_joints={do_orient}, '
-                f'mirror_orient={mir_orient}, mirror_joints={mir_joints}')
+                f'mirror_orient={mir_orient}{behavior}, '
+                f'mirror_joints={mir_joints}')
 
     oriented = orient_chains(dry_run) if do_orient else 0
     mirrored = mirror_chains(dry_run, mir_orient, mir_joints) \
@@ -255,7 +296,7 @@ def orient_chains(dry_run):
     up_axis = _cst('ORIENT_UP_AXIS')
     mode = ' [dry-run]' if dry_run else ''
     count = 0
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in _active():
         joints = rt_cst.JOINTS_BN.get(rigname)
         if not joints or len(joints) < 2:
             continue
@@ -331,6 +372,8 @@ def mirror_chains(dry_run, do_orient, do_positions):
     with the mirror of the source. Two independent effects, per the flags:
         do_orient    reflect the source ORIENTATION onto the target, so the
                      target's joints face as mirror images. Positions kept.
+                     MIRROR_BEHAVIOR ('symmetric' or 'parallel') picks the
+                     roll of the mirrored frames; see mirror_frames.
         do_positions reflect the source POSITIONS onto the target, so the
                      target's joints sit at the exact mirror of the source.
 
@@ -351,11 +394,19 @@ def mirror_chains(dry_run, do_orient, do_positions):
     axis = _cst('MIRROR_AXIS')
     aim_axis = _cst('ORIENT_AIM_AXIS')
     up_axis = _cst('ORIENT_UP_AXIS')
+    behavior = _behavior()
     keep = {'x': 0, 'y': 1, 'z': 2}.get(str(axis).lower(), 0)
     mode = ' [dry-run]' if dry_run else ''
     what = '+'.join(w for w, on in (('orient', do_orient),
                                     ('positions', do_positions)) if on)
-    pairs, _ = find_mirror_pairs(rt_cst.RIGPARTS)
+    # Behavior only shapes a reflected ORIENTATION, so name it only then -
+    # a positions-only mirror ignores it entirely.
+    if do_orient:
+        what = f'{what} ({behavior})'
+    # Pair over the ACTIVE parts only: excluding one side of a pair means
+    # the pair no longer mirrors at all, which is the right reading of
+    # "leave this tail alone" - mirroring onto it would move it.
+    pairs, _ = find_mirror_pairs(_active())
     if not pairs:
         logger.info(f'Mirror{mode}: no L/R pairs in RIGPARTS, skipping')
         return 0
@@ -381,7 +432,8 @@ def mirror_chains(dry_run, do_orient, do_positions):
             # Target orientation: the mirror of the source, or (orient off)
             # the target's own current orientation, kept unchanged.
             if do_orient:
-                frames = mirror_frames(src_mats, axis, aim_axis, up_axis)
+                frames = mirror_frames(src_mats, axis, aim_axis, up_axis,
+                                       behavior)
             else:
                 frames = [([m[0], m[1], m[2]], [m[4], m[5], m[6]],
                            [m[8], m[9], m[10]]) for m in before]
@@ -624,7 +676,7 @@ def rigname_from_selection():
     return None
 
 
-def mirror_frames(src_matrices, axis, aim_axis, up_axis):
+def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     '''
     Mirror source world orientations across the symmetry plane.
 
@@ -639,11 +691,37 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis):
     rotating would leave the aim pointing the same way as the source (into
     the body) instead of to the opposite side.
 
+    BEHAVIOR. The aim axis must keep pointing down the mirrored chain (the
+    spline IK and build_advanced_twist both read it), so the only freedom
+    left is the roll about that aim - and there are exactly two right-handed
+    choices, 180 degrees apart, selected by behavior:
+        'symmetric' negates the reflected up. The same channel value then
+            moves the target as the EXACT MIRROR of the source: both tails
+            curl up together, both curl outward together. Equivalent to
+            Maya's mirrorJoint -mirrorBehavior, and the usual animation
+            default.
+        'parallel'  keeps the reflected up. The same channel value moves the
+            target the OPPOSITE way, so a splayed pair reads as one curling
+            up while the other curls down. Formally the mirror of the source
+            driven by the negated angle - which is what a 180-degree roll
+            about the aim does.
+    Worked example, a tail splayed along +X with up +Z. Both modes give the
+    target aim -X (down its own chain). 'parallel' leaves the target up at
+    +Z, so +rotate about up spins both about world +Z - the +X tip rises and
+    the -X tip drops. 'symmetric' gives the target up -Z, so the same
+    +rotate spins the target about world -Z instead and both tips rise.
+
+    Since the modes differ only by a 180-degree roll about the aim, running
+    roll_chain(target, 180) converts one into the other on a single chain.
+
     Arguments
         src_matrices (list): per-joint source world matrices (16 floats).
         axis (str): symmetry-plane normal, 'x'|'y'|'z'.
         aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
         up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
+        behavior (str): 'symmetric' or 'parallel'; None reads
+            rt_cst.MIRROR_BEHAVIOR. An unrecognized value falls back to
+            'symmetric' with a warning.
 
     Return
         list: one [X_row, Y_row, Z_row] world frame per joint.
@@ -651,13 +729,33 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis):
     idx = {'x': 0, 'y': 1, 'z': 2}
     keep = idx.get(str(axis).lower(), 0)
     ai, ui = idx[aim_axis], idx[up_axis]
+    up_sign = -1.0 if _behavior(behavior) == 'symmetric' else 1.0
     frames = []
     for m in src_matrices:
         rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]])
         aim = _norm(_reflect(rows[ai], keep))
-        up = _norm(_reflect(rows[ui], keep))
+        up = _scale(_norm(_reflect(rows[ui], keep)), up_sign)
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
     return frames
+
+
+def _behavior(behavior=None):
+    '''
+    Resolve and validate the mirror behavior, defaulting to 'symmetric'.
+
+    Arguments
+        behavior (str): explicit value, or None to read MIRROR_BEHAVIOR.
+
+    Return
+        str: 'symmetric' or 'parallel'.
+    '''
+    value = str(behavior if behavior is not None
+                else _cst('MIRROR_BEHAVIOR')).strip().lower()
+    if value not in ('symmetric', 'parallel'):
+        logger.warning(f"Mirror: unknown behavior '{value}', "
+                       "using 'symmetric'")
+        return 'symmetric'
+    return value
 
 
 def _reflect(vec, keep):

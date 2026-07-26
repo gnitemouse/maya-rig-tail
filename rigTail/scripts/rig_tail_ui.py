@@ -682,42 +682,109 @@ class RigTailUI(QtWidgets.QDialog):
 
 class RigPartsEditor(QtWidgets.QDialog):
     '''
-    Pop-up editor for RIGPARTS.
+    Pop-up editor for RIGPARTS, with an Include / Exclude split.
 
     Rig parts can be added/removed manually or filled from the current
     joint selection via 'Get RIGPARTS from Selected Joints'. Rename
     renames the part in the scene immediately (not deferred to build), so
     the list and the scene node names never drift apart.
+
+    Two lists side by side, moved between with the arrow buttons or by
+    double-clicking an entry, in the manner of Maya's channel editor.
+    Excluded parts stay in RIGPARTS - they keep their name, stay
+    renameable, and still resolve for L/R pairing - they are only held back
+    from the batch Setup operations (orient / mirror), and their geometry
+    is left bound. See rt_cst.RIGPARTS_EXCLUDE: the exclusion does NOT yet
+    cover the build, which still runs over the whole roster.
     '''
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Edit Rig Parts')
-        self.setMinimumSize(350, 400)
+        self.setMinimumSize(560, 420)
         self.setup_ui()
+
+    LIST_STYLE = '''
+        QListWidget {
+            background-color: #2b2b2b;
+            color: #cccccc;
+            border: 1px solid #555555;
+            border-radius: 4px;
+            padding: 4px;
+        }
+        QListWidget::item {
+            padding: 4px;
+        }
+        QListWidget::item:selected {
+            background-color: #4A90E2;
+        }
+    '''
 
     def setup_ui(self):
         '''Build the dialog layout.'''
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
 
-        self.list_widget = QtWidgets.QListWidget()
-        self.list_widget.addItems(rt_cst.RIGPARTS)
-        self.list_widget.setStyleSheet('''
-            QListWidget {
-                background-color: #2b2b2b;
-                color: #cccccc;
-                border: 1px solid #555555;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 4px;
-            }
-            QListWidget::item:selected {
-                background-color: #4A90E2;
-            }
-        ''')
+        excluded = set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
+        self.list_widget = self._make_list(
+            [p for p in rt_cst.RIGPARTS if p not in excluded],
+            'Rig parts the Setup phase will orient and mirror.')
+        self.list_exclude = self._make_list(
+            [p for p in rt_cst.RIGPARTS if p in excluded],
+            'Rig parts held back from the batch Setup operations. They keep '
+            'their place in RIGPARTS and their geometry stays bound; Setup '
+            'simply leaves their joints alone.\n'
+            'Note: the BUILD still processes these - exclusion covers the '
+            'Setup phase only.')
+        # Double-click sends an entry to the other side, like the channel
+        # editor. Move buttons handle multi-selection.
+        self.list_widget.itemDoubleClicked.connect(
+            lambda _: self.move_selected(to_exclude=True))
+        self.list_exclude.itemDoubleClicked.connect(
+            lambda _: self.move_selected(to_exclude=False))
+
+        self.btn_to_exclude = QtWidgets.QToolButton()
+        self.btn_to_exclude.setArrowType(QtCore.Qt.RightArrow)
+        self.btn_to_exclude.setToolTip('Exclude the selected rig part(s) '
+                                       'from the Setup phase.')
+        self.btn_to_include = QtWidgets.QToolButton()
+        self.btn_to_include.setArrowType(QtCore.Qt.LeftArrow)
+        self.btn_to_include.setToolTip('Include the selected rig part(s) '
+                                       'in the Setup phase again.')
+        for btn in (self.btn_to_exclude, self.btn_to_include):
+            btn.setStyleSheet('''
+                QToolButton {
+                    background-color: #3a3a3a; color: #cccccc;
+                    border: 1px solid #555555; border-radius: 4px;
+                    min-width: 30px; min-height: 28px;
+                }
+                QToolButton:hover { background-color: #4a4a4a; border-color: #666666; }
+                QToolButton:pressed { background-color: #2a2a2a; }
+            ''')
+        self.btn_to_exclude.clicked.connect(
+            lambda: self.move_selected(to_exclude=True))
+        self.btn_to_include.clicked.connect(
+            lambda: self.move_selected(to_exclude=False))
+
+        move_col = QtWidgets.QVBoxLayout()
+        move_col.addStretch()
+        move_col.addWidget(self.btn_to_exclude)
+        move_col.addWidget(self.btn_to_include)
+        move_col.addStretch()
+
+        self.lbl_include = QtWidgets.QLabel()
+        self.lbl_exclude = QtWidgets.QLabel()
+        include_col = QtWidgets.QVBoxLayout()
+        include_col.addWidget(self.lbl_include)
+        include_col.addWidget(self.list_widget)
+        exclude_col = QtWidgets.QVBoxLayout()
+        exclude_col.addWidget(self.lbl_exclude)
+        exclude_col.addWidget(self.list_exclude)
+
+        lists_layout = QtWidgets.QHBoxLayout()
+        lists_layout.addLayout(include_col, 1)
+        lists_layout.addLayout(move_col)
+        lists_layout.addLayout(exclude_col, 1)
 
         btn_layout = QtWidgets.QHBoxLayout()
         self.btn_add = QtWidgets.QPushButton('Add')
@@ -743,8 +810,9 @@ class RigPartsEditor(QtWidgets.QDialog):
 
         self.btn_get_rigparts = QtWidgets.QPushButton('Get RIGPARTS from Selected Joints')
         self.btn_get_rigparts.setToolTip(
-            'Replace the list with {rigname}s extracted from the joints '
-            'selected in the scene (joints must follow the JOINT template).')
+            'Replace both lists with {rigname}s extracted from the joints '
+            'selected in the scene (joints must follow the JOINT template). '
+            'Everything lands in Include; any existing exclusion is cleared.')
         self.btn_get_rigparts.clicked.connect(self.get_rigparts_from_selection)
         self.parent().style_button(self.btn_get_rigparts, 2)
 
@@ -754,14 +822,63 @@ class RigPartsEditor(QtWidgets.QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
 
-        layout.addWidget(QtWidgets.QLabel('Rig Parts:'))
-        layout.addWidget(self.list_widget)
+        hint = QtWidgets.QLabel(
+            'Excluded parts stay in RIGPARTS; the Setup phase just skips '
+            'them (the build still runs them all).')
+        hint.setStyleSheet('color: #999999; font-size: 10px;')
+        hint.setWordWrap(True)
+
+        layout.addLayout(lists_layout)
+        layout.addWidget(hint)
         layout.addLayout(btn_layout)
         layout.addWidget(self.btn_get_rigparts)
         layout.addWidget(button_box)
+        self._refresh_counts()
+
+    def _make_list(self, items, tooltip):
+        '''One styled, multi-select list column.'''
+        widget = QtWidgets.QListWidget()
+        widget.addItems(items)
+        widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        widget.setStyleSheet(self.LIST_STYLE)
+        widget.setToolTip(tooltip)
+        return widget
+
+    def _refresh_counts(self):
+        '''Keep the column headings showing the current counts.'''
+        self.lbl_include.setText(
+            f'Include ({self.list_widget.count()}):')
+        self.lbl_exclude.setText(
+            f'Exclude ({self.list_exclude.count()}):')
+
+    def _current_list(self):
+        '''
+        The list Add/Rename/Remove should act on: whichever holds the
+        current selection, preferring the focused one when both do.
+        '''
+        if self.list_exclude.hasFocus() and self.list_exclude.selectedItems():
+            return self.list_exclude
+        if self.list_widget.selectedItems():
+            return self.list_widget
+        if self.list_exclude.selectedItems():
+            return self.list_exclude
+        return self.list_widget
+
+    def move_selected(self, to_exclude):
+        '''Move the selected entries to the other column.'''
+        source = self.list_widget if to_exclude else self.list_exclude
+        target = self.list_exclude if to_exclude else self.list_widget
+        # Take from the bottom up so the rows above keep their indices,
+        # then add in the original top-down order so a multi-selection does
+        # not arrive reversed.
+        rows = sorted(source.row(item) for item in source.selectedItems())
+        taken = [source.takeItem(row) for row in reversed(rows)]
+        for item in reversed(taken):
+            target.addItem(item)
+        self._refresh_counts()
 
     def get_rigparts_from_selection(self):
-        '''Replace the list with rig names extracted from selected joints.'''
+        '''Replace both lists with rig names extracted from selected joints.'''
         selected = cmds.ls(selection=True, type='joint')
         if not selected:
             QtWidgets.QMessageBox.warning(self, 'Warning', 'No joints selected.')
@@ -775,11 +892,15 @@ class RigPartsEditor(QtWidgets.QDialog):
             else:
                 rignames.append(jnt)
 
+        # A full reset of the roster, so any previous exclusion goes too -
+        # keeping it would silently hold back a part the user just picked.
         self.list_widget.clear()
+        self.list_exclude.clear()
         self.list_widget.addItems(sorted(rignames))
+        self._refresh_counts()
 
     def add_item(self):
-        '''Prompt for a new rig part name and append it to the list.'''
+        '''Prompt for a new rig part name and append it to Include.'''
         text, ok = QtWidgets.QInputDialog.getText(self, 'Add Rig Part', 'Enter rig part name:')
         if not (ok and text):
             return
@@ -787,6 +908,7 @@ class RigPartsEditor(QtWidgets.QDialog):
         if not text:
             return
         self.list_widget.addItem(text)
+        self._refresh_counts()
         # Validate/warn: an added name with no joints builds nothing
         import rig_tail_cleanup as rt_cln
         if not rt_cln.rigpart_has_joints(text):
@@ -802,11 +924,11 @@ class RigPartsEditor(QtWidgets.QDialog):
         the list and the scene never drift. A failed rename is reverted and
         the old name is kept.
         '''
-        current = self.list_widget.currentRow()
-        if current < 0:
+        widget = self._current_list()
+        item = widget.currentItem()
+        if item is None or not item.isSelected():
             QtWidgets.QMessageBox.warning(self, 'Warning', 'No rig part selected.')
             return
-        item = self.list_widget.item(current)
         old = item.text()
         new, ok = QtWidgets.QInputDialog.getText(
             self, 'Rename Rig Part', f"Rename '{old}' to:",
@@ -821,6 +943,11 @@ class RigPartsEditor(QtWidgets.QDialog):
         success, message = rt_cln.rename_rigpart(old, new)
         if success:
             item.setText(new)
+            # The scene rename is already committed, so keep the stored
+            # exclusion in step even if the dialog is cancelled afterwards -
+            # otherwise it would still name a part that no longer exists.
+            stored = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
+            rt_cst.RIGPARTS_EXCLUDE = [new if p == old else p for p in stored]
             # Backend already updated RIGPARTS/ROOT/caches; refresh main UI
             if self.parent():
                 self.parent().load_current_values()
@@ -829,15 +956,26 @@ class RigPartsEditor(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, 'Rename Failed', message)
 
     def remove_item(self):
-        '''Delete the selected rig part from the list.'''
-        current = self.list_widget.currentRow()
-        if current >= 0:
-            self.list_widget.takeItem(current)
+        '''Delete the selected rig part(s) from whichever column holds them.'''
+        widget = self._current_list()
+        for item in sorted(widget.selectedItems(), key=widget.row, reverse=True):
+            widget.takeItem(widget.row(item))
+        self._refresh_counts()
 
     def accept(self):
-        '''Commit the list contents to rt_cst.RIGPARTS.'''
-        rt_cst.RIGPARTS = [self.list_widget.item(i).text()
-                           for i in range(self.list_widget.count())]
+        '''
+        Commit both columns to rt_cst.RIGPARTS / RIGPARTS_EXCLUDE.
+
+        RIGPARTS keeps every name, included first then excluded, so the
+        roster survives an exclusion intact; RIGPARTS_EXCLUDE records which
+        of them the Setup phase should skip.
+        '''
+        included = [self.list_widget.item(i).text()
+                    for i in range(self.list_widget.count())]
+        excluded = [self.list_exclude.item(i).text()
+                    for i in range(self.list_exclude.count())]
+        rt_cst.RIGPARTS = included + excluded
+        rt_cst.RIGPARTS_EXCLUDE = excluded
         super().accept()
 
 

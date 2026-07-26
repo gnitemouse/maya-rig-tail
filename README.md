@@ -82,10 +82,24 @@ coherently, and never affects the build itself. Three independent options:
 - **Orient Joints** (`ORIENT_JOINTS`): aim-orient each chain so a tail
   bends in one plane. Fixes joints whose orientation twists down the chain.
 - **Mirror Orient** (`MIRROR_ORIENT`): reflect matching `L_`/`R_` tails'
-  *orientation* so the two sides face as mirror images.
+  *orientation* so the two sides face as mirror images. The dropdown in the
+  same row picks the **behavior** (`MIRROR_BEHAVIOR`): *Symmetric* (default)
+  moves the two sides as exact mirrors for the same channel value — curl the
+  right tail up and the left curls up too — while *Parallel* moves them
+  opposite ways, so a splayed pair reads as one up, one down. The two differ
+  by a 180 deg roll about the aim, so **Roll Chain** at 180 flips a single
+  tail between them.
 - **Mirror Joints** (`MIRROR_JOINTS`): reflect matching `L_`/`R_` tails'
   *positions*, so the target side's joints sit at the exact mirror of the
   source side's.
+
+**Edit Rig Parts** splits the roster into **Include** and **Exclude**
+columns — move parts across with the arrow buttons or by double-clicking,
+as in Maya's channel editor. Excluded tails stay in `RIGPARTS` and keep
+their skin bound; Setup just leaves their joints alone, which is what you
+want when fixing one tail without disturbing the rest. Excluding one side
+of an L/R pair stops that pair mirroring. *This covers the Setup phase
+only — the build still processes every part.*
 
 A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
 only when the two sides are positionally off. Everything except Mirror

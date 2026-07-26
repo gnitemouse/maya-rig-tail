@@ -10,7 +10,12 @@ Three batch operations, exposed as checkboxes:
     Orient Joints (ORIENT_JOINTS): aim-orient each chain so a tail bends
         in a plane (removes intra-chain twist).
     Mirror Orient (MIRROR_ORIENT): reflect matching 'L_'/'R_' pairs'
-        orientation so the two sides face as mirror images.
+        orientation so the two sides face as mirror images. The dropdown
+        in the same row picks the behavior (MIRROR_BEHAVIOR): 'Symmetric'
+        moves the two sides as exact mirrors for the same channel value
+        (both tails curl up together), 'Parallel' moves them opposite ways
+        (a splayed pair reads as one up, one down).
+        Disabled unless Mirror Orient is ticked.
     Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
         positions so the target side's joints sit at the exact mirror.
 Plus an interactive Roll Chain fix-up: pick a chain (dropdown, or Select to
@@ -51,6 +56,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     AXES = ['x', 'y', 'z']
     SIDES = ['R', 'L']
+    # Display labels for MIRROR_BEHAVIOR; stored lower-case in constants.
+    BEHAVIORS = ['Symmetric', 'Parallel']
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -190,7 +197,33 @@ class RigTailSetupUI(QtWidgets.QDialog):
         for chk in (self.chk_orient, self.chk_mirror_orient,
                     self.chk_mirror_joints, self.chk_dryrun):
             self.style_checkbox(chk)
-            options_layout.addWidget(chk)
+
+        # Mirror Behavior sits in the Mirror Orient row: it only shapes a
+        # reflected orientation, so it is meaningless unless that box is
+        # ticked - and is disabled alongside it to say so.
+        self.cmb_behavior = self._combo(self.BEHAVIORS,
+            'How the mirrored side is rolled about its aim axis.\n'
+            'Symmetric: the same channel value moves the target as the '
+            'exact mirror of the source - both tails curl up together, '
+            'both curl outward together (Maya mirrorJoint '
+            '-mirrorBehavior).\n'
+            'Parallel: the same channel value moves the two sides opposite '
+            'ways, so a splayed pair reads as one curling up while the '
+            'other curls down.\n'
+            'The two differ by a 180 deg roll about the aim, so Roll Chain '
+            'at 180 converts one into the other on a single chain. '
+            '(MIRROR_BEHAVIOR)')
+        self.cmb_behavior.setMaximumWidth(120)
+        self.chk_mirror_orient.toggled.connect(self._sync_behavior_enabled)
+
+        mirror_orient_row = QtWidgets.QHBoxLayout()
+        mirror_orient_row.addWidget(self.chk_mirror_orient, 1)
+        mirror_orient_row.addWidget(self.cmb_behavior)
+
+        options_layout.addWidget(self.chk_orient)
+        options_layout.addLayout(mirror_orient_row)
+        options_layout.addWidget(self.chk_mirror_joints)
+        options_layout.addWidget(self.chk_dryrun)
         options_layout.addSpacing(6)
 
         # Dropdowns: source side, mirror axis, aim axis, up axis
@@ -422,6 +455,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         self.chk_mirror_joints.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
         self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
         self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
+        self._combo_set(self.cmb_behavior,
+            str(getattr(rt_cst, 'MIRROR_BEHAVIOR', 'symmetric')).capitalize())
+        self._sync_behavior_enabled(self.chk_mirror_orient.isChecked())
         self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))
         self._combo_set(self.cmb_aim, getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'))
         self._combo_set(self.cmb_up, getattr(rt_cst, 'ORIENT_UP_AXIS', 'z'))
@@ -435,9 +471,15 @@ class RigTailSetupUI(QtWidgets.QDialog):
         rt_cst.MIRROR_JOINTS = self.chk_mirror_joints.isChecked()
         rt_cst.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
+        rt_cst.MIRROR_BEHAVIOR = self.cmb_behavior.currentText().lower()
         rt_cst.MIRROR_AXIS = self.cmb_axis.currentText()
         rt_cst.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
         rt_cst.ORIENT_UP_AXIS = self.cmb_up.currentText()
+
+    def _sync_behavior_enabled(self, checked):
+        '''Grey the Mirror Behavior combo out unless Mirror Orient is on.'''
+        self.cmb_behavior.setEnabled(bool(checked))
+        self.update_display()
 
     def _refresh_roll_chains(self):
         '''Repopulate the Roll Chain dropdown from RIGPARTS, keeping the
@@ -457,7 +499,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         try:
             import rig_tail_setup as rt_set
-            pairs, _ = rt_set.find_mirror_pairs(rt_cst.RIGPARTS)
+            # Active parts only, so the preview matches what will run: an
+            # excluded side breaks its pair.
+            pairs, _ = rt_set.find_mirror_pairs(rt_set._active())
         except Exception:
             pairs = []
         finally:
@@ -469,17 +513,25 @@ class RigTailSetupUI(QtWidgets.QDialog):
         parts = rt_cst.RIGPARTS
         pairs = self._mirror_pairs()
         pair_txt = ', '.join(f'{s}->{t}' for s, t in pairs) if pairs else '(none)'
+        excluded = [p for p in parts
+                    if p in set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])]
+        included = [p for p in parts if p not in set(excluded)]
         lines = [
             f'ROOT = {getattr(rt_cst, "ROOT", "")}',
-            f'RIGPARTS ({len(parts)}): {", ".join(parts) if parts else "(empty)"}',
+            f'RIGPARTS ({len(included)} of {len(parts)}): '
+            f'{", ".join(included) if included else "(empty)"}',
             f'Orient joints: {self.chk_orient.isChecked()}   '
             f'Mirror orient: {self.chk_mirror_orient.isChecked()}   '
             f'Mirror joints: {self.chk_mirror_joints.isChecked()}   '
             f'Dry run: {self.chk_dryrun.isChecked()}',
             f'L/R pairs: {pair_txt}',
+            f'mirror behavior: {self.cmb_behavior.currentText().lower()}'
+            f'{"" if self.chk_mirror_orient.isChecked() else " (unused)"}',
             f'aim={self.cmb_aim.currentText()}  up={self.cmb_up.currentText()}  '
             f'mirror axis={self.cmb_axis.currentText()}',
         ]
+        if excluded:
+            lines.insert(2, f'Excluded ({len(excluded)}): {", ".join(excluded)}')
         self.txt_display.setText('\n'.join(lines))
 
     # ACTIONS ==========================================================
@@ -613,6 +665,11 @@ class RigTailSetupUI(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, 'Error',
                 'RIGPARTS is empty. Add rig parts first.')
             return
+        if not rt_set._active():
+            QtWidgets.QMessageBox.warning(self, 'Error',
+                'Every rig part is excluded, so Setup has nothing to do. '
+                "Move at least one part back to Include in 'Edit Rig Parts'.")
+            return
 
         self.save_current_values()
         dry = self.chk_dryrun.isChecked()
@@ -643,6 +700,13 @@ class RigTailSetupUI(QtWidgets.QDialog):
             return
 
         preview = ' (preview only, nothing changed)' if result.get('dry_run') else ''
+        excluded = result.get('excluded') or []
+        excluded_msg = ''
+        if excluded:
+            excluded_msg = (
+                f"\n\nSkipped {len(excluded)} excluded rig part(s):\n  "
+                f"{', '.join(excluded)}\nTheir joints were left untouched "
+                'and their geometry stays bound.')
         missing = result.get('missing_geo') or []
         missing_msg = ''
         if missing:
@@ -655,7 +719,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
             f"Oriented {result.get('oriented', 0)} joints, "
             f"mirrored {result.get('mirrored', 0)} joints{preview}.\n\n"
             'See the Script Editor log for per-chain details. '
-            f'Build the rig next.{missing_msg}')
+            f'Build the rig next.{excluded_msg}{missing_msg}')
         self.update_display()
         # Close on a real run, like the Builder does; keep the window up
         # after a dry run so the previewed settings can be run for real.

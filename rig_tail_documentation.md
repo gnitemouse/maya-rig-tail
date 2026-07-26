@@ -125,6 +125,42 @@ the other is overwritten. `MIRROR_AXIS` is the symmetry-plane normal, and
 the plane is assumed to pass through the world origin. `MIRROR_DRYRUN`
 previews every batch operation without modifying anything.
 
+`MIRROR_BEHAVIOR` picks how `MIRROR_ORIENT` rolls the mirrored side about
+its aim axis. The aim must keep pointing down the chain (the spline IK and
+the advanced twist both read it), so the roll is the only freedom left, and
+there are exactly two right-handed choices, 180 degrees apart:
+
+| Value | Same channel value on both sides | Equivalent to |
+|-------|----------------------------------|---------------|
+| `symmetric` (default) | Moves the target as the **exact mirror** of the source: both tails curl up together, both curl outward together. | Maya `mirrorJoint -mirrorBehavior` |
+| `parallel` | Moves the two sides **opposite ways**: a splayed pair reads as one curling up while the other curls down. | a plain orientation mirror |
+
+Because the two differ only by a 180 degree roll about the aim, running
+**Roll Chain** at 180 on the target side converts one into the other for a
+single chain — useful when one pair wants the opposite convention. Ignored
+when `MIRROR_ORIENT` is off (a positions-only mirror does not touch
+orientation).
+
+### Include / Exclude
+
+`RIGPARTS_EXCLUDE` holds rig parts the batch Setup operations should skip.
+Move parts between the **Include** and **Exclude** columns in the *Edit Rig
+Parts* editor (arrow buttons, or double-click an entry).
+
+Excluded names stay in `RIGPARTS` — they keep their place in the roster,
+stay renameable, and still resolve for L/R pairing. Setup simply leaves
+them alone: not oriented, not mirrored, and **not unbound**, so their skin
+survives a run aimed at another tail. Excluding one side of an `L_`/`R_`
+pair stops that pair mirroring altogether, which is the intended reading of
+"leave this tail alone". `rt_cst.active_rigparts()` returns the included
+parts, in `RIGPARTS` order.
+
+> Scope: the **Setup phase only**. The build still runs over the whole
+> `RIGPARTS` list. `cleanup_rig` deletes SDK animation curves scene-wide, so
+> a part skipped by the build would lose its variable-FK curves without
+> getting them rebuilt; scoping that sweep per-part has to land before
+> Exclude can cover the build too.
+
 Plus one interactive per-chain fix-up, `roll_chain`, which has no constant:
 it rolls a single chain about its aim axis to turn a
 correctly-oriented-but-wrong-facing chain onto the right plane.
@@ -279,6 +315,10 @@ Setup UI (Tail Rig Setup window). Exposes the three batch toggles
 (Orient Joints, Mirror Orient, Mirror Joints), the source-side and axis
 dropdowns, and Dry Run, then calls `rig_tail_setup.setup_tails`. Launched
 by `rig_tail.main_setup()`.
+
+The **Mirror Behavior** dropdown sits in the Mirror Orient row and is
+greyed out unless that box is ticked, since it only shapes a reflected
+orientation. `Symmetric` / `Parallel` map to `MIRROR_BEHAVIOR`.
 
 The **Roll Chain** group is separate from Run Setup: pick a chain from the
 dropdown (or click **Select** to read it from the selected joint), set a

@@ -50,12 +50,14 @@ Functions:
     test_assign_rows: frame assembly is orthonormal and right-handed
     test_roll_about: roll rotates about the aim by the given angle
     test_aim_frames: orient frames aim down-chain and are twist-free
-    test_mirror_frames: mirror reflects aim/up and flips to the far side
+    test_mirror_frames: mirror reflects the aim to the far side, and the
+        symmetric/parallel behaviors are a 180 deg roll apart
     test_find_mirror_pairs: L/R pairing honours the source side
   Scene tests (MUTATING)
     test_orient: ORIENT_JOINTS leaves valid frames aimed down the chain
     test_end_joint: the '_ee_' joint keeps its position, stays down-chain
-    test_mirror_orient: MIRROR_ORIENT makes the sides mirror orientations
+    test_mirror_orient: MIRROR_ORIENT makes the sides mirror orientations,
+        for either MIRROR_BEHAVIOR
     test_mirror_joints: MIRROR_JOINTS makes the sides mirror positions
     test_roll: roll_chain keeps positions and aim, rotates up by the angle
     test_rigname_from_selection: a selected joint resolves to its RIGPART
@@ -235,10 +237,12 @@ def test_mirror_frames():
     '''
     mirror_frames reflects a source orientation across the plane.
 
-    The defining property: the mirrored aim and up are the reflections of
-    the source aim and up (so reflecting the result back recovers the
-    source), and the frame stays orthonormal and right-handed. This is the
-    core "is the mirror correct?" check, in isolation from the scene.
+    The defining property: the mirrored aim is the reflection of the source
+    aim (so reflecting the result back recovers the source), and the frame
+    stays orthonormal and right-handed. The up is the reflected up under
+    'parallel' and its negation under 'symmetric' - the two behaviors are a
+    180-degree roll about the aim apart, which is checked here too. This is
+    the core "is the mirror correct?" check, in isolation from the scene.
     '''
     keep = _AX['x']
     # A source frame aiming outward on +X, up +Z.
@@ -249,23 +253,43 @@ def test_mirror_frames():
          src_rows[1][0], src_rows[1][1], src_rows[1][2], 0,
          src_rows[2][0], src_rows[2][1], src_rows[2][2], 0,
          0, 0, 0, 1]
-    frames = rt_set.mirror_frames([m], 'x', 'x', 'z')
-    tgt = frames[0]
+    reflected_up = rt_set._reflect(src_rows[2], keep)
     ok = True
-    ok &= _verdict('mirror_frames orthonormal', _orthonormal(tgt))
-    ok &= _verdict('mirror_frames right-handed', _right_handed(tgt))
-    # Aim reflected: target aim == reflect(source aim); reflecting back = source.
-    aim_ok = _ang(tgt[0], rt_set._reflect(src_rows[0], keep)) < ANG_TOL
-    ok &= _verdict('mirror_frames aim reflected', aim_ok,
-                   f'target aim={[round(v, 3) for v in tgt[0]]}')
-    up_ok = _ang(tgt[2], rt_set._reflect(src_rows[2], keep)) < ANG_TOL
-    ok &= _verdict('mirror_frames up reflected', up_ok,
-                   f'target up={[round(v, 3) for v in tgt[2]]}')
-    # The fix this reworked: the mirrored aim must point to the OPPOSITE
-    # side (its X component flips sign), not the same way as the source.
-    outward = (tgt[0][0] * src_rows[0][0]) < 0
-    ok &= _verdict('mirror_frames aim flips side', outward,
-                   f'src X={src_rows[0][0]:.3f}, tgt X={tgt[0][0]:.3f}')
+
+    for behavior, sign in (('symmetric', -1.0), ('parallel', 1.0)):
+        tgt = rt_set.mirror_frames([m], 'x', 'x', 'z', behavior)[0]
+        ok &= _verdict(f'mirror_frames {behavior} orthonormal', _orthonormal(tgt))
+        ok &= _verdict(f'mirror_frames {behavior} right-handed', _right_handed(tgt))
+        # Aim reflected regardless of behavior: it must follow the mirrored
+        # chain, which is exactly what leaves the roll as the only freedom.
+        aim_ok = _ang(tgt[0], rt_set._reflect(src_rows[0], keep)) < ANG_TOL
+        ok &= _verdict(f'mirror_frames {behavior} aim reflected', aim_ok,
+                       f'target aim={[round(v, 3) for v in tgt[0]]}')
+        want_up = rt_set._scale(reflected_up, sign)
+        up_ok = _ang(tgt[2], want_up) < ANG_TOL
+        ok &= _verdict(f'mirror_frames {behavior} up '
+                       f'{"negated" if sign < 0 else "reflected"}', up_ok,
+                       f'target up={[round(v, 3) for v in tgt[2]]}')
+        # The fix this reworked: the mirrored aim must point to the OPPOSITE
+        # side (its X component flips sign), not the same way as the source.
+        outward = (tgt[0][0] * src_rows[0][0]) < 0
+        ok &= _verdict(f'mirror_frames {behavior} aim flips side', outward,
+                       f'src X={src_rows[0][0]:.3f}, tgt X={tgt[0][0]:.3f}')
+
+    # The two behaviors differ by exactly 180 degrees about the aim - the
+    # property that lets Roll Chain at 180 convert one into the other.
+    sym = rt_set.mirror_frames([m], 'x', 'x', 'z', 'symmetric')[0]
+    par = rt_set.mirror_frames([m], 'x', 'x', 'z', 'parallel')[0]
+    ok &= _verdict('mirror_frames behaviors are a 180 roll apart',
+                   abs(_ang(sym[2], par[2]) - 180.0) < ANG_TOL,
+                   f'up-to-up angle={_ang(sym[2], par[2]):.2f} deg')
+    ok &= _verdict('mirror_frames behaviors share an aim',
+                   _ang(sym[0], par[0]) < ANG_TOL)
+
+    # An unrecognized behavior must not silently mirror some third way.
+    bad = rt_set.mirror_frames([m], 'x', 'x', 'z', 'sideways')[0]
+    ok &= _verdict('mirror_frames unknown behavior falls back to symmetric',
+                   _ang(bad[2], sym[2]) < ANG_TOL)
     return ok
 
 
@@ -297,13 +321,18 @@ def test_find_mirror_pairs():
 
 # SCENE HELPERS ========================================================
 
-_FLAGS = ('ORIENT_JOINTS', 'MIRROR_ORIENT', 'MIRROR_JOINTS', 'MIRROR_DRYRUN')
+_FLAGS = ('ORIENT_JOINTS', 'MIRROR_ORIENT', 'MIRROR_JOINTS', 'MIRROR_DRYRUN',
+          'MIRROR_BEHAVIOR')
 
 
-def _run_setup_on(parts, orient=False, mir_orient=False, mir_joints=False):
+def _run_setup_on(parts, orient=False, mir_orient=False, mir_joints=False,
+                  behavior=None):
     '''
     Run the real Setup pipeline (setup_tails) on just `parts`, then restore
     RIGPARTS and the Setup flags. Mutates the skeleton like a real run.
+
+    behavior overrides MIRROR_BEHAVIOR for the run ('symmetric'/'parallel');
+    None keeps the current setting.
     '''
     saved_parts = list(rt_cst.RIGPARTS)
     saved_flags = {n: getattr(rt_cst, n, None) for n in _FLAGS}
@@ -313,6 +342,8 @@ def _run_setup_on(parts, orient=False, mir_orient=False, mir_joints=False):
         rt_cst.MIRROR_ORIENT = mir_orient
         rt_cst.MIRROR_JOINTS = mir_joints
         rt_cst.MIRROR_DRYRUN = False
+        if behavior is not None:
+            rt_cst.MIRROR_BEHAVIOR = behavior
         return rt_set.setup_tails(root=None, dry_run=False)
     finally:
         rt_cst.RIGPARTS = saved_parts
@@ -448,14 +479,20 @@ def test_end_joint(rigname=DEFAULT_CHAIN):
     return ok
 
 
-def test_mirror_orient(base=DEFAULT_PAIR_BASE):
+def test_mirror_orient(base=DEFAULT_PAIR_BASE, behavior=None):
     '''
     Mirror one L/R pair's ORIENTATION (MIRROR_ORIENT) and verify symmetry.
 
-    Invariant after the mirror: reflecting the target side's aim and up axes
-    across the symmetry plane recovers the source side's - i.e. the two
-    sides are true mirror orientations. Also checks the target stays a valid
-    right-handed frame and its positions did not move.
+    Invariant after the mirror: reflecting the target side's aim across the
+    symmetry plane recovers the source side's, so the aim follows the
+    mirrored chain either way. The up does the same under 'parallel'; under
+    'symmetric' the reflected up is the source's NEGATED up, since the two
+    behaviors are a 180-degree roll about the aim apart. Also checks the
+    target stays a valid right-handed frame and its positions did not move.
+
+    Arguments
+        base (str): L/R pair base name, e.g. 'fintail'.
+        behavior (str): 'symmetric'/'parallel'; None uses MIRROR_BEHAVIOR.
     '''
     info = _pair_joints(base)
     if not info:
@@ -467,7 +504,11 @@ def test_mirror_orient(base=DEFAULT_PAIR_BASE):
     ui = _AX.get(rt_set._cst('ORIENT_UP_AXIS'), 2)
 
     tgt_pos_before = [cmds.xform(j, q=True, ws=True, translation=True) for j in tgt]
-    _run_setup_on([source, target], mir_orient=True)
+    _run_setup_on([source, target], mir_orient=True, behavior=behavior)
+    # Read back what the run actually used, so the expected up sign matches
+    # the setting even when the caller passed None.
+    used = rt_set._behavior(behavior)
+    up_sign = -1.0 if used == 'symmetric' else 1.0
 
     n = min(len(src), len(tgt))
     aim_err = up_err = 0.0
@@ -476,9 +517,11 @@ def test_mirror_orient(base=DEFAULT_PAIR_BASE):
         sm = _rows(cmds.xform(src[i], q=True, ws=True, matrix=True))
         tm = _rows(cmds.xform(tgt[i], q=True, ws=True, matrix=True))
         rh &= _right_handed(tm)
-        # reflect(target axis) should equal source axis
+        # reflect(target axis) should equal source axis (up negated when the
+        # behavior is 'symmetric')
         aim_err = max(aim_err, _ang(rt_set._reflect(tm[ai], keep), sm[ai]))
-        up_err = max(up_err, _ang(rt_set._reflect(tm[ui], keep), sm[ui]))
+        want_up = rt_set._scale(sm[ui], up_sign)
+        up_err = max(up_err, _ang(rt_set._reflect(tm[ui], keep), want_up))
 
     tgt_pos_after = [cmds.xform(j, q=True, ws=True, translation=True) for j in tgt]
     moved = max(math.dist(a, b)
@@ -487,8 +530,9 @@ def test_mirror_orient(base=DEFAULT_PAIR_BASE):
     ok = True
     ok &= _verdict(f'mirror_orient {source}->{target} aim symmetric',
                    aim_err < ANG_TOL, f'max aim err={aim_err:.3f} deg')
-    ok &= _verdict(f'mirror_orient {source}->{target} up symmetric',
-                   up_err < ANG_TOL, f'max up err={up_err:.3f} deg')
+    ok &= _verdict(f'mirror_orient {source}->{target} up symmetric '
+                   f'({used})', up_err < ANG_TOL,
+                   f'max up err={up_err:.3f} deg')
     ok &= _verdict(f'mirror_orient {target} right-handed', rh)
     ok &= _verdict(f'mirror_orient {target} positions kept', moved < POS_TOL,
                    f'max move={moved:.5f}')
@@ -661,7 +705,13 @@ def check_mirror(base=DEFAULT_PAIR_BASE):
     '''
     results = [
         ('test_mirror_frames (math)', _safe(test_mirror_frames)),
-        (f'test_mirror_orient({base})', _safe(lambda: test_mirror_orient(base))),
+        # Both behaviors on the real pair. Each run re-mirrors from the
+        # untouched source side, so running them back to back is safe and
+        # each verdict stands on its own.
+        (f'test_mirror_orient({base}, symmetric)',
+         _safe(lambda: test_mirror_orient(base, 'symmetric'))),
+        (f'test_mirror_orient({base}, parallel)',
+         _safe(lambda: test_mirror_orient(base, 'parallel'))),
         (f'test_mirror_joints({base})', _safe(lambda: test_mirror_joints(base))),
     ]
     return _summary(f'MIRROR CHECK ({base})', results)
