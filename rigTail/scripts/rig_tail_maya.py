@@ -512,17 +512,24 @@ def reset_transforms(node, unlock=True):
         for axis in 'XYZ':
             attr = f"{attribute}{axis}"
             plug = f"{node}.{attr}"
-            # A lock on the compound parent also blocks the child plug
+            # A lock or connection on the compound parent also blocks the
+            # child plug: a constraint drives '.translate', which reports as
+            # 'translate' here, never 'translateX'. Both names must be
+            # checked or the plug looks free and setAttr raises
+            # "locked or connected".
             maybe_locked = attr in locked or attribute in locked
+            maybe_connected = attr in connected or attribute in connected
             if unlock:
                 if maybe_locked:
                     cmds.setAttr(plug, l=0)
-                if attr in connected:
+                if maybe_connected:
                     break_connection(plug)
                 if maybe_locked and cmds.getAttr(plug, lock=True):
                     continue  # still locked (compound parent)
                 cmds.setAttr(plug, default_value)
-            elif not maybe_locked:
+            elif not maybe_locked and not maybe_connected:
+                # Not unlocking, so a driven plug is left as it is rather
+                # than raising.
                 cmds.setAttr(plug, default_value)
 
 
