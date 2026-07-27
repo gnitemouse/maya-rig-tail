@@ -44,7 +44,6 @@ Functions:
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_ctrlall as rt_ca

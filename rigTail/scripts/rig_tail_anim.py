@@ -2,19 +2,34 @@
 # rig_tail_anim.py
 author: Daisy Jane @gnitemouse
 
-Animation Effects for Rig Tail
-Matrix-based offset architecture outputs each FX to its own composeMatrix.
+Animation FX for Rig Tail: procedural motion layered on top of whatever
+the controls do, driven by animatable basectrl attributes.
 
-FX
-- Curl: Progressive static rotation (animator-driven, adjustable falloff)
-- Wave: Sinusoidal traveling wave (time-based, adjustable falloff)
-- Noise: Procedural noise variation (time-based)
-- Loop: Seamless timeline looping (modulo time)
+- Curl: progressive static rotation (animator-driven, adjustable falloff)
+- Wave: sinusoidal traveling wave (time-based, adjustable falloff)
+- Noise: procedural jitter (time-based)
+- Loop: seamless timeline looping (modulo time)
+
+Each FX writes per-joint rotations into its own composeMatrix, which
+rig_tail_matrix multiplies into the BN joint's offsetParentMatrix in
+front of the driver term - so FX rotate each joint about its own pivot
+and never touch the joints' channels. Wave and noise are expressions
+(they need time); curl is a pure node network. Attribute sources go
+through rt_ca.resolved_plug so the Main Controller dashboard can route
+them, and expressions are deleted via delete_expression - a raw delete
+on a connected expression cascades through its connection web.
+
+Functions:
+    delete_expression: remove an expression without the delete cascading
+    build_anim_effects: entry point; build the enabled FX for one part
+    add_anim_attributes_to_basectrl: the animatable FX attrs (gated
+        per enabled effect; mirrored by rt_ca.routed_attr_specs)
+    build_loop: modulo-time driver the other FX read
+    build_wave, build_curl, build_noise: one network per effect
 '''
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya

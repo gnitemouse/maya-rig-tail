@@ -89,10 +89,33 @@ adding a constant or a function to `rig_tail_constants` needs `TailReload`.
 | `rig_tail_connect` | `rt_con` | IK/FK connections and blending |
 | `rig_tail_anim` | `rt_ani` | Wave and dynamic FX |
 | `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
+| `rig_tail_test` | `rt_test` | Diagnostics for a built rig |
 
 > Note: `rig_tail_setup` was previously the teardown/setup module; that
 > module is now `rig_tail_cleanup`, and `rig_tail_setup` is the Setup phase
 > (formerly `rig_tail_orient`).
+
+## Key decisions
+
+- **Pure matrix drive.** BN joints are driven entirely through
+  `offsetParentMatrix` (blendMatrix + multMatrix + composeMatrix): no
+  constraints, no Euler decomposition, and joint channels stay zeroed
+  (`rig_tail_matrix`).
+- **Rebuild-safe by name.** Every node is looked up by its templated name
+  and reused; the joint cache decides per part whether a rebuild needs a
+  full teardown or just re-wiring (`rig_tail_cache`, `rig_tail_cleanup`).
+- **Rest-pose store (Method D).** The IK curve is built from a stored
+  rest pose, so repeated rebuilds reproduce the same rig instead of
+  compounding curve smoothing (`rig_tail_restpose`).
+- **Skin preservation.** With `PRESERVE_SKIN` on, rebuilds and Setup
+  re-baseline existing skinClusters instead of unbinding, so painted
+  weights survive (`rig_tail_maya`, `rig_tail_setup`).
+- **Session state lives in `rig_tail_constants`,** which is deliberately
+  never reloaded; modules install missing defaults onto it so new
+  features work in a stale session (see "How the modules get loaded").
+- **Global truth on the cog.** Per-tail IKFK switches and the optional
+  ALL/override dashboard live on the cog control; base controls carry
+  proxies (`rig_tail_ctrlall`).
 
 ---
 
@@ -128,6 +151,28 @@ Launch the Tail Rig Builder UI.
 
 #### `main_setup()`
 Launch the Tail Rig Setup UI.
+
+---
+
+## rig_tail_ui.py (rt_ui)
+
+Build UI (Tail Rig Builder window). Shows the loaded config and a summary
+of the current settings, the build options (FK/IK, Indiv FK, Stretchy,
+FX, Main Controller, Preserve skinClusters), and buttons opening pop-up
+editors for RIGPARTS, the naming templates and the numeric constants.
+Settings live in `rig_tail_constants` and round-trip through JSON configs
+(Load/Save Config); the main-window checkboxes are committed on build and
+on close, so they survive reopening the window.
+
+Two build buttons: **Build Rig** keeps unchanged tails as they are (the
+joint cache decides what changed), **Force Rebuild** tears every included
+part down first. The force flag lasts one click and is never saved, so a
+config cannot leave every build forcing. **Preserve skinClusters**
+(`PRESERVE_SKIN`) keeps existing skins and painted weights across
+rebuilds; off rebinds from scratch.
+
+#### `show_ui()`
+Build and show the Builder window, closing any previous instance.
 
 ---
 
@@ -324,6 +369,99 @@ Rename a rig part in place across scene nodes and caches.
 
 ---
 
+## rig_tail_control.py (rt_ctl)
+
+Control-curve creation: the root/cog/base hierarchy, the sliding
+variable-FK set, and the IK sets (ik, float, spline, up-vector), plus
+colours, shapes and channel-box attributes. Controls are found and reused
+by name on rebuild; colours are written on the shape nodes so a rebuild
+updates them, and `PRESERVE_CTRL_SHAPES` keeps hand-edited shapes. The
+SplineIK set is fixed at 5 controls on fixed tail fractions regardless of
+`NUM_CTRL_IK`; `spline_control_index` maps the clusters onto them.
+
+Key functions: `create_root_cog`, `create_basectrl`, `create_controls_fk`,
+`create_controls_ik` (+ `create_spline_controls_ik`/`_float`/`_spline`,
+`create_spline_up_vectors`), `get_controls_ik`, `set_control_color`,
+`add_fk_attributes_to_controls`.
+
+---
+
+## rig_tail_curve.py (rt_crv)
+
+Curves, spline IK handles and clusters. The FK curve follows the joints
+exactly; the IK curve carries one CV per cluster plus two up-vector CVs,
+with a driver/solver curve pair keeping the solver input independent of
+the cluster deformation. Handles and clusters are found and renamed
+rather than duplicated on rebuild.
+
+Key functions: `create_curve`, `connect_driver_to_solver_curve`,
+`create_spline_handle`, `get_spline_handle`, `create_clusters_on_curve`.
+
+---
+
+## rig_tail_fk.py (rt_fk)
+
+Variable FK: N sliding controls whose rotation is distributed to the
+joints by position and falloff. Each joint carries a stack of SDK groups
+(one per control) receiving the weighted rotation; the control's Position
+attribute moves it along the FK curve and Falloff widens or narrows the
+joints it affects. Based on Jeff Brodsky's elephant-trunk rig.
+
+Key functions: `set_curveinfo_fk`, `falloff_rotation`,
+`create_sdk_groups`, `get_sdk_groups`, `put_jnt_under_sdk_groups`.
+
+---
+
+## rig_tail_stretch.py (rt_str)
+
+Squash and stretch. One stretch ratio (current curve length over cached
+rest length) drives Length (joints spread along the tail) and Thickness
+(BN scaleY/Z via ratio^-0.5, blended by `preserveVolume`, trimmed by
+`squash`, divided by global scale). Split across the build:
+`build_stretch` creates the nodes early, `connect_stretch_to_joints`
+wires the basectrl sliders once they exist; nodes are reused by name on
+re-runs. The parent's squash would shear OPM children — `rig_tail_matrix`
+cancels it with a `squashInv` term.
+
+Key functions: `build_stretch`, `connect_stretch_to_joints`,
+`add_stretch_attributes_to_basectrl`, `add_jntscale_attributes_to_basectrl`,
+`set_curveinfo_stretch`, `build_advanced_twist`.
+
+---
+
+## rig_tail_connect.py (rt_con)
+
+Final wiring phase: parents the systems into the hierarchy, creates the
+switch and channel-box attributes (per-tail IKFK switch on the cog;
+stretch/twist/FX attributes on the basectrl, proxied onto every control),
+wires the IKFK mode SDKs that fade constraint weights and visibility, and
+hands off to `rig_tail_matrix`, `rig_tail_anim` and `rig_tail_stretch`
+before binding geometry to the BN joints. With the dashboard active,
+consumers read `rt_ca.resolved_plug()` / `rt_ca.ikfk_driver()` instead of
+the plain plugs. Caches `get_controls_ik` results per build.
+
+Key functions: `connect_rig_tail`, `connect_root`, `connect_cog`,
+`connect_basectrl`, `connect_fk`, `connect_ik`, `connect_spline_ik`,
+`connect_stretch`, `add_attributes_ikfk_switch`,
+`setup_switch_fk`/`_ik`/`_upvec`, `enforce_attr_order`.
+
+---
+
+## rig_tail_anim.py (rt_ani)
+
+Animation FX layered on the rig: Curl (static, falloff), Wave (traveling
+sine), Noise (jitter) and Loop (modulo time for seamless cycling). Each
+FX writes per-joint rotations into its own composeMatrix, multiplied into
+the BN offsetParentMatrix by `rig_tail_matrix` — joints rotate about
+their own pivots and their channels stay untouched. Attribute sources go
+through `rt_ca.resolved_plug` so the dashboard can route them.
+
+Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
+`build_loop`, `build_wave`, `build_curl`, `build_noise`,
+`delete_expression`.
+
+---
+
 ## rig_tail_ctrlall.py (rt_ca)
 
 Main Controller dashboard for rigs with multiple tails. Built during the
@@ -443,9 +581,42 @@ how many of the chain's joints are influences, and how far the skinCluster's
 rest pose has drifted from where the joints now are. Safe.
 
 Individual tests: `test_reflect`, `test_assign_rows`, `test_roll_about`,
-`test_aim_frames`, `test_mirror_frames`, `test_find_mirror_pairs` (math);
-`test_orient`, `test_end_joint`, `test_mirror_orient`, `test_mirror_joints`,
-`test_roll`, `test_skin_rebaseline`, `test_rigname_from_selection` (scene).
+`test_aim_frames`, `test_up_mode`, `test_mirror_frames`,
+`test_find_mirror_pairs` (math); `test_orient`, `test_end_joint`,
+`test_mirror_orient`, `test_mirror_joints`, `test_roll`,
+`test_skin_rebaseline`, `test_rigname_from_selection` (scene).
+
+---
+
+## rig_tail_test.py (rt_test)
+
+Diagnostics for a built rig (the matrix/OPM architecture). Read-only
+`test_*`/`check_*` functions validate wiring and alignment; `fix_*`
+helpers mutate and are opt-in. Ships inside the module so exactly one
+copy is on `sys.path`.
+
+#### `run_all(rigname='tail')`
+Every read-only check with a PASS/FAIL/RAN/ERROR summary; True when
+nothing failed.
+
+#### `report_bend(rigparts)`
+Per-chain bend angles (total degrees a chain turns through), read-only —
+the before/after measure for rebuild degradation.
+
+#### `probe(stage, rigname)`
+Quick joint probe: where a chain's shape is currently held (jointOrient,
+rotate or OPM) at a build stage.
+
+#### `measure_rebuild_degradation(rigparts, rebuilds=2)`
+Curvature loss across repeated rebuilds. **Mutating** (rebuilds the rig).
+
+#### `test_build_exclusion(rigname)`
+An Excluded part survives a rebuild untouched. **Mutating.**
+
+Individual checks (all taking `rigname`): `test_matrix`,
+`test_local_trs`, `test_fx_order`, `test_alignment`, `test_matrix_opm`,
+`test_joint_orient`, `check_expression_flags`, `test_ikfk_drive`,
+`test_wave`, `test_curl`, `test_time_evaluation`, `show_data_flow`.
 
 ---
 

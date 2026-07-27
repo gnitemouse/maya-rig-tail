@@ -2,17 +2,23 @@
 # rig_tail.py
 author: Daisy Jane @gnitemouse
 
-Rig a stretchy tail with IK FK modes.
+Main entry point: rig a stretchy tail with IK FK modes.
 Switch modes include SplineIK, IK, Float, and FK.
 IK mode combines ikHandle with clusters on spline curve.
 FK mode provides variable FK sliding controls for joint rotations with falloff.
 Option to build squash/stretch.
 
+Each build runs the same pipeline per rig part: cleanup (tear down or
+reuse the previous rig, from the joint cache), joints (detect or rebuild
+the BN/FK/IK chains), curves + clusters + controls, then connect (wire
+switches, matrix network, stretch, FX, bind geometry). The optional
+Setup phase (rig_tail_setup) runs separately, BEFORE a build.
+
 Run in Maya Script Editor (Python):
 import importlib as il
 import rig_tail
 il.reload(rig_tail)
-rig_tail.rig_tail_single('tail', root='tail_spline_grp', fk=True, ik=True)
+rig_tail.rig_tail_single('tail', fk=True, ik=True)
 rig_tail.main()
 
 Rig Hierarchy:
@@ -62,7 +68,6 @@ import logger_config
 il.reload(logger_config)
 from logger_config import logger_setup, abort_build
 
-import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_joint as rt_jnt
 import rig_tail_math as rt_mat

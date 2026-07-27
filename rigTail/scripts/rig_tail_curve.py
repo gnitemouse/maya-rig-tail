@@ -2,7 +2,25 @@
 # rig_tail_curve.py
 author: Daisy Jane @gnitemouse
 
-Curve and Cluster methods for Rig Tail
+Curves, spline IK handles and clusters for Rig Tail.
+
+The FK curve follows the joint positions exactly (the variable-FK
+controls read their position from it); the IK curve carries one CV per
+cluster control plus two for the up-vector ends, and a driver/solver
+curve pair keeps the solver's input independent of what the clusters
+deform. Construction history is deleted at creation so curve length
+never re-evaluates through stale history. Handles and clusters are
+found and renamed rather than duplicated on rebuild.
+
+Functions:
+    create_curve: NURBS curve from joint positions, FK or IK flavour
+    connect_driver_to_solver_curve: wire the driver curve into the solver
+    create_spline_handle: spline ikHandle on the chain, reusing existing
+    rename_spline_handle: bring a found handle/effector/curve onto the
+        naming template
+    get_spline_handle: existing handle by name or joint chain
+    create_cluster: one cluster on given CVs
+    create_clusters_on_curve: the full cluster row for a curve
 '''
 
 import maya.cmds as cmds
@@ -312,74 +330,6 @@ def get_spline_handle(rigname, joints=None):
 
     logger.trace(f'({spline_handle}, {effector}, {curve})')
     return (spline_handle, effector, curve)
-
-def search_spline_handle(rigname, joints=None, typ=rt_cst.TYPE_IK):
-    '''
-    Get existing spline handle components.
-    Search by joint chain or by naming convention.
-
-    Arguments
-        rigname (str): Name of rig component
-        joints (list): List of joints to find ikHandle for (optional)
-        typ (str): Rig type identifier (TYPE_IK)
-
-    Return
-        spline_list (list): [ikhandle, effector, curve] or None if not found
-    '''
-    if joints: # Find existing ikHandle from joints
-        get_ikhandles = cmds.ls(typ='ikHandle')
-        for ikhandle in get_ikhandles:
-            # Check if it uses ikSplineSolver
-            solver = cmds.ikHandle(ikhandle, q=1, sol=1)
-            if solver != 'ikSplineSolver':
-                continue
-            # Check joint list that the handle manipulates
-            jl = cmds.ikHandle(ikhandle, q=1, jl=1)
-            if jl is None:
-                logger.warning(f'IK handle {spline_handle} has no joint list')
-                return None
-
-            if rt_jnt.is_equal_joint(jl[0], joints[0]) and rt_jnt.is_equal_joint(jl[-1], joints[-2]):
-                # Return IK handle with matching start/end joints
-                spline_list = [ikhandle,
-                               cmds.ikHandle(ikhandle, q=1, ee=1),
-                               cmds.ikHandle(ikhandle, q=1, c=1).split('|')[-2]]
-                logger.trace(f'Found ikHandle {spline_list}')
-                return spline_list
-        return None
-    else: # Find ikHandle by name
-        handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ)
-        effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ)
-        curve = rt_nam.fstr(rigname, rt_cst.CURVE, typ, TAG='spline')
-
-        if cmds.objExists(handle) and cmds.objExists(effector) and cmds.objExists(curve):
-            return [handle, effector, curve]
-
-        if cmds.objExists(handle):
-            effector = cmds.listConnections(f'{handle}.effector', s=1, d=0)[0]
-            curve = cmds.listConnections(f'{handle}.curve', s=1, d=0)[0]
-            return [handle, effector, curve]
-
-        if cmds.objExists(effector):
-            handles = cmds.listConnections(effector, type='ikHandle')
-            for handle in handles:
-                solver = cmds.ikHandle(handle, q=1, sol=1)
-                if solver != 'ikSplineSolver':
-                    continue
-                curve = cmds.listConnections(f'{handle}.curve', s=1, d=0)[0]
-                return [handle, effector, curve]
-
-        if cmds.objExists(curve):
-            get_ikhandles = cmds.ls(typ='ikHandle')
-            for handle in get_ikhandles:
-                solver = cmds.ikHandle(handle, q=1, sol=1)
-                if solver != 'ikSplineSolver':
-                    continue
-                conns = cmds.listConnections(f'{handle}.curve', s=1, d=0) or []
-                if conns and curve in conns:
-                    effector = cmds.listConnections(f'{handle}.effector', s=1, d=0)[0]
-                    return [handle, effector, curve]
-        return None
 
 
 # CLUSTERS =============================================================

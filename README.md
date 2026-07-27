@@ -18,6 +18,8 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 - **Setup phase** - Optional pre-build step that orients each chain (fixes
   twist), mirrors matching L/R tails (orientation and/or positions), and
   rolls individual chains onto the right plane
+- **Skin preservation** - Rebuilds keep existing skinClusters and their
+  painted weights (toggle in the Build UI)
 - **JSON Configs** - Save/load custom configuration through UI
 
 ## Install
@@ -171,6 +173,29 @@ in one click. It applies immediately and never moves joints.
 A typical pass on a messy rig: run Orient Joints + Mirror Joints, roll any
 individual chains that face the wrong way, then build.
 
+## Build
+
+Launch from the **TailRig** shelf button or `rig_tail.main()`. Pick the
+build options (FK/IK, stretch, FX, Main Controller) and click **Build
+Rig**: tails whose joints are unchanged since the last build are kept as
+they are, so iterating is fast. **Force Rebuild** tears everything down
+first instead — a one-click action that is never saved as a setting.
+
+**Preserve skinClusters** (on by default) keeps existing skins across
+rebuilds: rig joints are added to the cluster (new ones at weight 0) and
+painted weights survive. Turn it off to unbind and rebind from scratch.
+
+## Highlights
+
+- BN joints are driven purely through `offsetParentMatrix` — no
+  constraints, no Euler decomposition, and joint channels stay zeroed.
+- Rebuild-safe: nodes are found by templated name and reused, and a
+  stored rest pose keeps repeated rebuilds from degrading the curve.
+- Skin- and shape-preserving: painted weights and hand-edited control
+  shapes survive a rebuild.
+- Excluded rig parts are frozen: Setup leaves them alone and the build
+  neither tears them down nor rebuilds them.
+
 ## Requirements
 
 - Maya 2020+ (Python 3)
@@ -214,6 +239,7 @@ Component naming can be changed through UI or in rig_tail_constants.py
 
 | Module | Alias | Purpose |
 |--------|-------|---------|
+| `rig_tail` | - | Entry point and build orchestration |
 | `rig_tail_constants` | `rt_cst` | Global constants and caches |
 | `rig_tail_naming` | `rt_nam` | Template strings and naming |
 | `rig_tail_maya` | `rt_mya` | Maya scene/node operations |
@@ -233,6 +259,9 @@ Component naming can be changed through UI or in rig_tail_constants.py
 | `rig_tail_connect` | `rt_con` | IK/FK connections |
 | `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
 | `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
+| `rig_tail_test` | `rt_test` | Diagnostics for a built rig |
+| `rig_tail_test_setup` | `rt_ts` | Tests for the Setup phase |
+| `logger_config` | - | Shared logging setup |
 
 ## Configuration
 

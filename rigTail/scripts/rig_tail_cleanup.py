@@ -41,7 +41,6 @@ import re
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_joint as rt_jnt

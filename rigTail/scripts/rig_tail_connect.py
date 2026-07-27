@@ -36,7 +36,6 @@ from logger_config import logger_setup
 import importlib as il
 
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
 from rig_tail_control import get_controls_ik, spline_control_index
 from rig_tail_curve import get_spline_handle
 import rig_tail_naming as rt_nam

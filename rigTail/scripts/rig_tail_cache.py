@@ -36,7 +36,6 @@ Functions:
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_cst
-import rig_tail_constants as rt_cst
 import math
 
 logger = logger_setup(__name__)

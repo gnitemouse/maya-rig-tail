@@ -2,12 +2,45 @@
 # rig_tail_control.py
 author: Daisy Jane @gnitemouse
 
-Control methods for Rig Tail
+Control-curve creation for Rig Tail: the root/cog/base hierarchy, the
+sliding variable-FK controls, and the IK sets (ik, float, spline,
+up-vector), plus their colours, shapes and channel-box attributes.
+
+Every control is a named curve under a same-named offset group, built
+through create_control so a rebuild finds and reuses the existing pair
+instead of stacking a new one. Colours are written on the SHAPE nodes
+(a rebuilt transform keeps its override otherwise), and
+PRESERVE_CTRL_SHAPES keeps a hand-edited shape across rebuilds per
+control type.
+
+The SplineIK set is fixed at 5 controls (bot, bot_sml, mid, top_sml,
+top) at fixed tail fractions no matter what NUM_CTRL_IK is;
+spline_control_index maps however many clusters were built back onto
+those 5. IK/Float counts follow NUM_CTRL_IK.
+
+Functions:
+    spline_control_index: map a cluster index onto the fixed spline set
+    create_root_cog: root and cog controls at the top of the hierarchy
+    create_basectrl: one per-tail base control, aimed down its chain
+    create_circle_control, create_sphere_control, create_cube_control,
+        create_control_shape, build_control_shapes: shape primitives
+    set_control_color: write an override colour on a control's shapes
+    create_control: one control + offset group, reused on rebuild
+    create_control_match_list: a control per entry of a match list
+    create_controls_fk: the variable-FK sliding control set
+    create_controls_ik / create_spline_controls_ik / _float / _spline /
+        create_spline_up_vectors: the IK-mode control sets
+    get_controls_ik: collect the IK sets back from the scene
+    get_control_hierarchy: controls under a control, in DAG order
+    add_fk_attributes_to_controls: position/falloff attrs on FK controls
+    set_attributes_visibility_fk / _ik: lock and hide unused channels
+    get_control_position: param position of a control along the chain
+    orient_control_aims / orient_aim_controls_nulls: aim controls at
+        each other via throwaway nulls
 '''
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -699,44 +732,6 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
 
 # GET CONTROLS =========================================================
 
-def get_controls_all(rigname, fk=True, ik=True, bn=True,
-                     include_cog=False, include_root=False, include_basectrl=False):
-    '''
-    Get all FK, IK, BN controls under root group.
-
-    Arguments
-        rigname (str): Name of rig component
-        fk (bool): Include FK controls
-        ik (bool): Include IK controls
-        bn (bool): Include BN controls
-        include_cog (bool): Include cog control
-        include_root (bool): Include root control
-        include_basectrl (bool): Include basectrl
-
-    Return
-        controls (list): List of control names
-    '''
-    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    controls = list()
-
-    all_controls = get_control_hierarchy(root_ctrl)
-    for ctrl in all_controls:
-        if include_root and ctrl == root_ctrl:
-            controls.append(ctrl)
-        elif include_cog and ctrl == cog_ctrl:
-            controls.append(ctrl)
-        elif include_basectrl and ctrl == basectrl:
-            controls.append(ctrl)
-        elif fk and rt_cst.TYPE_FK in ctrl:
-            controls.append(ctrl)
-        elif ik and rt_cst.TYPE_IK in ctrl:
-            controls.append(ctrl)
-        elif bn and rt_cst.TYPE_BN in ctrl:
-            controls.append(ctrl)
-    return controls
-
 def get_controls_ik(rigname):
     '''
     Get IK controls and IK control groups for a rig component.
@@ -963,33 +958,6 @@ def get_control_position(control, joints):
 
     logger.trace(f'{control} V: {v}')
     return v
-
-def parent_group_controls(controls, groups, reverse=False, long=False):
-    '''
-    Parent controls under groups in a simple hierarchy.
-    Zero the controls, with option to reverse order.
-
-    Arguments
-        controls (list): List of control names
-        groups (list): List of control group names
-        reverse (bool): Reverse the hierarchy order
-        long (bool): Return long names
-
-    Return
-        controls (list): Updated control names
-        groups (list): Updated group names
-    '''
-    if reverse:
-        controls.reverse()
-        groups.reverse()
-    for i, ctrl in enumerate(controls):
-        if i:
-            groups[i] = cmds.parent(groups[i], controls[i-1])[0]
-            controls[i] = cmds.listRelatives(groups[i], typ='transform', f=long)[0]
-    if long:
-        controls = cmds.ls(controls, long=True)
-        groups = cmds.ls(groups, long=True)
-    return controls, groups
 
 def orient_control_aims(controls, orient_world=None):
     '''

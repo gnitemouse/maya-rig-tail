@@ -14,6 +14,13 @@ options, and buttons that open pop-up editors:
     ikfk attributes)
   - ConstantsEditor: edit numeric constants (control counts and sizes)
 
+Two build buttons: Build Rig keeps unchanged tails as they are (the
+joint cache decides), Force Rebuild tears everything down first. The
+force flag lasts exactly one click - it is never persisted, so a saved
+config can never leave every build forcing. The other options,
+including Preserve skinClusters (PRESERVE_SKIN), are committed to
+rig_tail_constants on build AND on close, so they survive reopening.
+
 All edited values live in rig_tail_constants and can be imported or
 exported through a user-chosen JSON config file (Load/Save Config).
 '''
