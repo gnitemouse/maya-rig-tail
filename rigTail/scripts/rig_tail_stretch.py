@@ -47,7 +47,7 @@ import rig_tail_constants as rt_cst
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
-import rig_tail_mainctrl as rt_mc
+import rig_tail_ctrlall as rt_ca
 
 logger = logger_setup(__name__)
 
@@ -465,7 +465,7 @@ def connect_preserve_volume(rigname, basectrl, squash_blend):
 
     # resolved_plug: override condition output when the main controller
     # dashboard is active, the basectrl attribute otherwise
-    preservevol_src = rt_mc.resolved_plug(rigname, 'preserveVolume')
+    preservevol_src = rt_ca.resolved_plug(rigname, 'preserveVolume')
 
     # Check if IK nodes exist
     stretch_preservevol = f'{rt_cst.TYPE_IK}_{rigname}_stretch_preservevol_blendTwoAttr'

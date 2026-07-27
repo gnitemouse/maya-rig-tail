@@ -39,7 +39,7 @@ rigTail/
 Drag `install.py` from a file browser into the Maya viewport. It asks
 where to install, then adds three shelf buttons to the active shelf:
 **TailSetup** (skeleton orient / mirror), **TailRig** (the builder) and
-**TailManual** (developer import / build / test workflow). Works
+**TailReload** (load/reload the modules and run commands). Works
 immediately, with no restart and no `userSetup.py` edits. Keep
 `install.py` next to `rigTail/` when you drag it.
 
@@ -62,7 +62,7 @@ Whichever is chosen, one resolved path drives everything:
 - `rigTail.install.json` records what went where, so `uninstall.py` knows
   what to remove.
 
-**TailManual** additionally purges every loaded `rig_tail*` module before
+**TailReload** additionally purges every loaded `rig_tail*` module before
 importing, so even `rig_tail_constants` (which the normal reload sweep
 skips) is picked up without restarting Maya.
 
@@ -70,7 +70,7 @@ skips) is picked up without restarting Maya.
 rather than deleting it first, so a file Windows has locked costs that
 file rather than the whole tool, and the installer says which one.
 Files left behind by an older version are cleared afterwards. If Maya has
-already imported the old modules, click **TailManual** (or restart Maya)
+already imported the old modules, click **TailReload** (or restart Maya)
 after installing - the files on disk change, but code already loaded into
 the session does not.
 
@@ -231,7 +231,7 @@ Component naming can be changed through UI or in rig_tail_constants.py
 | `rig_tail_stretch` | `rt_str` | Stretch system |
 | `rig_tail_anim` | `rt_ani` | Animation effects |
 | `rig_tail_connect` | `rt_con` | IK/FK connections |
-| `rig_tail_mainctrl` | `rt_mc` | Main Controller dashboard (multi-tail) |
+| `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
 | `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
 
 ## Configuration

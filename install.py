@@ -18,8 +18,8 @@ INSTALL (drag-and-drop)
     Drag install.py from a file browser into the Maya viewport. It asks
     where to install, then adds three shelf buttons -- "TailSetup"
     (skeleton orient / mirror, black icon), "TailRig" (the builder, white
-    icon) and "TailManual" (developer import/build/test workflow, grey
-    icon). Works immediately -- no restart. Keep install.py next to the
+    icon) and "TailReload" (load/reload the modules and run commands,
+    grey icon). Works immediately -- no restart. Keep install.py next to the
     rigTail/ folder when you drag it; the .mod is written from scratch,
     so the one in the repo is only needed for a manual install.
 
@@ -63,7 +63,7 @@ RE-INSTALL
     older version are cleared afterwards.
 
     Code already imported into the running session is not affected by
-    new files on disk: click "TailManual" (which re-imports everything)
+    new files on disk: click "TailReload" (which re-imports everything)
     or restart Maya.
 
 INSTALL (manual, no drag-and-drop)
@@ -130,17 +130,20 @@ icons: icons
 # recolours of the same octopus distinguish the three buttons at a glance:
 #   white      -> Builder
 #   black      -> Setup
-#   light grey -> Manual Run (developer console workflow)
+#   light grey -> Reload (load/reload the modules, run commands)
 SHELF_ICON = 'octopus.png'              # white  -- Builder
 SHELF_ICON_SETUP = 'octopus_black.png'  # black  -- Setup
-SHELF_ICON_MANUAL = 'octopus_grey.png'  # grey   -- Manual Run
+SHELF_ICON_RELOAD = 'octopus_grey.png'  # grey   -- Reload
 
 SHELF_BUTTON_LABEL = 'TailRig'
 # Second button for the Setup phase (skeleton orient / mirror).
 SHELF_SETUP_LABEL = 'TailSetup'
-# Third button: developer console workflow (import / build / setup / test
-# from the source tree).
-SHELF_MANUAL_LABEL = 'TailManual'
+# Third button: purge and re-import every module, with the build / setup /
+# test commands laid out for the Script Editor.
+SHELF_RELOAD_LABEL = 'TailReload'
+# Labels earlier versions used for the third button; removed on
+# re-install and uninstall so an upgrade does not leave a stale button.
+SHELF_LEGACY_LABELS = ('TailManual',)
 
 # Every shelf button opens with this, with the chosen scripts folder
 # baked in. Pinning TOOL_DIR to the front of sys.path, rather than
@@ -181,12 +184,12 @@ importlib.reload(rig_tail)
 rig_tail.main_setup()
 '''
 
-# Manual Run: a developer console workflow rather than a UI launcher. It
-# force-reimports every module for a clean slate and keeps handles bound
-# for interactive testing in the Script Editor. Commented lines lay out
-# the full workflow -- setup, build and test -- so the user can uncomment
-# the call they want.
-LAUNCH_MANUAL_COMMAND = '''# Rig Tail -- Manual Run (import / build / setup / test)
+# Reload: loads/reloads the modules and runs commands rather than opening
+# a UI. It force-reimports every module for a clean slate and keeps
+# handles bound for interactive use in the Script Editor. Commented lines
+# lay out the full workflow -- setup, build and test -- so the user can
+# uncomment the call they want.
+LAUNCH_RELOAD_COMMAND = '''# Rig Tail -- Reload (load/reload the modules and run commands)
 #@TOOL_DIR@
 
 # Purge every loaded Rig Tail module so the import below is genuinely
@@ -207,10 +210,10 @@ rt_cleanup = importlib.import_module('rig_tail_cleanup')
 rt_connect = importlib.import_module('rig_tail_connect')
 rt_constants = importlib.import_module('rig_tail_constants')
 rt_control = importlib.import_module('rig_tail_control')
+rt_ctrlall = importlib.import_module('rig_tail_ctrlall')
 rt_curve = importlib.import_module('rig_tail_curve')
 rt_fk = importlib.import_module('rig_tail_fk')
 rt_joint = importlib.import_module('rig_tail_joint')
-rt_mainctrl = importlib.import_module('rig_tail_mainctrl')
 rt_math = importlib.import_module('rig_tail_math')
 rt_matrix = importlib.import_module('rig_tail_matrix')
 rt_maya = importlib.import_module('rig_tail_maya')
@@ -541,23 +544,23 @@ def _icon_path(icons_dir, name):
 
 
 def _add_shelf_button(icons_dir, tool_dir):
-    '''Add (or refresh) the TailSetup + TailRig + TailManual launchers.
+    '''Add (or refresh) the TailSetup + TailRig + TailReload launchers.
 
     Three buttons, added left-to-right in the order they are used: Setup
     (orient/mirror the skeleton, black icon), Build (the builder, white
-    icon), and Manual Run (developer console workflow, grey icon). Icons
-    are passed as absolute paths so each button shows its own colour, and
-    all three commands load from tool_dir (the chosen install's scripts
-    folder) as TOOL_DIR.
+    icon), and Reload (load/reload the modules and run commands, grey
+    icon). Icons are passed as absolute paths so each button shows its
+    own colour, and all three commands load from tool_dir (the chosen
+    install's scripts folder) as TOOL_DIR.
     '''
     shelf = _current_shelf()
-    _remove_existing_button(shelf, SHELF_SETUP_LABEL)
-    _remove_existing_button(shelf, SHELF_BUTTON_LABEL)
-    _remove_existing_button(shelf, SHELF_MANUAL_LABEL)
+    for label in ((SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL,
+                   SHELF_RELOAD_LABEL) + SHELF_LEGACY_LABELS):
+        _remove_existing_button(shelf, label)
 
     icon_setup = _icon_path(icons_dir, SHELF_ICON_SETUP)
     icon_build = _icon_path(icons_dir, SHELF_ICON)
-    icon_manual = _icon_path(icons_dir, SHELF_ICON_MANUAL)
+    icon_reload = _icon_path(icons_dir, SHELF_ICON_RELOAD)
 
     cmds.shelfButton(
         parent=shelf,
@@ -579,13 +582,13 @@ def _add_shelf_button(icons_dir, tool_dir):
     )
     cmds.shelfButton(
         parent=shelf,
-        label=SHELF_MANUAL_LABEL,
-        annotation='Rig Tail Manual Run: import / build / setup / test '
-                   'the modules (developer console workflow)',
-        image=icon_manual,
-        image1=icon_manual,
+        label=SHELF_RELOAD_LABEL,
+        annotation='Rig Tail Reload: load/reload every module fresh, with '
+                   'build / setup / test commands ready in the Script Editor',
+        image=icon_reload,
+        image1=icon_reload,
         sourceType='python',
-        command=_shelf_command(LAUNCH_MANUAL_COMMAND, tool_dir),
+        command=_shelf_command(LAUNCH_RELOAD_COMMAND, tool_dir),
     )
     return shelf
 
@@ -620,7 +623,7 @@ def onMayaDroppedPythonFile(*args):
     cmds.inViewMessage(
         amg='<hl>Rig Tail installed</hl> - see the "{0}", "{1}" and "{2}" '
             'buttons on the "{3}" shelf'.format(
-                SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_MANUAL_LABEL,
+                SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_RELOAD_LABEL,
                 shelf),
         pos='midCenter', fade=True, fadeStayTime=3000)
 
@@ -630,7 +633,7 @@ def onMayaDroppedPythonFile(*args):
     print('# Rig Tail: TOOL_DIR -> {0}'.format(tool_dir))
     print('# Rig Tail: module registered by {0}'.format(mod_path))
     print('# Rig Tail: shelf buttons -> {0}, {1}, {2} on "{3}"'.format(
-        SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_MANUAL_LABEL, shelf))
+        SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_RELOAD_LABEL, shelf))
 
 
 # Allow running from the Script Editor as well as drag-and-drop.

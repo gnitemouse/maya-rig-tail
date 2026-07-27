@@ -10,8 +10,8 @@ Complete API reference for the Maya Tail Rig system.
 ## Two phases: Setup then Build
 
 The tool has two phases, run in order and launched from the first two of the
-three shelf buttons (`TailSetup`, then `TailRig`; `TailManual` is the
-developer console workflow described below):
+three shelf buttons (`TailSetup`, then `TailRig`; `TailReload` loads,
+reloads and runs the modules, described below):
 
 1. **Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`): a pre-build
    step that orients, mirrors and rolls the raw BN skeleton so tails move
@@ -37,7 +37,7 @@ Two different refresh strategies sit on top of that:
 - **`TailSetup` / `TailRig`** call `il.reload()` down the chain from
   `rig_tail.py`. Fast, and it deliberately skips `rig_tail_constants` to
   keep session state (UI settings, joint caches, the loaded config) alive.
-- **`TailManual`** deletes every `rig_tail*` module (and `logger_config`)
+- **`TailReload`** deletes every `rig_tail*` module (and `logger_config`)
   from `sys.modules` first, so the import that follows is genuinely fresh.
   This is the only path that picks up edits to `rig_tail_constants` without
   a Maya restart, at the cost of resetting session state — the config
@@ -45,7 +45,7 @@ Two different refresh strategies sit on top of that:
   console testing.
 
 Editing a module and clicking a UI button therefore picks up the change;
-adding a constant or a function to `rig_tail_constants` needs `TailManual`.
+adding a constant or a function to `rig_tail_constants` needs `TailReload`.
 
 ## Module Overview
 
@@ -88,7 +88,7 @@ adding a constant or a function to `rig_tail_constants` needs `TailManual`.
 | `rig_tail_stretch` | `rt_str` | Stretch/squash system |
 | `rig_tail_connect` | `rt_con` | IK/FK connections and blending |
 | `rig_tail_anim` | `rt_ani` | Wave and dynamic FX |
-| `rig_tail_mainctrl` | `rt_mc` | Main Controller dashboard (multi-tail) |
+| `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
 
 > Note: `rig_tail_setup` was previously the teardown/setup module; that
 > module is now `rig_tail_cleanup`, and `rig_tail_setup` is the Setup phase
@@ -324,7 +324,7 @@ Rename a rig part in place across scene nodes and caches.
 
 ---
 
-## rig_tail_mainctrl.py (rt_mc)
+## rig_tail_ctrlall.py (rt_ca)
 
 Main Controller dashboard for rigs with multiple tails. Built during the
 connect phase when `MAIN_CONTROLLER` is on and RIGPARTS has 2+ parts. The
@@ -352,7 +352,7 @@ base control plug when the dashboard is off).
 #### `ikfk_driver(rigname)`
 Driver plug for a tail's IKFK mode SDKs.
 
-#### `cleanup_mainctrl(fk, ik)`
+#### `cleanup_ctrlall(fk, ik)`
 Remove stale dashboard nodes, or all of them when the dashboard is off.
 
 ---
@@ -609,7 +609,7 @@ drops the other influences entirely.
 
 #### `preserve_skin()`
 Read the `PRESERVE_SKIN` setting, defaulting to on (the reload sweep skips
-constants, so a session that predates the setting lacks it — `TailManual`
+constants, so a session that predates the setting lacks it — `TailReload`
 re-imports it).
 
 #### `find_skincluster(node)`

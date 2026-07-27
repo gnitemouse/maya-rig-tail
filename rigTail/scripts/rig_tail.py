@@ -70,7 +70,7 @@ import rig_tail_matrix as rt_mtx
 import rig_tail_naming as rt_nam
 import rig_tail_cache as rt_che
 import rig_tail_maya as rt_mya
-import rig_tail_mainctrl as rt_mc
+import rig_tail_ctrlall as rt_ca
 import rig_tail_control as rt_ctl
 import rig_tail_curve as rt_crv
 import rig_tail_fk as rt_fk
@@ -97,7 +97,7 @@ il.reload(rt_mtx)
 il.reload(rt_nam)
 il.reload(rt_che)
 il.reload(rt_mya)
-il.reload(rt_mc)
+il.reload(rt_ca)
 il.reload(rt_ctl)
 il.reload(rt_crv)
 il.reload(rt_fk)

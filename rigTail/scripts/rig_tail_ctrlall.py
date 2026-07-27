@@ -1,5 +1,5 @@
 '''
-rig_tail_mainctrl.py
+rig_tail_ctrlall.py
 author: Daisy Jane @gnitemouse
 
 Main Controller dashboard for rigs with multiple tails.
@@ -26,7 +26,7 @@ that cannot be re-pointed, so the condition output lands on a hidden
 
 Consumers read resolved_plug() and ikfk_driver(), which return the plain
 basectrl or cog plug when the dashboard is off, so a single-tail build
-wires exactly as before. cleanup_mainctrl (from cleanup_rig) removes
+wires exactly as before. cleanup_ctrlall (from cleanup_rig) removes
 stale pieces every build and strips all dashboard attributes when the
 option is off, while keeping ALL values and override choices across
 rebuilds.
@@ -40,7 +40,7 @@ Functions:
     resolved_plug: source plug a consumer reads for a routed attribute
     ikfk_driver: driver plug for a tail's IKFK mode SDKs
     hide_resolved_attrs: hide the internal resolved IKFK driver attrs
-    cleanup_mainctrl: remove stale or all dashboard nodes and attributes
+    cleanup_ctrlall: remove stale or all dashboard nodes and attributes
     all_attr, condition_node: attribute and node name helpers
 '''
 
@@ -331,7 +331,7 @@ def hide_resolved_attrs():
 
 # CLEANUP ==============================================================
 
-def cleanup_mainctrl(fk, ik):
+def cleanup_ctrlall(fk, ik):
     '''
     Remove dashboard leftovers before a rebuild; called from
     cleanup_rig every build. When the dashboard is off (option

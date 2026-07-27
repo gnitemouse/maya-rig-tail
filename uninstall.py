@@ -3,7 +3,7 @@
 author: Daisy Jane @gnitemouse
 
 Removes everything install.py added: the three shelf buttons (TailSetup,
-TailRig, TailManual) from every shelf, the rigTail.mod that registers the
+TailRig, TailReload) from every shelf, the rigTail.mod that registers the
 module, and the module folder itself. It also drops the module's scripts/
 and icons/ paths from the running session so nothing lingers until
 restart.
@@ -56,7 +56,9 @@ import maya.mel as mel
 MODULE_NAME = 'rigTail'
 MOD_FILE = MODULE_NAME + '.mod'
 MANIFEST_FILE = MODULE_NAME + '.install.json'
-SHELF_LABELS = ('TailSetup', 'TailRig', 'TailManual')
+# 'TailManual' is the pre-1.0 label of the TailReload button; still
+# removed so uninstalling over an old install leaves nothing behind.
+SHELF_LABELS = ('TailSetup', 'TailRig', 'TailReload', 'TailManual')
 
 # TOOL_DIR as install.py bakes it into every shelf button command.
 TOOL_DIR_RE = re.compile(r'^TOOL_DIR\s*=\s*r?[\'"](.+?)[\'"]\s*$', re.M)

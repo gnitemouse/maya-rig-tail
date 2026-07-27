@@ -337,7 +337,7 @@ ANIM_DIVIDER = ('anim_divider', '----------', 'ANIMATION')
 TWIST_DIVIDER = ('twist_divider', '----------', 'TWIST')
 SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
 
-# Naming Template: main controller dashboard (see rig_tail_mainctrl).
+# Naming Template: main controller dashboard (see rig_tail_ctrlall).
 # Real ALL values and per-tail override flags live on the cog control
 # (like the per-tail IKFK switches); each basectrl carries a proxy of
 # its own override flag.
@@ -358,10 +358,10 @@ IKFK_RESOLVED = '{rigname}_ikfk_resolved'
 # Prefix of the ALL attributes on the cog ('all_ikfk', 'all_stretch', ...)
 ALL_PREFIX = 'all_'
 # NOTE: whether the dashboard is active is computed by
-# rig_tail_mainctrl.active(), not here: this module is deliberately
+# rig_tail_ctrlall.active(), not here: this module is deliberately
 # never reloaded (see rig_tail.py), so build logic must not depend on
 # functions added here after a session started. For the same reason
-# rig_tail_mainctrl installs any of the above templates that are
+# rig_tail_ctrlall installs any of the above templates that are
 # missing from a stale session's copy of this module.
 
 def ikfk_mode_index(name):
