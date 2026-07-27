@@ -8,6 +8,10 @@ TailRig, TailManual) from every shelf, and the installed module folder and
 scripts/ and icons/ paths from the running session so nothing lingers
 until restart.
 
+If Rig Tail was installed with the "Run from this folder" option, there
+is nothing under modules/ to delete -- this removes the shelf buttons and
+reports that. The source folder itself is never touched.
+
 --------------------------------------------------------------------------
 UNINSTALL (drag-and-drop)
     Drag uninstall.py from a file browser into the Maya viewport. It

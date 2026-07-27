@@ -34,13 +34,24 @@ rigTail/
 
 **Drag-and-drop (recommended)**
 
-Drag `install.py` from a file browser into the Maya viewport. It copies
-`rigTail/` and `rigTail.mod` into
-`~/Documents/maya/modules/` and adds two shelf buttons to the active
-shelf: **TailSetup** (skeleton orient / mirror) and **TailRig** (the
-builder). Works immediately, with no restart and no `userSetup.py` edits.
-Keep `install.py` next to `rigTail/` and `rigTail.mod` when you drag it,
-since it copies them.
+Drag `install.py` from a file browser into the Maya viewport. It asks
+where to install, then adds three shelf buttons to the active shelf:
+**TailSetup** (skeleton orient / mirror), **TailRig** (the builder) and
+**TailManual** (developer import / build / test workflow). Works
+immediately, with no restart and no `userSetup.py` edits. Keep
+`install.py` next to `rigTail/` and `rigTail.mod` when you drag it.
+
+| Choice | What it does |
+| --- | --- |
+| **Copy to Maya modules** | Copies `rigTail/` and `rigTail.mod` into `~/Documents/maya/modules/`. Self-contained - this folder can then be moved or deleted. |
+| **Run from this folder** | Copies nothing; the shelf buttons load from `<this folder>/rigTail/scripts`, so a `git pull` takes effect on the next click. Moving the folder breaks them. |
+
+Either way the three buttons bake the chosen `rigTail/scripts` folder in
+as `TOOL_DIR` and put it at the front of `sys.path`, so a button always
+runs the install it was made from. **TailManual** additionally purges
+every loaded `rig_tail*` module before importing, so even
+`rig_tail_constants` (which the normal reload sweep skips) is picked up
+without restarting Maya.
 
 **Manual**
 
