@@ -71,7 +71,9 @@ BUILD_IK = True
 INDIV_FK = False
 # Build centralized main controller dashboard (for multiple tails)
 MAIN_CONTROLLER = True
-# Force Rebuild (even if joints are unchanged)
+# Tear down and rebuild even if joints are unchanged. Set per build by
+# the UI's Force Rebuild button (or by hand before rig_tail_multiple);
+# deliberately not part of the saved config.
 FORCE_REBUILD = False
 
 # SKIN =================================================================
@@ -588,7 +590,7 @@ def get_user_editable_config():
         'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
         'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
         'ORIENT_UP_MODE': ORIENT_UP_MODE,
-        'FORCE_REBUILD': FORCE_REBUILD,
+        'PRESERVE_SKIN': PRESERVE_SKIN,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
         'COLOR_SKELETON': COLOR_SKELETON,
         'BN_COLOR': BN_COLOR,
@@ -724,7 +726,7 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, RIGPARTS_EXCLUDE, ROOT, EFFECTS, INDIV_FK
-    global MAIN_CONTROLLER, FORCE_REBUILD
+    global MAIN_CONTROLLER, PRESERVE_SKIN
     global ORIENT_JOINTS, MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, MIRROR_BEHAVIOR, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global ORIENT_UP_MODE
@@ -801,7 +803,10 @@ def load_config(filepath=None):
         # ('cascade') anyway: the old maths is the destructive one, and a
         # skeleton set up under it is exactly what cascade protects.
         ORIENT_UP_MODE = config.get('ORIENT_UP_MODE', ORIENT_UP_MODE)
-        FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
+        # FORCE_REBUILD is deliberately not loaded: forcing is a per-click
+        # action of the Build UI's button, and a config saved by an older
+        # version with it stuck on must not make every build a teardown.
+        PRESERVE_SKIN = config.get('PRESERVE_SKIN', PRESERVE_SKIN)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
         COLOR_SKELETON = config.get('COLOR_SKELETON', COLOR_SKELETON)
         BN_COLOR = config.get('BN_COLOR', BN_COLOR)

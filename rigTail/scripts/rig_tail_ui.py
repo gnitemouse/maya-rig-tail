@@ -272,14 +272,16 @@ class RigTailUI(QtWidgets.QDialog):
             'Override Off (default) makes the tail follow the ALL '
             "values; On makes it use its own base control values. "
             'Enabled when RIGPARTS has 2+ parts.')
-        self.chk_force = QtWidgets.QCheckBox('Force Rebuild (ignore cache)')
-        self.chk_force.setToolTip(
-            'Tear the existing rig down completely and rebuild, even if '
-            'the joints are unchanged since the last build.')
+        self.chk_preserve = QtWidgets.QCheckBox('Preserve skinClusters')
+        self.chk_preserve.setToolTip(
+            'Keep existing skinClusters when rebuilding: rig joints are '
+            'added to the cluster (new ones at weight 0) and painted '
+            'weights survive. Off unbinds and rebinds from scratch, '
+            'losing the weights.')
         self.style_checkbox(self.chk_main)
-        self.style_checkbox(self.chk_force)
+        self.style_checkbox(self.chk_preserve)
         toggles_layout.addWidget(self.chk_main)
-        toggles_layout.addWidget(self.chk_force)
+        toggles_layout.addWidget(self.chk_preserve)
         options_layout.addLayout(toggles_layout)
 
         options_group.setLayout(options_layout)
@@ -331,18 +333,23 @@ class RigTailUI(QtWidgets.QDialog):
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
 
-        self.btn_cancel = QtWidgets.QPushButton('Cancel')
+        self.btn_force = QtWidgets.QPushButton('Force Rebuild')
         self.btn_build = QtWidgets.QPushButton('Build Rig')
-        self.btn_cancel.setToolTip('Close the window without building.')
-        self.btn_build.setToolTip('Build the rig with the settings above.')
+        self.btn_force.setToolTip(
+            'Tear the existing rig down completely and rebuild, even if '
+            'the joints are unchanged since the last build.')
+        self.btn_build.setToolTip(
+            'Build the rig with the settings above. Unchanged tails are '
+            'kept as they are; Force Rebuild ignores that cache.')
 
-        self.btn_cancel.clicked.connect(self.close)
-        self.btn_build.clicked.connect(self.build_rig)
+        # Lambdas so Qt's clicked(checked) bool cannot land in `force`
+        self.btn_force.clicked.connect(lambda: self.build_rig(force=True))
+        self.btn_build.clicked.connect(lambda: self.build_rig())
 
-        self.style_button(self.btn_cancel, 0)
+        self.style_button(self.btn_force, 2)
         self.style_button(self.btn_build, 1)
 
-        button_layout.addWidget(self.btn_cancel)
+        button_layout.addWidget(self.btn_force)
         button_layout.addWidget(self.btn_build)
 
         main_layout.addLayout(button_layout)
@@ -458,7 +465,9 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
         self.chk_fk.setChecked(getattr(rt_cst, 'BUILD_FK', True))
         self.chk_ik.setChecked(getattr(rt_cst, 'BUILD_IK', True))
-        self.chk_force.setChecked(rt_cst.FORCE_REBUILD)
+        # getattr: a session started before PRESERVE_SKIN existed has a
+        # stale constants module without it (constants are never reloaded)
+        self.chk_preserve.setChecked(getattr(rt_cst, 'PRESERVE_SKIN', True))
         self.chk_main.setChecked(rt_cst.MAIN_CONTROLLER)
         self.update_display()
 
@@ -481,7 +490,7 @@ class RigTailUI(QtWidgets.QDialog):
         setattr(rt_cst, 'BUILD_FK', fk)
         setattr(rt_cst, 'BUILD_IK', ik)
         rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
-        rt_cst.FORCE_REBUILD = self.chk_force.isChecked()
+        rt_cst.PRESERVE_SKIN = self.chk_preserve.isChecked()
         rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
         rt_cst.EFFECTS = {
             'stretchy': self.chk_stretchy.isChecked() and ik,
@@ -665,8 +674,14 @@ class RigTailUI(QtWidgets.QDialog):
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 
-    def build_rig(self):
-        '''Apply the UI options to rig_tail_constants and build the rig.'''
+    def build_rig(self, force=False):
+        '''
+        Apply the UI options to rig_tail_constants and build the rig.
+
+        force=True (the Force Rebuild button) tears every included part
+        down and rebuilds it even when its joints are unchanged since the
+        last build; the default keeps unchanged tails as they are.
+        '''
         import rig_tail as rt
 
         self.apply_root_name()
@@ -706,9 +721,12 @@ class RigTailUI(QtWidgets.QDialog):
                 'these parts in RIGPARTS, then build again.')
             return
 
-        # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, FORCE_REBUILD,
-        # MAIN_CONTROLLER, EFFECTS) the same way closeEvent does
+        # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, PRESERVE_SKIN,
+        # MAIN_CONTROLLER, EFFECTS) the same way closeEvent does. The
+        # force flag is per-click, not a setting: it lasts exactly one
+        # build and is never persisted.
         self.save_current_values()
+        rt_cst.FORCE_REBUILD = force
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
