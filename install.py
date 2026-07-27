@@ -2,12 +2,16 @@
 # install.py -- drag-and-drop installer for Rig Tail
 author: Daisy Jane @gnitemouse
 
-Installs Rig Tail as a self-contained Maya module and adds a launcher button
-to the active shelf. This is the non-invasive, standard way to ship a Maya
-tool: everything lives in one folder plus one .mod file under
-~/Documents/maya/modules/. Maya adds the module's scripts/ to sys.path and
-icons/ to the icon path at startup, so nothing global (userSetup.py,
-Maya.env) is ever touched.
+Installs Rig Tail as a Maya module and adds three launcher buttons to the
+active shelf. This is the non-invasive, standard way to ship a Maya tool:
+the code lives in one folder, and one .mod file under
+~/Documents/maya/modules/ points Maya at it. Maya adds the module's
+scripts/ to sys.path and icons/ to the icon path at startup, so nothing
+global (userSetup.py, Maya.env) is ever touched.
+
+The folder itself need not be under modules/ -- it can stay in a git
+clone or sit anywhere the user picks, with the .mod naming that location.
+That is what makes a working copy installable without copying it.
 
 --------------------------------------------------------------------------
 INSTALL (drag-and-drop)
@@ -16,7 +20,8 @@ INSTALL (drag-and-drop)
     (skeleton orient / mirror, black icon), "TailRig" (the builder, white
     icon) and "TailManual" (developer import/build/test workflow, grey
     icon). Works immediately -- no restart. Keep install.py next to the
-    rigTail/ folder and rigTail.mod when you drag it.
+    rigTail/ folder when you drag it; the .mod is written from scratch,
+    so the one in the repo is only needed for a manual install.
 
     Three answers to "where?":
 
@@ -49,6 +54,18 @@ INSTALL (drag-and-drop)
                       to remove -- and what it merely pointed at and must
                       leave alone.
 
+RE-INSTALL
+    Installing again over an existing install overwrites it file by file
+    rather than deleting it first. Clearing the folder fails the moment
+    Windows has anything in it locked -- and fails after the old files
+    are gone, leaving no working install. Overwriting means a stubborn
+    file costs that file, and the installer names it. Leftovers from an
+    older version are cleared afterwards.
+
+    Code already imported into the running session is not affected by
+    new files on disk: click "TailManual" (which re-imports everything)
+    or restart Maya.
+
 INSTALL (manual, no drag-and-drop)
     Copy rigTail/ and rigTail.mod into ~/Documents/maya/modules/
     then restart Maya. Launch from the Script Editor with:
@@ -57,8 +74,11 @@ INSTALL (manual, no drag-and-drop)
     (or make your own shelf buttons running those lines).
 
 UNINSTALL
-    Drag uninstall.py in, or delete rigTail.mod and the rigTail folder
-    from ~/Documents/maya/modules/ and remove the shelf buttons.
+    Drag uninstall.py in: it reads the manifest to find the install
+    wherever it went, and leaves a folder it only pointed at alone. By
+    hand, delete rigTail.mod and rigTail.install.json from
+    ~/Documents/maya/modules/, delete the rigTail folder if it was copied
+    there, and remove the shelf buttons.
 --------------------------------------------------------------------------
 
 Module layout:
@@ -123,11 +143,11 @@ SHELF_SETUP_LABEL = 'TailSetup'
 SHELF_MANUAL_LABEL = 'TailManual'
 
 # Every shelf button opens with this, with the chosen scripts folder
-# baked in. Pinning TOOL_DIR to the front of sys.path (rather than
-# relying on the .mod alone) means a button always runs the install it
-# was made from: the "run from this folder" mode has no .mod at all, and
-# even in module mode it keeps another Rig Tail copy earlier on sys.path
-# from shadowing this one.
+# baked in. Pinning TOOL_DIR to the front of sys.path, rather than
+# relying on the .mod alone, means a button always runs the install it
+# was made from: only one .mod can be registered at a time, so a second
+# install (a clone alongside a modules-folder copy, say) would otherwise
+# have its buttons quietly load the other one's code.
 TOOL_DIR_PREAMBLE = '''import sys
 import importlib
 
@@ -362,15 +382,16 @@ def _choose_destination(src_dir, modules_dir):
         message=(
             'Where should Rig Tail be installed?\n\n'
             '{0}\n    {1}\n'
-            '    The usual install. Self-contained, so this folder can '
-            'then be\n    moved or deleted.\n\n'
+            '    The usual install. Copies the code, so the folder you '
+            'dragged\n    install.py from can then be moved or deleted.'
+            '\n\n'
             '{2}\n    {3}\n'
             '    Nothing is copied -- runs from where it already is, so a '
-            'git pull\n    takes effect on the next click. Moving this '
+            'git pull\n    takes effect on the next click. Moving that '
             'folder breaks it.\n\n'
             '{4}\n    Pick a folder; rigTail/ is copied into it.\n\n'
-            'Either way a {5} pointing at the chosen location is written '
-            'to\n{6}\nso the module is registered on every Maya '
+            'Whichever you pick, a {5} pointing at that location is '
+            'written to\n{6}\nso the module is registered on every Maya '
             'start.'.format(
                 default_label, os.path.join(modules_dir, MODULE_NAME),
                 current_label, os.path.join(src_dir, MODULE_NAME),

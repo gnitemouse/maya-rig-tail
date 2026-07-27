@@ -24,6 +24,11 @@ installed with "Current (this folder)" -- is left untouched: the .mod and
 buttons go, the source stays. Deleting a copy that sits outside the Maya
 modules folder asks first.
 
+Files Windows has locked are reported rather than silently skipped, so a
+partly removed folder is never mistaken for a clean uninstall. Restart
+Maya and delete it by hand if that happens -- the shelf buttons and the
+.mod are already gone, so nothing loads it in the meantime.
+
 --------------------------------------------------------------------------
 UNINSTALL (drag-and-drop)
     Drag uninstall.py from a file browser into the Maya viewport. Works

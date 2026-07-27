@@ -9,8 +9,9 @@ Complete API reference for the Maya Tail Rig system.
 
 ## Two phases: Setup then Build
 
-The tool has two phases, run in order and launched from two shelf buttons
-(`TailSetup`, then `TailRig`):
+The tool has two phases, run in order and launched from the first two of the
+three shelf buttons (`TailSetup`, then `TailRig`; `TailManual` is the
+developer console workflow described below):
 
 1. **Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`): a pre-build
    step that orients, mirrors and rolls the raw BN skeleton so tails move
@@ -21,6 +22,30 @@ The tool has two phases, run in order and launched from two shelf buttons
 2. **Build** (`rig_tail` and the modules below): tear down any previous
    rig, then create joints, curves, controls, node networks, and bind the
    geometry.
+
+## How the modules get loaded
+
+`install.py` bakes the chosen install's `scripts/` folder into all three
+shelf buttons as `TOOL_DIR` and puts it at the front of `sys.path`, so a
+button runs the install it was made from even when another copy of Rig Tail
+is registered as a Maya module. The same path goes into the `rigTail.mod`
+under `~/Documents/maya/modules/`, which is what makes a bare
+`import rig_tail` work in the Script Editor.
+
+Two different refresh strategies sit on top of that:
+
+- **`TailSetup` / `TailRig`** call `il.reload()` down the chain from
+  `rig_tail.py`. Fast, and it deliberately skips `rig_tail_constants` to
+  keep session state (UI settings, joint caches, the loaded config) alive.
+- **`TailManual`** deletes every `rig_tail*` module (and `logger_config`)
+  from `sys.modules` first, so the import that follows is genuinely fresh.
+  This is the only path that picks up edits to `rig_tail_constants` without
+  a Maya restart, at the cost of resetting session state — the config
+  auto-load restores the saved config. It also binds `rt_*` handles for
+  console testing.
+
+Editing a module and clicking a UI button therefore picks up the change;
+adding a constant or a function to `rig_tail_constants` needs `TailManual`.
 
 ## Module Overview
 
@@ -551,8 +576,9 @@ the paint work, and on a mesh the rig shares with the rest of the character it
 drops the other influences entirely.
 
 #### `preserve_skin()`
-Read the `PRESERVE_SKIN` setting, defaulting to on (constants are never
-reloaded, so an old session lacks it).
+Read the `PRESERVE_SKIN` setting, defaulting to on (the reload sweep skips
+constants, so a session that predates the setting lacks it — `TailManual`
+re-imports it).
 
 #### `find_skincluster(node)`
 First skinCluster in a node's history.

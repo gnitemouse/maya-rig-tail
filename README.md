@@ -26,10 +26,12 @@ The tool ships as a ready-to-use Maya module. The repo layout is:
 
 ```
 install.py       drag-and-drop installer
-rigTail.mod      module descriptor
+uninstall.py     drag-and-drop uninstaller
+rigTail.mod      module descriptor, for installing by hand
+                 (the installer writes its own)
 rigTail/
     scripts/     rig_tail*.py + logger_config.py
-    icons/       octopus.png, octopus_200.png
+    icons/       octopus{,_black,_grey}.png (+ _200 variants)
 ```
 
 **Drag-and-drop (recommended)**
@@ -63,6 +65,14 @@ Whichever is chosen, one resolved path drives everything:
 **TailManual** additionally purges every loaded `rig_tail*` module before
 importing, so even `rig_tail_constants` (which the normal reload sweep
 skips) is picked up without restarting Maya.
+
+**Re-installing** over an existing install overwrites it file by file
+rather than deleting it first, so a file Windows has locked costs that
+file rather than the whole tool, and the installer says which one.
+Files left behind by an older version are cleared afterwards. If Maya has
+already imported the old modules, click **TailManual** (or restart Maya)
+after installing - the files on disk change, but code already loaded into
+the session does not.
 
 **Manual**
 
