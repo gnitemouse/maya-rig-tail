@@ -77,6 +77,26 @@ def _is_inside(path, parent):
     return path.startswith(parent + os.sep)
 
 
+def _release_cwd(path):
+    '''Step out of path if this process is sitting in it.
+
+    Windows refuses to delete a directory that any process has as its
+    current directory -- with WinError 32, "being used by another
+    process", even though the process is Maya itself. Maya's file
+    browsers move the CWD around, so a config saved out of the installed
+    scripts/ folder is enough to make the folder undeletable.
+    '''
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return None                     # CWD already deleted; nothing held
+    if not (_same_path(cwd, path) or _is_inside(cwd, path)):
+        return None
+    home = os.path.expanduser('~')
+    os.chdir(home)
+    return home
+
+
 def _rig_tail_buttons():
     '''Every Rig Tail shelf button, as (shelf, button) pairs.'''
     found = []
@@ -223,7 +243,13 @@ def _remove_module(modules_dir, module_dir, copied):
             not _confirm_outside_delete(module_dir):
         return removed, (module_dir, 'kept at your request')
 
+    _release_cwd(module_dir)
     shutil.rmtree(module_dir, ignore_errors=True)
+    if os.path.isdir(module_dir):
+        # ignore_errors leaves whatever was locked; say so rather than
+        # reporting a clean uninstall over a half-deleted folder.
+        return removed, (module_dir, 'some files were in use -- delete it '
+                                     'by hand after restarting Maya')
     removed.append(module_dir)
     return removed, None
 

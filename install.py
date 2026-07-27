@@ -76,7 +76,9 @@ Compatible with Maya 2020+ (Python 3). UI tested in Maya 2024/2025.
 import json
 import os
 import shutil
+import stat
 import sys
+import time
 
 import maya.cmds as cmds
 import maya.mel as mel
@@ -244,6 +246,105 @@ def _same_path(a, b):
             os.path.normcase(os.path.normpath(os.path.abspath(b))))
 
 
+def _is_inside(path, parent):
+    '''True if path sits under parent.'''
+    path = os.path.normcase(os.path.abspath(path))
+    parent = os.path.normcase(os.path.abspath(parent))
+    return path.startswith(parent + os.sep)
+
+
+def _release_cwd(path):
+    '''Step out of path if this process is sitting in it.
+
+    Windows refuses to delete or rename a directory that any process has
+    as its current directory -- with WinError 32, "being used by another
+    process", even though the process is Maya itself. Maya's file
+    browsers move the CWD around, so saving a Rig Tail config out of the
+    installed scripts/ folder is enough to wedge the next install.
+    '''
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return None                     # CWD already deleted; nothing held
+    if not (_same_path(cwd, path) or _is_inside(cwd, path)):
+        return None
+    home = os.path.expanduser('~')
+    os.chdir(home)
+    return home
+
+
+def _replace_file(src, dst, attempts=3):
+    '''Copy one file over another, retrying briefly.
+
+    The retry is for the transient case -- an antivirus scanner or the
+    search indexer holding a handle for a moment after the file is
+    touched. The chmod is for the persistent one: files unpacked from a
+    zip or synced from version control can arrive read-only.
+    '''
+    for attempt in range(attempts):
+        try:
+            if os.path.isfile(dst):
+                os.chmod(dst, stat.S_IWRITE)
+            shutil.copy2(src, dst)
+            return
+        except (IOError, OSError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.2)
+
+
+def _copy_tree(src, dst):
+    '''Copy src over dst file by file. Returns the files that would not
+    overwrite.
+
+    Deliberately not "rmtree the destination, then copytree": clearing
+    the old install first fails the moment anything holds a handle inside
+    it, and it fails *after* the files are gone, leaving no working
+    install behind. Overwriting in place means one stubborn file costs
+    that file rather than the whole tool. (copytree's dirs_exist_ok would
+    do this, but it needs Python 3.8 and Maya 2020/2022 ship 3.7.)
+    '''
+    blocked = []
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames[:] = [d for d in dirnames if d != '__pycache__']
+        rel = os.path.relpath(dirpath, src)
+        target_dir = dst if rel == os.curdir else os.path.join(dst, rel)
+        if not os.path.isdir(target_dir):
+            os.makedirs(target_dir)
+        for name in filenames:
+            if name.endswith('.pyc'):
+                continue
+            try:
+                _replace_file(os.path.join(dirpath, name),
+                              os.path.join(target_dir, name))
+            except (IOError, OSError) as exc:
+                blocked.append((os.path.join(target_dir, name), exc))
+    return blocked
+
+
+def _prune_stale(src, dst):
+    '''Best-effort removal of files left over from an older install.
+
+    A renamed module would otherwise stay importable, and stale
+    __pycache__ can shadow the source it was built from. Failures are
+    ignored: a leftover file is untidy, not broken, and is not worth
+    aborting an otherwise good install for.
+    '''
+    for dirpath, dirnames, filenames in os.walk(dst):
+        if os.path.basename(dirpath) == '__pycache__':
+            shutil.rmtree(dirpath, ignore_errors=True)
+            dirnames[:] = []
+            continue
+        rel = os.path.relpath(dirpath, dst)
+        source_dir = src if rel == os.curdir else os.path.join(src, rel)
+        for name in filenames:
+            if not os.path.isfile(os.path.join(source_dir, name)):
+                try:
+                    os.remove(os.path.join(dirpath, name))
+                except (IOError, OSError):
+                    pass
+
+
 def _choose_destination(src_dir, modules_dir):
     '''Ask where to install. Returns the folder to hold rigTail/, or None
     if the user cancelled.
@@ -320,12 +421,18 @@ def _install_module(src_dir, dest_parent):
     if not os.path.isdir(dest_parent):
         os.makedirs(dest_parent)
 
-    # Replace any prior install cleanly (copytree needs a fresh dest on the
-    # Python 3.7 that ships with Maya 2020/2022).
-    if os.path.isdir(dst_module):
-        shutil.rmtree(dst_module)
-    shutil.copytree(src_module, dst_module,
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    _release_cwd(dst_module)
+    blocked = _copy_tree(src_module, dst_module)
+    if blocked:
+        raise RuntimeError(
+            'Could not overwrite {0} file(s) in\n{1}\n\n{2}\n\n'
+            'Something still has them open. Close any editor or Explorer '
+            'window on that folder and try again; if it persists, restart '
+            'Maya and re-run the installer before using the tool.'.format(
+                len(blocked), dst_module,
+                '\n'.join('{0}\n    {1}'.format(path, exc)
+                          for path, exc in blocked[:5])))
+    _prune_stale(src_module, dst_module)
     return dst_module, True
 
 
