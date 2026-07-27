@@ -18,22 +18,36 @@ INSTALL (drag-and-drop)
     icon). Works immediately -- no restart. Keep install.py next to the
     rigTail/ folder and rigTail.mod when you drag it.
 
-    Two install modes:
+    Three answers to "where?":
 
-    "Copy to Maya modules" (recommended for users)
-        Copies rigTail/ and rigTail.mod into ~/Documents/maya/modules/.
-        Self-contained: this folder can then be moved or deleted, and
-        Maya picks the module up on every start.
+    "Default (maya/modules)" (recommended for users)
+        Copies rigTail/ into ~/Documents/maya/modules/. Self-contained:
+        this folder can then be moved or deleted.
 
-    "Run from this folder" (for a git clone)
-        Copies nothing. The shelf buttons load straight out of
-        <this folder>/rigTail/scripts, so a git pull is live on the next
-        button click. Move or delete the folder and the buttons break.
+    "Current (this folder)" (for a git clone)
+        Copies nothing -- runs from where it already is, so a git pull is
+        live on the next button click. Move the folder and it breaks.
 
-    Either way the three shelf buttons bake in the chosen scripts folder
-    as TOOL_DIR and put it at the front of sys.path, so a button always
-    runs the install it was made from -- even with another copy of Rig
-    Tail registered as a Maya module.
+    "Other..." (pick a folder)
+        Copies rigTail/ into a folder chosen in a file browser, for a
+        shared network location or a per-project tools folder.
+
+    Whichever is chosen, one resolved path drives everything:
+
+        rigTail.mod   always written to ~/Documents/maya/modules/ (the
+                      only place Maya scans), holding a relative path
+                      when the tree sits alongside it and an absolute
+                      path otherwise -- so a clone or a picked folder is
+                      registered on every Maya start, and "import
+                      rig_tail" works in a bare Script Editor.
+        TOOL_DIR      baked into all three shelf buttons, which put it at
+                      the front of sys.path. A button therefore always
+                      runs the install it was made from, even with
+                      another copy of Rig Tail registered as a module.
+        manifest      rigTail.install.json beside the .mod, recording
+                      what went where so uninstall.py knows exactly what
+                      to remove -- and what it merely pointed at and must
+                      leave alone.
 
 INSTALL (manual, no drag-and-drop)
     Copy rigTail/ and rigTail.mod into ~/Documents/maya/modules/
@@ -47,15 +61,19 @@ UNINSTALL
     from ~/Documents/maya/modules/ and remove the shelf buttons.
 --------------------------------------------------------------------------
 
-Module layout (copied into <userAppDir>/modules/, or used in place):
-    rigTail.mod
-    rigTail/
-        scripts/   rig_tail*.py + logger_config.py
-        icons/     octopus{,_black,_grey}.png (+ _200 variants)
+Module layout:
+    <userAppDir>/modules/
+        rigTail.mod            -> points at the chosen location
+        rigTail.install.json   -> what the last install did
+    <chosen location>/
+        rigTail/
+            scripts/   rig_tail*.py + logger_config.py
+            icons/     octopus{,_black,_grey}.png (+ _200 variants)
 
 Compatible with Maya 2020+ (Python 3). UI tested in Maya 2024/2025.
 '''
 
+import json
 import os
 import shutil
 import sys
@@ -66,6 +84,23 @@ import maya.mel as mel
 # Name of the prebuilt module folder and .mod shipped alongside this file.
 MODULE_NAME = 'rigTail'
 MOD_FILE = MODULE_NAME + '.mod'
+MODULE_VERSION = '1.0'
+
+# Record of what the last install did, written next to the .mod so
+# uninstall.py can find the install wherever it went. JSON keys:
+# mode, module_dir, tool_dir, copied.
+MANIFEST_FILE = MODULE_NAME + '.install.json'
+
+# The .mod always lands in <userAppDir>/modules/ (the only place Maya
+# scans by default), but the path inside it points at wherever the module
+# tree actually lives -- 'rigTail' when it sits alongside, or an absolute
+# path when it lives in a git clone or a folder the user picked. That is
+# what makes 'import rig_tail' work in a fresh Script Editor after
+# restart, not just from the shelf buttons.
+MOD_TEMPLATE = '''+ {name} {version} {path}
+scripts: scripts
+icons: icons
+'''
 
 # Shelf icons: "Octopus" icon by Icons8 (https://icons8.com/icons/set/octopus).
 # Free use requires attribution -- see the Credits section of README.md.
@@ -202,73 +237,134 @@ def _shelf_command(template, tool_dir):
     return template.replace(PREAMBLE_TOKEN, preamble)
 
 
-def _choose_install_mode(src_dir, modules_dir):
-    '''Ask where to install. Returns 'modules', 'here' or None (cancelled).
+def _same_path(a, b):
+    '''True if two paths point at the same place (case-insensitive on
+    Windows, and blind to trailing slashes or ".." segments).'''
+    return (os.path.normcase(os.path.normpath(os.path.abspath(a))) ==
+            os.path.normcase(os.path.normpath(os.path.abspath(b))))
 
-    Copying into the Maya modules folder is the shipping install; running
-    in place suits a git clone, where a pull should be live on the next
-    button click rather than needing a re-install.
+
+def _choose_destination(src_dir, modules_dir):
+    '''Ask where to install. Returns the folder to hold rigTail/, or None
+    if the user cancelled.
+
+    Three answers, and the returned path is all that differs downstream:
+    the Maya modules folder (the shipping install), this folder (a git
+    clone, where a pull should be live on the next button click rather
+    than needing a re-install), or somewhere the user picks.
     '''
-    copy_label = 'Copy to Maya modules'
-    here_label = 'Run from this folder'
+    default_label = 'Default (maya/modules)'
+    current_label = 'Current (this folder)'
+    other_label = 'Other...'
     choice = cmds.confirmDialog(
         title='Install Rig Tail',
         message=(
             'Where should Rig Tail be installed?\n\n'
             '{0}\n    {1}\n'
-            '    Self-contained -- this folder can then be moved or '
-            'deleted.\n\n'
+            '    The usual install. Self-contained, so this folder can '
+            'then be\n    moved or deleted.\n\n'
             '{2}\n    {3}\n'
-            '    Nothing is copied; the shelf buttons load from here, so '
-            'a git pull\n    takes effect on the next click. Moving this '
-            'folder breaks them.'.format(
-                copy_label, os.path.join(modules_dir, MODULE_NAME),
-                here_label, os.path.join(src_dir, MODULE_NAME))),
-        button=[copy_label, here_label, 'Cancel'],
-        defaultButton=copy_label,
+            '    Nothing is copied -- runs from where it already is, so a '
+            'git pull\n    takes effect on the next click. Moving this '
+            'folder breaks it.\n\n'
+            '{4}\n    Pick a folder; rigTail/ is copied into it.\n\n'
+            'Either way a {5} pointing at the chosen location is written '
+            'to\n{6}\nso the module is registered on every Maya '
+            'start.'.format(
+                default_label, os.path.join(modules_dir, MODULE_NAME),
+                current_label, os.path.join(src_dir, MODULE_NAME),
+                other_label, MOD_FILE, modules_dir)),
+        button=[default_label, current_label, other_label, 'Cancel'],
+        defaultButton=default_label,
         cancelButton='Cancel',
         dismissString='Cancel')
-    if choice == copy_label:
-        return 'modules'
-    if choice == here_label:
-        return 'here'
+
+    if choice == default_label:
+        return modules_dir
+    if choice == current_label:
+        return src_dir
+    if choice == other_label:
+        picked = cmds.fileDialog2(
+            fileMode=3,                 # 3 = existing directory
+            caption='Choose a folder to install Rig Tail into',
+            okCaption='Install here',
+            dialogStyle=2,
+            startingDirectory=src_dir) or []
+        # Cancelling the folder picker cancels the install rather than
+        # silently falling back to a location the user did not choose.
+        return picked[0] if picked else None
     return None
 
 
-def _module_in_place(src_dir):
-    '''Use the rigTail/ folder next to this file where it already sits.'''
-    module_dir = os.path.join(src_dir, MODULE_NAME)
-    if not os.path.isdir(os.path.join(module_dir, 'scripts')):
+def _install_module(src_dir, dest_parent):
+    '''Put the module tree under dest_parent and return
+    (module_dir, copied).
+
+    Copies rigTail/ into dest_parent, except when that is where it
+    already lives -- the "current folder" answer, and also what happens
+    if the user browses to this same folder under "Other...". Copying a
+    tree onto itself would destroy it, so that case is detected and the
+    existing folder used as-is.
+    '''
+    src_module = os.path.join(src_dir, MODULE_NAME)
+    if not os.path.isdir(os.path.join(src_module, 'scripts')):
         raise RuntimeError(
             'Could not find {0}/scripts next to install.py in\n{1}\n'
-            'Keep install.py at the top of the repo when dragging '
-            'it in.'.format(MODULE_NAME, src_dir))
-    return module_dir
+            'Keep install.py at the top of the repo when dragging it '
+            'in.'.format(MODULE_NAME, src_dir))
 
+    dst_module = os.path.join(dest_parent, MODULE_NAME)
+    if _same_path(src_module, dst_module):
+        return src_module, False
 
-def _copy_module(src_dir, modules_dir):
-    '''Copy the prebuilt module tree and .mod into the Maya modules dir.'''
-    src_module = os.path.join(src_dir, MODULE_NAME)
-    src_mod = os.path.join(src_dir, MOD_FILE)
-    if not os.path.isdir(src_module) or not os.path.isfile(src_mod):
-        raise RuntimeError(
-            'Could not find {0}/ and {1} next to install.py.\n'
-            'Keep install.py beside them when dragging it in.'.format(
-                MODULE_NAME, MOD_FILE))
+    if not os.path.isdir(dest_parent):
+        os.makedirs(dest_parent)
 
-    if not os.path.isdir(modules_dir):
-        os.makedirs(modules_dir)
-
-    dst_module = os.path.join(modules_dir, MODULE_NAME)
     # Replace any prior install cleanly (copytree needs a fresh dest on the
     # Python 3.7 that ships with Maya 2020/2022).
     if os.path.isdir(dst_module):
         shutil.rmtree(dst_module)
     shutil.copytree(src_module, dst_module,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    shutil.copy2(src_mod, os.path.join(modules_dir, MOD_FILE))
+    return dst_module, True
 
-    return dst_module
+
+def _write_mod(modules_dir, module_dir):
+    '''Write <modules_dir>/rigTail.mod pointing at module_dir.
+
+    Relative when the tree sits right there (keeps the modules folder
+    portable), absolute otherwise -- that absolute form is what registers
+    a git clone or a user-picked folder with Maya at startup.
+    '''
+    if not os.path.isdir(modules_dir):
+        os.makedirs(modules_dir)
+
+    if _same_path(os.path.dirname(module_dir), modules_dir):
+        path = MODULE_NAME
+    else:
+        path = os.path.abspath(module_dir).replace('\\', '/')
+
+    mod_path = os.path.join(modules_dir, MOD_FILE)
+    with open(mod_path, 'w') as handle:
+        handle.write(MOD_TEMPLATE.format(
+            name=MODULE_NAME, version=MODULE_VERSION, path=path))
+    return mod_path
+
+
+def _write_manifest(modules_dir, module_dir, tool_dir, copied):
+    '''Record where this install went, for uninstall.py to read back.
+
+    Without it an uninstall can only guess whether the module tree is a
+    copy it may delete or the user's own git clone it must leave alone.
+    '''
+    manifest_path = os.path.join(modules_dir, MANIFEST_FILE)
+    with open(manifest_path, 'w') as handle:
+        json.dump({
+            'module_dir': os.path.abspath(module_dir),
+            'tool_dir': os.path.abspath(tool_dir),
+            'copied': bool(copied),
+        }, handle, indent=4)
+    return manifest_path
 
 
 def _activate_for_session(module_dir):
@@ -371,17 +467,18 @@ def onMayaDroppedPythonFile(*args):
     src_dir = _source_dir()
     modules_dir = os.path.join(cmds.internalVar(userAppDir=True), 'modules')
 
-    mode = _choose_install_mode(src_dir, modules_dir)
-    if mode is None:
+    dest_parent = _choose_destination(src_dir, modules_dir)
+    if dest_parent is None:
         print('# Rig Tail: install cancelled')
         return
 
     try:
-        if mode == 'modules':
-            module_dir = _copy_module(src_dir, modules_dir)
-        else:
-            module_dir = _module_in_place(src_dir)
+        module_dir, copied = _install_module(src_dir, dest_parent)
+        # One resolved path drives everything from here: the three shelf
+        # buttons, the .mod and the manifest all point at this install.
         tool_dir = os.path.join(module_dir, 'scripts')
+        mod_path = _write_mod(modules_dir, module_dir)
+        _write_manifest(modules_dir, module_dir, tool_dir, copied)
         _activate_for_session(module_dir)
         shelf = _add_shelf_button(os.path.join(module_dir, 'icons'), tool_dir)
     except Exception as exc:  # surface a readable error to the user
@@ -399,14 +496,11 @@ def onMayaDroppedPythonFile(*args):
                 shelf),
         pos='midCenter', fade=True, fadeStayTime=3000)
 
-    if mode == 'modules':
-        print('# Rig Tail: installed module to {0}'.format(module_dir))
-    else:
-        print('# Rig Tail: running in place from {0} (nothing copied)'.format(
-            module_dir))
-        print('# Rig Tail: no .mod written -- the shelf buttons put '
-              'TOOL_DIR on sys.path themselves')
+    print('# Rig Tail: {0} {1}'.format(
+        'installed module to' if copied else 'running in place from',
+        module_dir))
     print('# Rig Tail: TOOL_DIR -> {0}'.format(tool_dir))
+    print('# Rig Tail: module registered by {0}'.format(mod_path))
     print('# Rig Tail: shelf buttons -> {0}, {1}, {2} on "{3}"'.format(
         SHELF_SETUP_LABEL, SHELF_BUTTON_LABEL, SHELF_MANUAL_LABEL, shelf))
 

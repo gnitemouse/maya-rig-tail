@@ -39,19 +39,30 @@ where to install, then adds three shelf buttons to the active shelf:
 **TailSetup** (skeleton orient / mirror), **TailRig** (the builder) and
 **TailManual** (developer import / build / test workflow). Works
 immediately, with no restart and no `userSetup.py` edits. Keep
-`install.py` next to `rigTail/` and `rigTail.mod` when you drag it.
+`install.py` next to `rigTail/` when you drag it.
 
 | Choice | What it does |
 | --- | --- |
-| **Copy to Maya modules** | Copies `rigTail/` and `rigTail.mod` into `~/Documents/maya/modules/`. Self-contained - this folder can then be moved or deleted. |
-| **Run from this folder** | Copies nothing; the shelf buttons load from `<this folder>/rigTail/scripts`, so a `git pull` takes effect on the next click. Moving the folder breaks them. |
+| **Default (maya/modules)** | Copies `rigTail/` into `~/Documents/maya/modules/`. Self-contained - this folder can then be moved or deleted. |
+| **Current (this folder)** | Copies nothing; runs from where it already is, so a `git pull` takes effect on the next click. Moving the folder breaks it. |
+| **Other...** | Pick a folder in a file browser; `rigTail/` is copied into it - for a shared network location or a per-project tools folder. |
 
-Either way the three buttons bake the chosen `rigTail/scripts` folder in
-as `TOOL_DIR` and put it at the front of `sys.path`, so a button always
-runs the install it was made from. **TailManual** additionally purges
-every loaded `rig_tail*` module before importing, so even
-`rig_tail_constants` (which the normal reload sweep skips) is picked up
-without restarting Maya.
+Whichever is chosen, one resolved path drives everything:
+
+- `rigTail.mod` is written to `~/Documents/maya/modules/` (the only place
+  Maya scans) pointing at the chosen location - relative when the tree
+  sits alongside it, absolute otherwise. So a clone or a picked folder is
+  registered on every Maya start, and `import rig_tail` works in a bare
+  Script Editor, not just from the shelf buttons.
+- `TOOL_DIR` is baked into all three shelf buttons, which put it at the
+  front of `sys.path`. A button therefore always runs the install it was
+  made from, even with another copy of Rig Tail registered as a module.
+- `rigTail.install.json` records what went where, so `uninstall.py` knows
+  what to remove.
+
+**TailManual** additionally purges every loaded `rig_tail*` module before
+importing, so even `rig_tail_constants` (which the normal reload sweep
+skips) is picked up without restarting Maya.
 
 **Manual**
 
@@ -60,8 +71,15 @@ Copy `rigTail/` and `rigTail.mod` into
 restart Maya. Launch from the Script Editor with `import rig_tail;
 rig_tail.main()`, or make a shelf button that runs the same two lines.
 
-**Uninstall** - delete `rigTail.mod` and the `rigTail` folder
-from `~/Documents/maya/modules/`, and remove the shelf button.
+**Uninstall** - drag `uninstall.py` into the viewport. It reads
+`rigTail.install.json` (falling back to the `.mod`, then to the
+`TOOL_DIR` baked into the shelf buttons) to find the install wherever it
+went, then removes the buttons, the `.mod` and the module folder. A
+folder it only pointed at - a clone installed with **Current** - is left
+untouched, and deleting a copy outside the Maya modules folder asks
+first. By hand: delete `rigTail.mod` and `rigTail.install.json` from
+`~/Documents/maya/modules/`, delete the `rigTail` folder if it was copied
+there, and remove the shelf buttons.
 
 ## Quick Start
 
