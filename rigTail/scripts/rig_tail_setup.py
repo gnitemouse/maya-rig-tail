@@ -12,9 +12,16 @@ setup_tails() directly, then build as usual.
 
 Two families of operations. The batch ones run from setup_tails and each
 have a toggle in rig_tail_constants:
-    ORIENT_JOINTS  aim-orient each chain so a tail bends in one plane
-                   (removes intra-chain twist). No mirroring; both sides
-                   are oriented from their own geometry.
+    ORIENT_JOINTS  aim-orient each chain so its up-axis stops twisting from
+                   joint to joint. No mirroring; both sides are oriented
+                   from their own geometry. The aim is fixed by the joint
+                   positions, so ORIENT_UP_MODE only decides the chain's
+                   ROLL about it: 'cascade' (default) carries the chain's
+                   own first joint's current up down the chain, keeping the
+                   roll it already has - so a re-run does not undo a mirror
+                   or a roll_chain fix-up - while 'best-fit' takes the roll
+                   from the chain's bend plane, ignoring how the joints
+                   stand now. See aim_frames.
     MIRROR_ORIENT  reflect matching 'L_'/'R_' pairs' ORIENTATION across the
                    symmetry plane, so the two sides face as mirror images.
                    Positions unchanged. MIRROR_BEHAVIOR picks how the
@@ -64,6 +71,7 @@ Functions:
     mirror_chains: reflect each L/R pair's orientation and/or positions
         (MIRROR_ORIENT / MIRROR_JOINTS)
     roll_chain: interactively roll one chain about its aim axis
+    rignames_from_selection: the RIGPARTS of every selected joint (UI)
     rigname_from_selection: resolve the RIGPART of the selected joint (UI)
     show_joint_orients: toggle the joints' local-axis display (UI check)
     find_mirror_pairs: pair rig parts by 'L_'/'R_' prefix
@@ -96,7 +104,8 @@ _CST_DEFAULTS = {
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
     'MIRROR_BEHAVIOR': 'symmetric',  # 'symmetric' | 'parallel' (see mirror_frames)
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
-    'ORIENT_UP_AXIS': 'z',          # local axis aligned to the plane normal
+    'ORIENT_UP_AXIS': 'z',          # local axis aligned to the up reference
+    'ORIENT_UP_MODE': 'cascade',    # up reference: 'cascade' | 'best-fit'
     'PRESERVE_SKIN': True,          # re-baseline skinned meshes, never unbind
 }
 for _name, _value in _CST_DEFAULTS.items():
@@ -235,7 +244,8 @@ def run_setup(dry_run=None):
     mir_joints = bool(_cst('MIRROR_JOINTS'))
     mode = ' [dry-run]' if dry_run else ''
     behavior = f' ({_behavior()})' if mir_orient else ''
-    logger.info(f'Setup{mode}: orient_joints={do_orient}, '
+    up_mode = f' ({_up_mode()})' if do_orient else ''
+    logger.info(f'Setup{mode}: orient_joints={do_orient}{up_mode}, '
                 f'mirror_orient={mir_orient}{behavior}, '
                 f'mirror_joints={mir_joints}')
 
@@ -313,10 +323,14 @@ def orient_chains(dry_run):
     '''
     Aim-orient every BN chain to remove intra-chain twist.
 
-    Re-aims each joint down its own chain with a single up-axis (the chain
-    plane normal), so the tail bends in one plane. Applies to every rig
-    part, both sides. Skips chains with fewer than two joints. To turn a
-    single chain onto a different plane afterwards, use roll_chain.
+    Re-aims each joint down its own chain with a single up reference, so the
+    up-axis stops twisting from joint to joint. ORIENT_UP_MODE picks that
+    reference (see aim_frames): 'cascade' carries the chain's own first
+    joint's current up down the chain, keeping the roll it already has, and
+    'best-fit' derives the roll from the chain's bend plane instead.
+    Applies to every rig part, both sides. Skips chains with fewer than two
+    joints. To turn a single chain onto a different plane afterwards, use
+    roll_chain.
 
     Arguments
         dry_run (bool): only log the intended changes, do not modify.
@@ -326,6 +340,7 @@ def orient_chains(dry_run):
     '''
     aim_axis = _cst('ORIENT_AIM_AXIS')
     up_axis = _cst('ORIENT_UP_AXIS')
+    up_mode = _up_mode()
     mode = ' [dry-run]' if dry_run else ''
     count = 0
     for rigname in _active():
@@ -338,8 +353,13 @@ def orient_chains(dry_run):
             # Capture the end joint BEFORE re-orienting its parent, which
             # would swing it (see _end_joint_position).
             ee_pos = _end_joint_position(joints[-1])
-            frames = aim_frames(positions, aim_axis, up_axis)
-            logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts)')
+            # Cascade seeds from the chain as it stands NOW, so this must be
+            # read before _apply_frames rewrites it.
+            up_ref = _current_up(joints[0], up_axis) \
+                if up_mode == 'cascade' else None
+            frames = aim_frames(positions, aim_axis, up_axis, up_ref)
+            logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts, '
+                        f'{up_mode})')
             count += _apply_frames(joints, frames, dry_run)
             # The end ('_ee_') joint is excluded from the chain, so align it
             # to the chain's final frame or it keeps the stale orientation.
@@ -467,8 +487,7 @@ def mirror_chains(dry_run, do_orient, do_positions):
                 frames = mirror_frames(src_mats, axis, aim_axis, up_axis,
                                        behavior)
             else:
-                frames = [([m[0], m[1], m[2]], [m[4], m[5], m[6]],
-                           [m[8], m[9], m[10]]) for m in before]
+                frames = [_matrix_rows(m) for m in before]
 
             # Target positions: the reflected source positions, or (positions
             # off) None so _apply_frames keeps each joint where it is.
@@ -576,28 +595,45 @@ def find_mirror_pairs(rigparts):
 
 # FRAMES ===============================================================
 
-def aim_frames(positions, aim_axis, up_axis):
+def aim_frames(positions, aim_axis, up_axis, up_ref=None):
     '''
     Per-joint world frames that aim down the chain with a twist-free up.
 
-    The up reference is the chain's best-fit plane normal (the summed cross
-    product of consecutive segments), stable for a near-planar chain. A
-    straight or degenerate chain falls back to the world axis most
-    perpendicular to the first segment. Each joint's up is that normal made
-    perpendicular to its own aim, so the up-axis stays consistent and the
-    tail bends in one plane. To turn the whole chain onto a different plane
-    afterwards, roll_chain rolls it about the aim axis.
+    The aim comes from the positions, so the only freedom is the roll about
+    it, which the up reference fixes:
+        up_ref given (ORIENT_UP_MODE 'cascade'): that world vector seeds the
+            first joint - normally the chain's own first joint's current up -
+            and is carried down the chain by parallel transport
+            (_cascade_frames). Twist goes, while the roll the chain already
+            had - a mirror, or a roll_chain fix-up - is kept.
+        up_ref None ('best-fit'): the chain's best-fit plane normal (the
+            summed cross product of consecutive segments), stable for a
+            near-planar chain, with a straight or degenerate chain falling
+            back to the world axis most perpendicular to the first segment.
+            Ignores how the joints stand now, so it overwrites any mirrored
+            or hand-rolled roll.
+    Either way each joint's up is the reference made perpendicular to its
+    own aim, so the up-axis stays consistent down the chain. To turn the
+    whole chain onto a different plane afterwards, roll_chain rolls it about
+    the aim axis.
 
     Arguments
         positions (list): [[x, y, z], ...] joint world positions.
         aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
-        up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
+        up_axis (str): local axis aligned to the up reference, 'x'|'y'|'z'.
+        up_ref (list): [x, y, z] world up reference, or None to derive it
+            from the chain's best-fit plane. A zero-length vector is
+            ignored, so a caller can pass a failed lookup straight through.
 
     Return
         list: one [X_row, Y_row, Z_row] world frame per joint.
     '''
     n = len(positions)
     segs = [_sub(positions[i + 1], positions[i]) for i in range(n - 1)]
+    aims = [_norm(segs[i] if i < n - 1 else segs[-1]) for i in range(n)]
+    if up_ref is not None and _length(up_ref) > _EPS:
+        return _cascade_frames(aims, up_ref, aim_axis, up_axis)
+
     normal = [0.0, 0.0, 0.0]
     for i in range(len(segs) - 1):
         normal = _add(normal, _cross(segs[i], segs[i + 1]))
@@ -607,8 +643,7 @@ def aim_frames(positions, aim_axis, up_axis):
 
     frames = []
     prev_up = None
-    for i in range(n):
-        aim = _norm(segs[i] if i < n - 1 else segs[-1])
+    for aim in aims:
         up = _sub(normal, _scale(aim, _dot(normal, aim)))
         if _length(up) <= _EPS:
             # aim nearly parallel to the plane normal (a joint that bends out
@@ -624,6 +659,71 @@ def aim_frames(positions, aim_axis, up_axis):
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
         prev_up = up
     return frames
+
+
+def _cascade_frames(aims, seed, aim_axis, up_axis):
+    '''
+    Carry one up reference down the chain, adding no twist ('cascade').
+
+    Each joint's up is the previous joint's up rotated by the minimal
+    rotation that takes the previous aim onto this one (parallel transport),
+    so consecutive ups differ only by that unavoidable re-aiming and the
+    relative twist about the aim is zero by construction - whatever roll the
+    seed carries.
+
+    Projecting a single fixed reference onto each aim (what the best-fit
+    branch does) is only twist-free while that reference stays near the
+    chain's plane normal. A seed taken from the chain's own orientation
+    generally does not: after a 90 degree roll it lies IN the bend plane,
+    where the projection swings with every change of aim. Hence transport.
+
+    Arguments
+        aims (list): per-joint unit aim direction, down the chain.
+        seed (list): [x, y, z] world up reference for the first joint.
+        aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
+        up_axis (str): local axis aligned to the up reference, 'x'|'y'|'z'.
+
+    Return
+        list: one [X_row, Y_row, Z_row] world frame per joint.
+    '''
+    frames = []
+    up = _norm(seed)
+    prev_aim = None
+    for aim in aims:
+        if prev_aim is not None:
+            up = _transport(up, prev_aim, aim)
+        # Re-orthogonalize against this aim: the seed is rarely exactly
+        # perpendicular to the first one, and transport leaves rounding.
+        perp = _sub(up, _scale(aim, _dot(up, aim)))
+        if _length(perp) <= _EPS:
+            # Seed collapsed onto the aim (a joint whose up points down its
+            # own chain). Nothing of the original roll survives, so fall
+            # back to a perpendicular world axis rather than a zero vector.
+            perp = _world_axis_perp(aim)
+        up = _norm(perp)
+        frames.append(_assign_rows(aim, up, aim_axis, up_axis))
+        prev_aim = aim
+    return frames
+
+
+def _transport(vec, from_aim, to_aim):
+    '''
+    Rotate a vector by the minimal rotation taking one aim onto another.
+
+    Arguments
+        vec (list): [x, y, z] vector to carry.
+        from_aim (list): unit direction the rotation starts at.
+        to_aim (list): unit direction it ends at.
+
+    Return
+        list: the rotated vector (unchanged when the aims are parallel).
+    '''
+    axis = _cross(from_aim, to_aim)
+    if _length(axis) <= _EPS:
+        return vec
+    angle = math.degrees(math.acos(
+        max(-1.0, min(1.0, _dot(from_aim, to_aim)))))
+    return _roll_about(vec, _norm(axis), angle)
 
 
 def roll_chain(rigname, degrees):
@@ -676,9 +776,7 @@ def roll_chain(rigname, degrees):
         # Roll each joint's current frame about its own aim axis.
         frames = []
         for j in joints:
-            m = cmds.xform(j, q=True, ws=True, matrix=True)
-            rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]],
-                    [m[8], m[9], m[10]])
+            rows = _matrix_rows(cmds.xform(j, q=True, ws=True, matrix=True))
             aim = _norm(rows[ai])
             up = _roll_about(_norm(rows[ui]), aim, degrees)
             frames.append(_assign_rows(aim, up, aim_axis, up_axis))
@@ -693,28 +791,44 @@ def roll_chain(rigname, degrees):
     return count
 
 
+def rignames_from_selection():
+    '''
+    Resolve the RIGPARTS of every selected node (for the UI Select button).
+
+    Maps each node selected in Maya back to a RIGPART via the naming
+    convention, so chains can be picked by clicking joints instead of typing
+    their names. Any joint of a chain works - BN/FK/IK/FX or the end 'ee'
+    joint - since the name resolves to the same rigname, which is why several
+    joints of one chain collapse to a single entry: selecting whole chains
+    across several tails yields one name per tail.
+
+    Return
+        list[str]: the matching RIGPARTS in selection order, without
+        duplicates. Empty when nothing is selected or no selected node is a
+        recognized rig part.
+    '''
+    import rig_tail_naming as rt_nam
+    rignames = []
+    for node in cmds.ls(selection=True) or []:
+        rigname = rt_nam.get_rigname(node.split('|')[-1], rt_cst.JOINT)
+        if rigname and rigname in rt_cst.RIGPARTS and rigname not in rignames:
+            rignames.append(rigname)
+    return rignames
+
+
 def rigname_from_selection():
     '''
     Resolve the RIGPART of the first selected node (for the UI Select button).
 
-    Maps the first node selected in Maya back to a RIGPART via the naming
-    convention, so a chain can be picked by clicking a joint instead of
-    browsing the list. Any joint of the chain works - BN/FK/IK/FX or the end
-    'ee' joint - since the name resolves to the same rigname.
+    Single-chain form of rignames_from_selection, kept for callers that only
+    ever act on one chain.
 
     Return
         str or None: the matching RIGPART, or None when nothing is selected
         or the selection is not a recognized rig part.
     '''
-    import rig_tail_naming as rt_nam
-    sel = cmds.ls(selection=True) or []
-    if not sel:
-        return None
-    node = sel[0].split('|')[-1]
-    rigname = rt_nam.get_rigname(node, rt_cst.JOINT)
-    if rigname and rigname in rt_cst.RIGPARTS:
-        return rigname
-    return None
+    rignames = rignames_from_selection()
+    return rignames[0] if rignames else None
 
 
 def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
@@ -773,7 +887,7 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     up_sign = -1.0 if _behavior(behavior) == 'symmetric' else 1.0
     frames = []
     for m in src_matrices:
-        rows = ([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]])
+        rows = _matrix_rows(m)
         aim = _norm(_reflect(rows[ai], keep))
         up = _scale(_norm(_reflect(rows[ui], keep)), up_sign)
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
@@ -797,6 +911,56 @@ def _behavior(behavior=None):
                        "using 'symmetric'")
         return 'symmetric'
     return value
+
+
+def _up_mode(mode=None):
+    '''
+    Resolve and validate the orient up-reference mode, default 'cascade'.
+
+    Arguments
+        mode (str): explicit value, or None to read ORIENT_UP_MODE.
+
+    Return
+        str: 'cascade' or 'best-fit'.
+    '''
+    value = str(mode if mode is not None
+                else _cst('ORIENT_UP_MODE')).strip().lower()
+    if value not in ('cascade', 'best-fit'):
+        logger.warning(f"Orient: unknown up mode '{value}', using 'cascade'")
+        return 'cascade'
+    return value
+
+
+def _matrix_rows(matrix):
+    ''' The three axis rows (local X/Y/Z in world) of a 16-float matrix. '''
+    return ([matrix[0], matrix[1], matrix[2]],
+            [matrix[4], matrix[5], matrix[6]],
+            [matrix[8], matrix[9], matrix[10]])
+
+
+def _current_up(joint, up_axis):
+    '''
+    A joint's current world up-axis direction (the cascade seed).
+
+    Read before anything re-orients the chain, so 'cascade' can keep the
+    roll the joint already has. Returns None when the joint cannot be read,
+    which aim_frames treats as 'derive the reference from the plane'.
+
+    Arguments
+        joint (str): the joint to read.
+        up_axis (str): which local axis is the up, 'x'|'y'|'z'.
+
+    Return
+        list or None: [x, y, z] unit world vector, or None.
+    '''
+    ui = {'x': 0, 'y': 1, 'z': 2}.get(up_axis, 2)
+    try:
+        rows = _matrix_rows(cmds.xform(joint, q=True, ws=True, matrix=True))
+    except Exception as err:
+        logger.warning(f'Orient: could not read up axis of {joint}: {err}')
+        return None
+    up = rows[ui]
+    return _norm(up) if _length(up) > _EPS else None
 
 
 def _reflect(vec, keep):

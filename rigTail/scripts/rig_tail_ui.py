@@ -30,6 +30,11 @@ import rig_tail_naming as rt_nam
 class RigTailUI(QtWidgets.QDialog):
     '''Main Tail Rig Builder window.'''
 
+    # Label column of the configuration summary's list settings, sized to
+    # its longest label so their values line up. The counts and control
+    # sizes below keep their own inline layout.
+    SUMMARY_W = len('IKFK_MODES')
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Rig Tail')
@@ -45,10 +50,20 @@ class RigTailUI(QtWidgets.QDialog):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(15, 10, 15, 10)
 
+        # Title and its one-line descriptor read as one heading, so they sit
+        # in their own tight layout instead of taking the main 10px spacing.
+        title_layout = QtWidgets.QVBoxLayout()
+        title_layout.setSpacing(2)
         title = QtWidgets.QLabel('TAIL RIG BUILDER')
         title.setStyleSheet('font-size: 18px; font-weight: bold; color: #FFFFFF;')
         title.setAlignment(QtCore.Qt.AlignCenter)
-        main_layout.addWidget(title)
+        title_layout.addWidget(title)
+
+        subtitle = QtWidgets.QLabel('Build FK / IK / spline controls on the tail skeleton')
+        subtitle.setStyleSheet('font-size: 10px; color: #999999;')
+        subtitle.setAlignment(QtCore.Qt.AlignCenter)
+        title_layout.addWidget(subtitle)
+        main_layout.addLayout(title_layout)
 
         author = QtWidgets.QLabel('author Daisy Jane @gnitemouse')
         author.setStyleSheet('font-size: 10px; font-weight: normal; color: #4A90E2;')
@@ -485,20 +500,31 @@ class RigTailUI(QtWidgets.QDialog):
             pass
         super().closeEvent(event)
 
+    def _summary_line(self, label, value):
+        '''One 'label = value' summary line, padded into the value column.'''
+        return f'{label:<{self.SUMMARY_W}} = {value}'
+
     def update_display(self):
         '''Refresh the config-file textbox and configuration summary.'''
         self.txt_config.setText(rt_cst.LOADED_CONFIG or '')
+        parts = list(rt_cst.RIGPARTS)
         lines = [
-            f"ROOT = '{rt_cst.ROOT}'",
-            f'RIGPARTS = {rt_cst.RIGPARTS}',
+            self._summary_line('ROOT', f"'{rt_cst.ROOT}'"),
+            self._summary_line('RIGPARTS', parts),
         ]
         # Excluded parts are not built, so say so here rather than leaving
-        # RIGPARTS reading as the build list it no longer is
-        excluded = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
+        # RIGPARTS reading as the build list it no longer is. Labelled
+        # EXCLUDE, not RIGPARTS_EXCLUDE, to keep the value column near the
+        # left edge.
+        excluded = [p for p in parts
+                    if p in set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])]
         if excluded:
-            lines.append(f'Excluded from build: {", ".join(excluded)}')
+            lines.append(self._summary_line(
+                'EXCLUDE',
+                f'{excluded}   ({len(parts) - len(excluded)} of '
+                f'{len(parts)} built)'))
         display_text = '\n'.join(lines + [
-            f'IKFK_MODES = {rt_cst.IKFK_MODES}',
+            self._summary_line('IKFK_MODES', rt_cst.IKFK_MODES),
             f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
             'Control Sizes:',
             f'  ROOT = {rt_cst.ROOT_CTRL_SZ}  COG = {rt_cst.COG_CTRL_SZ}  BASE = {rt_cst.BASE_CTRL_SZ}',

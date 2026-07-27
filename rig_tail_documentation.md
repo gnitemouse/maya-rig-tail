@@ -140,7 +140,7 @@ Three independent batch toggles in `rig_tail_constants`:
 
 | Constant | Effect | Positions |
 |----------|--------|-----------|
-| `ORIENT_JOINTS` | Aim-orient each chain so a tail bends in one plane (removes intra-chain twist). No mirroring: both sides are oriented from their own geometry. | kept |
+| `ORIENT_JOINTS` | Aim-orient each chain so its up-axis stops twisting from joint to joint. No mirroring: both sides are oriented from their own geometry. `ORIENT_UP_MODE` picks the roll. | kept |
 | `MIRROR_ORIENT` | Reflect matching `L_`/`R_` pairs' **orientation** across the symmetry plane, so the two sides face as mirror images. | kept |
 | `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions** across the symmetry plane, so the target side's joints sit at the exact mirror of the source side's. | **moved** |
 
@@ -149,6 +149,23 @@ source. `MIRROR_SOURCE_SIDE` (default `R`) picks which side is authored;
 the other is overwritten. `MIRROR_AXIS` is the symmetry-plane normal, and
 the plane is assumed to pass through the world origin. `MIRROR_DRYRUN`
 previews every batch operation without modifying anything.
+
+`ORIENT_UP_MODE` picks where `ORIENT_JOINTS` takes its up reference. The
+joint positions fix the aim, so this only decides the chain's **roll** about
+it:
+
+| Value | Up reference | Effect |
+|-------|--------------|--------|
+| `cascade` (default) | The chain's **own first joint**, as it stands now, carried down the chain by parallel transport. | Twist still goes, but the roll the chain already has is kept — so a mirrored pair stays mirrored (in either behavior) and a **Roll Chain** fix-up survives. Re-running Setup on a set-up skeleton is non-destructive. |
+| `best-fit` | The chain's **best-fit bend plane** normal, ignoring how the joints stand now. | Lands a raw, arbitrarily oriented skeleton on its own plane in one pass, but **overwrites** any mirrored or hand-rolled orientation. |
+
+The two agree exactly on the case they both handle well — a `symmetric`
+pair whose positions are already mirrored — and diverge everywhere else:
+`best-fit` re-derives a `parallel` pair back to `symmetric` (180 degrees
+out), undoes a `roll_chain` by exactly the angle rolled, and on a nearly
+straight chain falls back to a world axis, which is not mirrored between
+sides and so flips one side of the pair. Use `best-fit` for the first pass
+on a raw skeleton, `cascade` from then on.
 
 `MIRROR_BEHAVIOR` picks how `MIRROR_ORIENT` rolls the mirrored side about
 its aim axis. The aim must keep pointing down the chain (the spline IK and
@@ -226,7 +243,9 @@ Detect BN chains, run the enabled steps, then re-baseline the skinned meshes
 Run the enabled batch orient/mirror steps on `rt_cst.JOINTS_BN`.
 
 #### `orient_chains(dry_run)`
-Aim-orient every BN chain to remove intra-chain twist (`ORIENT_JOINTS`).
+Aim-orient every BN chain to remove intra-chain twist (`ORIENT_JOINTS`),
+taking the roll from `ORIENT_UP_MODE`. In `cascade` it reads each chain's
+first joint before touching anything, and uses that as the seed.
 
 #### `mirror_chains(dry_run, do_orient, do_positions)`
 Reflect each L/R pair's orientation and/or positions from the source side
@@ -236,9 +255,14 @@ Reflect each L/R pair's orientation and/or positions from the source side
 Roll one chain about its aim axis by an angle, keeping positions. The
 interactive fix-up behind the Setup UI's Roll Chain arrows.
 
+#### `rignames_from_selection()`
+The RIGPARTS of every selected node, in order and de-duplicated, so chains
+can be picked by clicking joints. Selecting whole chains across several
+tails yields one name per tail. Used by the Setup UI's Select button.
+
 #### `rigname_from_selection()`
-Resolve the RIGPART of the first selected node, so a chain can be picked by
-clicking a joint. Used by the Setup UI's Select button.
+Single-chain form of the above: the RIGPART of the first recognized
+selected node, or None.
 
 #### `show_joint_orients(show=True)`
 Toggle `displayLocalAxis` on every BN chain joint, to eyeball the result.
@@ -246,8 +270,12 @@ Toggle `displayLocalAxis` on every BN chain joint, to eyeball the result.
 #### `find_mirror_pairs(rigparts)`
 Pair rig parts into (source, target) by `L_`/`R_` prefix.
 
-#### `aim_frames(positions, aim_axis, up_axis)`
-Per-joint world frames aimed down a chain with a twist-free up-axis.
+#### `aim_frames(positions, aim_axis, up_axis, up_ref=None)`
+Per-joint world frames aimed down a chain with a twist-free up-axis. With
+`up_ref` (the `cascade` seed) that vector is carried down the chain by
+parallel transport, keeping the chain's existing roll; without it the roll
+comes from the chain's best-fit plane normal. A zero-length `up_ref` is
+ignored, so a failed lookup falls back to best-fit rather than failing.
 
 #### `mirror_frames(src_matrices, axis, aim_axis, up_axis)`
 Reflect source world orientations across the symmetry plane for the target.
@@ -358,16 +386,20 @@ Setup UI (Tail Rig Setup window). Exposes the three batch toggles
 dropdowns, and Dry Run, then calls `rig_tail_setup.setup_tails`. Launched
 by `rig_tail.main_setup()`.
 
-The **Mirror Behavior** dropdown sits in the Mirror Orient row and is
-greyed out unless that box is ticked, since it only shapes a reflected
-orientation. `Symmetric` / `Parallel` map to `MIRROR_BEHAVIOR`.
+Two dropdowns sit in the rows of the toggle they shape, and are greyed out
+unless that box is ticked: **Up Mode** (`Cascade` / `Best-fit` →
+`ORIENT_UP_MODE`) in the Orient Joints row, and **Mirror Behavior**
+(`Symmetric` / `Parallel` → `MIRROR_BEHAVIOR`) in the Mirror Orient row.
 
-The **Roll Chain** group is separate from Run Setup: pick a chain from the
-dropdown (or click **Select** to read it from the selected joint), set a
-step angle, and the left/right arrows roll that chain by minus/plus the
-step immediately. It applies on click with no confirmation dialog, and
-ignores Dry Run. **Show Joint Local Axes** draws each BN joint's axes so
-the result is visible in the viewport.
+The **Roll Chain** group sits below Setup Options and is separate from Run
+Setup: list one or more chains in the Chain box — type them comma
+separated, or click **Select** to read them from the selected joints — set
+a step angle, and the left/right arrows roll every listed chain by
+minus/plus the step immediately. Several tails can therefore be corrected
+in one click. It applies on click with no confirmation dialog, and ignores
+Dry Run; a name that is not in `RIGPARTS` is refused before anything runs.
+**Show Joint Local Axes** draws each BN joint's axes so the result is
+visible in the viewport.
 
 Running Setup with no batch toggle enabled does nothing and closes the
 window with a warning, because a real run unbinds geometry and clears the

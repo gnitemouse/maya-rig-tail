@@ -118,8 +118,16 @@ Run before building, from the **TailSetup** shelf button or
 `rig_tail.main_setup()`. It re-orients the raw BN skeleton so tails move
 coherently, and never affects the build itself. Three independent options:
 
-- **Orient Joints** (`ORIENT_JOINTS`): aim-orient each chain so a tail
-  bends in one plane. Fixes joints whose orientation twists down the chain.
+- **Orient Joints** (`ORIENT_JOINTS`): aim-orient each chain so its up-axis
+  stops twisting down the chain. The joint positions fix the aim, so the
+  dropdown in the same row only picks the chain's **roll** about it
+  (`ORIENT_UP_MODE`): *Cascade* (default) seeds from the chain's own first
+  joint as it stands now, so the twist goes but the roll the chain already
+  has is kept — a mirrored pair stays mirrored and a **Roll Chain** fix-up
+  survives, which makes a re-run safe. *Best-fit* takes the roll from the
+  chain's bend plane instead, ignoring how the joints stand now: right for
+  the first pass on a raw skeleton, but it overwrites any mirrored or
+  hand-rolled orientation.
 - **Mirror Orient** (`MIRROR_ORIENT`): reflect matching `L_`/`R_` tails'
   *orientation* so the two sides face as mirror images. The dropdown in the
   same row picks the **behavior** (`MIRROR_BEHAVIOR`): *Symmetric* (default)
@@ -147,11 +155,18 @@ Joints preserves joint positions. Enable **Dry Run** first to log the
 intended changes without modifying anything, then apply and build. Skip
 this phase entirely if the skeleton is already oriented.
 
-**Roll Chain** is a separate per-tail fix-up in the same window, for a
-chain that is cleanly oriented but facing the wrong way: pick the chain
-(or **Select** it from a selected joint) and use the left/right arrows to
-roll it onto the right plane. It applies immediately and never moves
-joints.
+Orient runs before the mirrors, so a single run with both ticked is always
+correct. It is the *second* run that used to undo the first: with
+*Best-fit* the orient step re-derives every chain from its bend plane and
+throws the mirror away. Leave Up Mode on *Cascade* once a skeleton has been
+mirrored or hand-rolled.
+
+**Roll Chain** is a separate per-tail fix-up below the Setup options, for
+chains that are cleanly oriented but facing the wrong way: list the chains
+in the Chain box (type them comma separated, or **Select** them from
+selected joints) and use the left/right arrows to roll them onto the right
+plane. Every listed chain is rolled, so a whole set of tails is corrected
+in one click. It applies immediately and never moves joints.
 
 A typical pass on a messy rig: run Orient Joints + Mirror Joints, roll any
 individual chains that face the wrong way, then build.

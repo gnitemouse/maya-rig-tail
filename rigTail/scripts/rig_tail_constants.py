@@ -152,10 +152,22 @@ MIRROR_SOURCE_SIDE = 'R'
 # Roll Chain fix-up at 180 converts one into the other on a single chain.
 MIRROR_BEHAVIOR = 'symmetric'
 # Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
-# ORIENT_UP_AXIS aligns to the chain's plane normal. The interactive roll
-# rolls about ORIENT_AIM_AXIS.
+# ORIENT_UP_AXIS aligns to the up reference. The interactive roll rolls
+# about ORIENT_AIM_AXIS.
 ORIENT_AIM_AXIS = 'x'
 ORIENT_UP_AXIS = 'z'
+# Where the aim-orient takes its up reference from. The aim is fixed by the
+# joint positions, so this only decides the chain's ROLL about the aim:
+#   'cascade'  - seed from the chain's OWN first joint as it stands now and
+#       carry that down the chain. Twist still goes (one reference for every
+#       joint), but the existing roll is kept, so a mirrored pair stays
+#       mirrored and a Roll Chain fix-up survives a re-run. The default:
+#       re-running Setup on a set-up skeleton is then non-destructive.
+#   'best-fit' - derive the roll from the chain's best-fit plane normal,
+#       ignoring how the joints are currently oriented. Lands a raw,
+#       arbitrarily-oriented skeleton on its own bend plane in one pass, but
+#       overwrites any mirrored or hand-rolled orientation.
+ORIENT_UP_MODE = 'cascade'
 
 # Max per-joint world position drift (scene units) still treated as
 # "unchanged" on re-rig. Building the rig drives joints through the OPM
@@ -575,6 +587,7 @@ def get_user_editable_config():
         'MIRROR_BEHAVIOR': MIRROR_BEHAVIOR,
         'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
         'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
+        'ORIENT_UP_MODE': ORIENT_UP_MODE,
         'FORCE_REBUILD': FORCE_REBUILD,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
         'COLOR_SKELETON': COLOR_SKELETON,
@@ -714,6 +727,7 @@ def load_config(filepath=None):
     global MAIN_CONTROLLER, FORCE_REBUILD
     global ORIENT_JOINTS, MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, MIRROR_BEHAVIOR, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
+    global ORIENT_UP_MODE
     global BUILD_FK, BUILD_IK, JOINT_POS_TOLERANCE
     global COLOR_SKELETON, BN_COLOR, IK_COLOR, FK_COLOR
     global TYPE_BN, TYPE_IK, TYPE_FK, TYPE_FX
@@ -782,6 +796,11 @@ def load_config(filepath=None):
         MIRROR_BEHAVIOR = config.get('MIRROR_BEHAVIOR', MIRROR_BEHAVIOR)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)
+        # A config saved before ORIENT_UP_MODE existed was written by code
+        # that always did 'best-fit', but it takes the module default
+        # ('cascade') anyway: the old maths is the destructive one, and a
+        # skeleton set up under it is exactly what cascade protects.
+        ORIENT_UP_MODE = config.get('ORIENT_UP_MODE', ORIENT_UP_MODE)
         FORCE_REBUILD = config.get('FORCE_REBUILD', FORCE_REBUILD)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
         COLOR_SKELETON = config.get('COLOR_SKELETON', COLOR_SKELETON)

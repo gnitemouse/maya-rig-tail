@@ -52,6 +52,8 @@ Functions:
     test_assign_rows: frame assembly is orthonormal and right-handed
     test_roll_about: roll rotates about the aim by the given angle
     test_aim_frames: orient frames aim down-chain and are twist-free
+    test_up_mode: cascade keeps the chain's roll, best-fit rebuilds it,
+        and both still remove twist (ORIENT_UP_MODE)
     test_mirror_frames: mirror reflects the aim to the far side, and the
         symmetric/parallel behaviors are a 180 deg roll apart
     test_find_mirror_pairs: L/R pairing honours the source side
@@ -165,6 +167,28 @@ def _summary(title, results):
     return ok
 
 
+def _max_twist(frames, points):
+    '''
+    The largest RELATIVE twist between consecutive frames, in degrees.
+
+    Twist is the roll of the up axis about the segment the two joints share,
+    so both ups are projected perpendicular to that segment first (the
+    measure rig_tail_setup._report_twist uses). The raw angle between two
+    ups is not it: on a chain that bends, ups must tilt with their own aim
+    even when nothing is twisted.
+    '''
+    worst = 0.0
+    for i in range(len(frames) - 1):
+        aim = rt_set._norm(rt_set._sub(points[i + 1], points[i]))
+        ups = []
+        for f in (frames[i], frames[i + 1]):
+            ups.append(rt_set._sub(
+                f[2], rt_set._scale(aim, rt_set._dot(f[2], aim))))
+        if all(rt_set._length(u) > 1e-9 for u in ups):
+            worst = max(worst, _ang(ups[0], ups[1]))
+    return worst
+
+
 # MATH TESTS (safe, no scene) ==========================================
 
 def test_reflect():
@@ -236,6 +260,70 @@ def test_aim_frames():
                 for i in range(len(frames) - 1))
     ok &= _verdict('aim_frames twist-free', twist < ANG_TOL,
                    f'max twist={twist:.3f} deg')
+    return ok
+
+
+def test_up_mode():
+    '''
+    aim_frames' up reference decides the roll: cascade keeps it, best-fit
+    recomputes it.
+
+    The point of ORIENT_UP_MODE. A chain is oriented, then rolled 90 degrees
+    (standing in for a mirror or a Roll Chain fix-up) and given a per-joint
+    twist on top. Re-orienting must flatten that twist either way, but only
+    cascade - seeded from the chain's own first joint - may keep the 90.
+    best-fit derives the roll from the bend plane, so it must come back to
+    the unrolled orientation.
+    '''
+    # A chain bending out of any world plane, so the roll is unambiguous.
+    pts = [[0, 0, 0], [1, 0.2, 0.1], [2, 0.5, 0.35], [3, 0.9, 0.8]]
+    base = rt_set.aim_frames(pts, 'x', 'z')
+    ok = True
+
+    # Roll the whole chain 90 deg, then twist each joint a bit more.
+    rolled = []
+    for i, f in enumerate(base):
+        up = rt_set._roll_about(f[2], f[0], 90.0 + 17.0 * i)
+        rolled.append(rt_set._assign_rows(f[0], up, 'x', 'z'))
+    before = _max_twist(rolled, pts)
+    ok &= _verdict('test data is twisted to start with', before > 10.0,
+                   f'{before:.1f} deg')
+
+    cascade = rt_set.aim_frames(pts, 'x', 'z', rolled[0][2])
+    bestfit = rt_set.aim_frames(pts, 'x', 'z')
+    for name, frames in (('cascade', cascade), ('best-fit', bestfit)):
+        ok &= _verdict(f'aim_frames {name} orthonormal',
+                       all(_orthonormal(f) for f in frames))
+        ok &= _verdict(f'aim_frames {name} right-handed',
+                       all(_right_handed(f) for f in frames))
+        # Both modes exist to remove twist; that must not depend on the mode
+        # or on the roll the seed carries.
+        twist = _max_twist(frames, pts)
+        ok &= _verdict(f'aim_frames {name} removes twist', twist < ANG_TOL,
+                       f'{before:.1f} -> {twist:.3f} deg')
+
+    # The roll itself: cascade stays with the rolled chain, best-fit returns
+    # to the plane-derived orientation. Measured at the seed joint, where
+    # the chain's own non-planarity does not muddy the comparison.
+    kept = _ang(cascade[0][2], rolled[0][2])
+    ok &= _verdict('aim_frames cascade keeps the roll', kept < ANG_TOL,
+                   f'{kept:.2f} deg from the rolled up')
+    lost = _ang(bestfit[0][2], rolled[0][2])
+    ok &= _verdict('aim_frames best-fit rebuilds the roll', lost > 45.0,
+                   f'{lost:.2f} deg from the rolled up')
+
+    # A missing or degenerate seed must fall back to best-fit, not blow up.
+    for tag, seed in (('None', None), ('zero', [0.0, 0.0, 0.0])):
+        fallback = rt_set.aim_frames(pts, 'x', 'z', seed)
+        same = max(_ang(a[2], b[2]) for a, b in zip(fallback, bestfit))
+        ok &= _verdict(f'aim_frames {tag} seed falls back to best-fit',
+                       same < ANG_TOL)
+
+    # _up_mode validates and defaults.
+    ok &= _verdict("_up_mode('Best-Fit') normalizes",
+                   rt_set._up_mode('Best-Fit') == 'best-fit')
+    ok &= _verdict("_up_mode('nonsense') defaults to cascade",
+                   rt_set._up_mode('nonsense') == 'cascade')
     return ok
 
 
@@ -795,7 +883,8 @@ def test_rigname_from_selection(rigname=DEFAULT_CHAIN):
 def run_math():
     '''Run every safe geometry-helper test and print a summary.'''
     tests = [test_reflect, test_assign_rows, test_roll_about,
-             test_aim_frames, test_mirror_frames, test_find_mirror_pairs]
+             test_aim_frames, test_up_mode, test_mirror_frames,
+             test_find_mirror_pairs]
     results = []
     for fn in tests:
         print(f'\n--- {fn.__name__} ---')

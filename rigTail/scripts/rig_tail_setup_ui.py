@@ -7,8 +7,14 @@ that runs before the Tail Rig Builder. Nothing here affects the build; it
 only re-orients the raw BN skeleton so tails move coherently.
 
 Three batch operations, exposed as checkboxes:
-    Orient Joints (ORIENT_JOINTS): aim-orient each chain so a tail bends
-        in a plane (removes intra-chain twist).
+    Orient Joints (ORIENT_JOINTS): aim-orient each chain so its up-axis
+        stops twisting from joint to joint. The dropdown in the same row
+        picks where the up reference comes from (ORIENT_UP_MODE), which is
+        what decides the chain's roll: 'Cascade' seeds from the chain's own
+        first joint as it stands now, keeping the roll it already has (so a
+        mirror or a Roll Chain fix-up survives a re-run), 'Best-fit' takes
+        the roll from the chain's bend plane and overwrites it.
+        Disabled unless Orient Joints is ticked.
     Mirror Orient (MIRROR_ORIENT): reflect matching 'L_'/'R_' pairs'
         orientation so the two sides face as mirror images. The dropdown
         in the same row picks the behavior (MIRROR_BEHAVIOR): 'Symmetric'
@@ -18,15 +24,15 @@ Three batch operations, exposed as checkboxes:
         Disabled unless Mirror Orient is ticked.
     Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
         positions so the target side's joints sit at the exact mirror.
-Plus an interactive Roll Chain fix-up: pick a chain (dropdown, or Select to
-read it from the selected joint), then the left/right arrows roll it about
-its aim axis by the step angle - left subtracts, right adds - to turn a
-wrong-facing chain onto the right plane. It applies immediately with no
+Below those, its own section, is the interactive Roll Chain fix-up: list one
+or more chains in the Chain box (type them, or Select to read them from the
+selected joints), then the left/right arrows roll every one of them about
+its aim axis by the step angle - left subtracts, right adds - to turn
+wrong-facing chains onto the right plane. It applies immediately with no
 confirmation dialog. Dropdowns set the source side and the aim, up and
-mirror axes. Dry Run
-only logs the intended batch changes. Orientation steps keep positions;
-Mirror Joints and Roll move joints. Affected geometry is unbound for the
-build to rebind.
+mirror axes. Dry Run only logs the intended batch changes. Orientation
+steps keep positions; Mirror Joints and Roll move joints. Affected geometry
+is unbound for the build to rebind.
 
 Run Setup calls rig_tail_setup.setup_tails. Values live in
 rig_tail_constants and round-trip through the same JSON config as the
@@ -58,6 +64,14 @@ class RigTailSetupUI(QtWidgets.QDialog):
     SIDES = ['R', 'L']
     # Display labels for MIRROR_BEHAVIOR; stored lower-case in constants.
     BEHAVIORS = ['Symmetric', 'Parallel']
+    # Display labels for ORIENT_UP_MODE; stored lower-case in constants.
+    UP_MODES = ['Cascade', 'Best-fit']
+
+    # Label column of the configuration summary's list settings, sized to
+    # its longest label so their values line up without pushing the text far
+    # off the left edge. The toggles and axes below are grouped under their
+    # own headings instead (see update_display).
+    SUMMARY_W = len('RIGPARTS')
 
     # One size for every field-level widget, so the dropdowns, the spin box,
     # the arrows and the Select button all line up. The settings dropdowns
@@ -93,15 +107,20 @@ class RigTailSetupUI(QtWidgets.QDialog):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(15, 10, 15, 10)
 
+        # Title and its one-line descriptor read as one heading, so they sit
+        # in their own tight layout instead of taking the main 10px spacing.
+        title_layout = QtWidgets.QVBoxLayout()
+        title_layout.setSpacing(2)
         title = QtWidgets.QLabel('TAIL RIG SETUP')
         title.setStyleSheet('font-size: 18px; font-weight: bold; color: #FFFFFF;')
         title.setAlignment(QtCore.Qt.AlignCenter)
-        main_layout.addWidget(title)
+        title_layout.addWidget(title)
 
         subtitle = QtWidgets.QLabel('Orient / mirror the skeleton before building')
         subtitle.setStyleSheet('font-size: 10px; color: #999999;')
         subtitle.setAlignment(QtCore.Qt.AlignCenter)
-        main_layout.addWidget(subtitle)
+        title_layout.addWidget(subtitle)
+        main_layout.addLayout(title_layout)
 
         author = QtWidgets.QLabel('author Daisy Jane @gnitemouse')
         author.setStyleSheet('font-size: 10px; font-weight: normal; color: #4A90E2;')
@@ -114,7 +133,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
         self.txt_display = QtWidgets.QTextEdit()
         self.txt_display.setReadOnly(True)
-        self.txt_display.setMaximumHeight(120)
+        # Taller than the Builder's: the summary is one aligned line per
+        # setting, so eight lines would clip the axes off the bottom.
+        self.txt_display.setMaximumHeight(170)
         self.txt_display.setStyleSheet('''
             QTextEdit {
                 background-color: #2b2b2b;
@@ -217,6 +238,23 @@ class RigTailSetupUI(QtWidgets.QDialog):
                     self.chk_mirror_joints, self.chk_dryrun):
             self.style_checkbox(chk)
 
+        # Up Mode sits in the Orient Joints row, and is disabled alongside
+        # it: it only picks where that operation takes its up reference.
+        self.cmb_up_mode = self._combo(self.UP_MODES,
+            'Where the aim-orient takes its up reference, which is what '
+            "decides the chain's ROLL about the aim (the aim itself is "
+            'fixed by the joint positions).\n'
+            "Cascade: seed from the chain's OWN first joint as it stands "
+            'now and carry that down the chain. Twist still goes, but the '
+            'roll the chain already has is kept - so a mirrored pair stays '
+            'mirrored and a Roll Chain fix-up survives a re-run. Use this '
+            'on a skeleton that is already set up.\n'
+            "Best-fit: take the roll from the chain's best-fit bend plane, "
+            'ignoring how the joints stand now. Lands a raw, arbitrarily '
+            'oriented skeleton on its own plane in one pass, but OVERWRITES '
+            'any mirrored or hand-rolled orientation. (ORIENT_UP_MODE)')
+        self.chk_orient.toggled.connect(self._sync_up_mode_enabled)
+
         # Mirror Behavior sits in the Mirror Orient row: it only shapes a
         # reflected orientation, so it is meaningless unless that box is
         # ticked - and is disabled alongside it to say so.
@@ -236,15 +274,27 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
         # Stretch before the combo so it lands flush right at FIELD_W, in the
         # same column as the settings dropdowns below (see _labeled_row).
+        orient_row = QtWidgets.QHBoxLayout()
+        orient_row.addWidget(self.chk_orient)
+        orient_row.addStretch(1)
+        orient_row.addWidget(self.cmb_up_mode)
+
         mirror_orient_row = QtWidgets.QHBoxLayout()
         mirror_orient_row.addWidget(self.chk_mirror_orient)
         mirror_orient_row.addStretch(1)
         mirror_orient_row.addWidget(self.cmb_behavior)
 
-        options_layout.addWidget(self.chk_orient)
-        options_layout.addLayout(mirror_orient_row)
-        options_layout.addWidget(self.chk_mirror_joints)
-        options_layout.addWidget(self.chk_dryrun)
+        # The four toggles are one block, so they get their own tight layout
+        # rather than the 8px that separates the sections of Setup Options.
+        # Every row is FIELD_H tall (see style_checkbox), so one spacing
+        # value keeps the gaps even, even though two rows carry a dropdown.
+        checks_layout = QtWidgets.QVBoxLayout()
+        checks_layout.setSpacing(2)
+        checks_layout.addLayout(orient_row)
+        checks_layout.addLayout(mirror_orient_row)
+        checks_layout.addWidget(self.chk_mirror_joints)
+        checks_layout.addWidget(self.chk_dryrun)
+        options_layout.addLayout(checks_layout)
         options_layout.addSpacing(6)
 
         # Dropdowns: source side, mirror axis, aim axis, up axis
@@ -267,13 +317,28 @@ class RigTailSetupUI(QtWidgets.QDialog):
         combos_layout.addLayout(self._labeled_row('Up Axis (plane normal):', self.cmb_up))
         options_layout.addLayout(combos_layout)
 
-        # Interactive per-chain roll fix-up. Not a saved setting and not part
-        # of Run Setup: pick a chain (dropdown or Select from the viewport),
-        # set a step angle, and the left/right arrows roll that chain about
-        # its aim axis immediately, positions kept - left subtracts the step,
-        # right adds it. Use it after the batch orient/mirror to turn a
-        # wrong-facing chain onto its plane.
+        # Visualize joint local axes (Maya displayLocalAxis) to check the
+        # orient result. Acts immediately on toggle; not a saved setting.
         options_layout.addSpacing(6)
+        self.chk_show_axes = QtWidgets.QCheckBox('Show Joint Local Axes')
+        self.chk_show_axes.setToolTip(
+            "Draw each BN joint's local X/Y/Z axes in the viewport "
+            '(Maya displayLocalAxis) so the orient result is visible. '
+            'Toggles immediately; does not change any orientation.')
+        self.style_checkbox(self.chk_show_axes)
+        self.chk_show_axes.toggled.connect(self.toggle_joint_axes)
+        options_layout.addWidget(self.chk_show_axes)
+
+        options_group.setLayout(options_layout)
+        main_layout.addWidget(options_group)
+
+        # Interactive roll fix-up, its own section below Setup Options: it is
+        # not a saved setting and Run Setup never touches it. Type one or more
+        # chains (or Select them from the viewport), set a step angle, and the
+        # left/right arrows roll every listed chain about its aim axis
+        # immediately, positions kept - left subtracts the step, right adds
+        # it. Use it after the batch orient/mirror to turn wrong-facing chains
+        # onto their plane.
         roll_group = self.create_group_box('Roll Chain (per-tail fix-up)')
         roll_layout = QtWidgets.QVBoxLayout()
         # Tight: the Chain and Roll rows read as one control, not two
@@ -283,16 +348,30 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # only, so the bottom margin carries that 10 to keep the space above
         # the Chain row and below the Roll row equal.
         roll_layout.setContentsMargins(8, 4, 8, 14)
-        self.cmb_roll_chain = QtWidgets.QComboBox()
-        self.cmb_roll_chain.setToolTip(
-            'The tail chain (RIGPART) to roll. The list follows RIGPARTS; '
-            'or click Select to read it from the selected joint(s).')
-        self.cmb_roll_chain.setStyleSheet(self.FIELD_STYLE)
-        self.cmb_roll_chain.setFixedHeight(self.FIELD_H)
+        # A textbox, not a dropdown: several tails can be rolled in one click
+        # by listing them, which is what Select fills in from a multi-joint
+        # selection.
+        self.txt_roll_chain = QtWidgets.QLineEdit()
+        self.txt_roll_chain.setPlaceholderText('rig part(s), comma separated')
+        self.txt_roll_chain.setToolTip(
+            'The tail chain(s) (RIGPARTS) to roll, comma separated - the '
+            'arrows roll every one of them. Type the names, or select joints '
+            'in the viewport and click Select to fill this in.')
+        self.txt_roll_chain.setStyleSheet('''
+            QLineEdit {
+                background-color: #3a3a3a; color: #cccccc;
+                border: 1px solid #555555; border-radius: 4px;
+                padding: 2px 8px;
+            }
+            QLineEdit:focus { border-color: #F5D041; }
+        ''')
+        self.txt_roll_chain.setFixedHeight(self.FIELD_H)
         self.btn_roll_select = QtWidgets.QPushButton('Select')
         self.btn_roll_select.setToolTip(
-            'Set the chain from the current viewport selection: reads the rig '
-            'part of the first selected joint (any joint of the chain works).')
+            'Fill the Chain box from the current viewport selection: reads '
+            'the rig part of every selected joint (any joint of a chain '
+            'works, so selecting whole chains across several tails lists '
+            'each tail once).')
         self.style_button(self.btn_roll_select, 0)
         self.btn_roll_select.setFixedSize(60, self.FIELD_H)
         self.btn_roll_select.clicked.connect(self.select_roll_chain)
@@ -307,21 +386,21 @@ class RigTailSetupUI(QtWidgets.QDialog):
         self.spn_roll.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
         self.spn_roll.setToolTip(
             'Step angle (whole degrees) the arrows roll by, e.g. 90. The '
-            'left arrow rolls the chain by minus this, the right arrow by '
-            'plus this, about the aim axis. Positions never change.')
+            'left arrow rolls the listed chains by minus this, the right '
+            'arrow by plus this, about the aim axis. Positions never change.')
         self.spn_roll.setStyleSheet(self.FIELD_STYLE)
         self.spn_roll.setFixedHeight(self.FIELD_H)
         self.btn_roll_minus = QtWidgets.QToolButton()
         self.btn_roll_minus.setArrowType(QtCore.Qt.LeftArrow)
         self.btn_roll_minus.setToolTip(
-            'Roll the selected chain by MINUS the step, now (immediate; '
-            'ignores Dry Run). Unbinds that chain\'s geometry and clears the '
+            'Roll every listed chain by MINUS the step, now (immediate; '
+            'ignores Dry Run). Unbinds those chains\' geometry and clears the '
             'stored rest pose for the build to redo.')
         self.btn_roll_plus = QtWidgets.QToolButton()
         self.btn_roll_plus.setArrowType(QtCore.Qt.RightArrow)
         self.btn_roll_plus.setToolTip(
-            'Roll the selected chain by PLUS the step, now (immediate; '
-            'ignores Dry Run). Unbinds that chain\'s geometry and clears the '
+            'Roll every listed chain by PLUS the step, now (immediate; '
+            'ignores Dry Run). Unbinds those chains\' geometry and clears the '
             'stored rest pose for the build to redo.')
         for btn in (self.btn_roll_minus, self.btn_roll_plus):
             btn.setStyleSheet('''
@@ -343,7 +422,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         chain_label = QtWidgets.QLabel('Chain:')
         chain_label.setMinimumWidth(self.LABEL_W)
         chain_row.addWidget(chain_label)
-        chain_row.addWidget(self.cmb_roll_chain, 1)
+        chain_row.addWidget(self.txt_roll_chain, 1)
         chain_row.addWidget(self.btn_roll_select)
         roll_layout.addLayout(chain_row)
         roll_row = QtWidgets.QHBoxLayout()
@@ -355,22 +434,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         roll_row.addWidget(self.btn_roll_plus)
         roll_layout.addLayout(roll_row)
         roll_group.setLayout(roll_layout)
-        options_layout.addWidget(roll_group)
-
-        # Visualize joint local axes (Maya displayLocalAxis) to check the
-        # orient result. Acts immediately on toggle; not a saved setting.
-        options_layout.addSpacing(6)
-        self.chk_show_axes = QtWidgets.QCheckBox('Show Joint Local Axes')
-        self.chk_show_axes.setToolTip(
-            "Draw each BN joint's local X/Y/Z axes in the viewport "
-            '(Maya displayLocalAxis) so the orient result is visible. '
-            'Toggles immediately; does not change any orientation.')
-        self.style_checkbox(self.chk_show_axes)
-        self.chk_show_axes.toggled.connect(self.toggle_joint_axes)
-        options_layout.addWidget(self.chk_show_axes)
-
-        options_group.setLayout(options_layout)
-        main_layout.addWidget(options_group)
+        main_layout.addWidget(roll_group)
         main_layout.addSpacing(8)
 
         # Action buttons
@@ -487,13 +551,15 @@ class RigTailSetupUI(QtWidgets.QDialog):
         self.chk_mirror_joints.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
         self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
         self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
+        self._combo_set(self.cmb_up_mode,
+            str(getattr(rt_cst, 'ORIENT_UP_MODE', 'cascade')).capitalize())
+        self._sync_up_mode_enabled(self.chk_orient.isChecked())
         self._combo_set(self.cmb_behavior,
             str(getattr(rt_cst, 'MIRROR_BEHAVIOR', 'symmetric')).capitalize())
         self._sync_behavior_enabled(self.chk_mirror_orient.isChecked())
         self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))
         self._combo_set(self.cmb_aim, getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'))
         self._combo_set(self.cmb_up, getattr(rt_cst, 'ORIENT_UP_AXIS', 'z'))
-        self._refresh_roll_chains()
         self.update_display()
 
     def save_current_values(self):
@@ -503,6 +569,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         rt_cst.MIRROR_JOINTS = self.chk_mirror_joints.isChecked()
         rt_cst.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
         rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
+        rt_cst.ORIENT_UP_MODE = self.cmb_up_mode.currentText().lower()
         rt_cst.MIRROR_BEHAVIOR = self.cmb_behavior.currentText().lower()
         rt_cst.MIRROR_AXIS = self.cmb_axis.currentText()
         rt_cst.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
@@ -513,17 +580,19 @@ class RigTailSetupUI(QtWidgets.QDialog):
         self.cmb_behavior.setEnabled(bool(checked))
         self.update_display()
 
-    def _refresh_roll_chains(self):
-        '''Repopulate the Roll Chain dropdown from RIGPARTS, keeping the
-        current selection if it still exists.'''
-        prev = self.cmb_roll_chain.currentText()
-        self.cmb_roll_chain.blockSignals(True)
-        self.cmb_roll_chain.clear()
-        self.cmb_roll_chain.addItems(list(rt_cst.RIGPARTS))
-        idx = self.cmb_roll_chain.findText(prev)
-        if idx >= 0:
-            self.cmb_roll_chain.setCurrentIndex(idx)
-        self.cmb_roll_chain.blockSignals(False)
+    def _sync_up_mode_enabled(self, checked):
+        '''Grey the Up Mode combo out unless Orient Joints is on.'''
+        self.cmb_up_mode.setEnabled(bool(checked))
+        self.update_display()
+
+    def _roll_chains(self):
+        '''The rig parts typed into the Chain box, in order, de-duplicated.'''
+        names = []
+        for name in self.txt_roll_chain.text().replace(';', ',').split(','):
+            name = name.strip()
+            if name and name not in names:
+                names.append(name)
+        return names
 
     def _mirror_pairs(self):
         '''(pairs, unpaired-sided) preview using the selected source side.'''
@@ -540,30 +609,69 @@ class RigTailSetupUI(QtWidgets.QDialog):
             rt_cst.MIRROR_SOURCE_SIDE = prev
         return pairs
 
+    def _summary_line(self, label, value):
+        '''One 'label = value' summary line, padded into the value column.'''
+        return f'{label:<{self.SUMMARY_W}} = {value}'
+
+    @staticmethod
+    def _tick(checked, text):
+        '''A toggle as a ticked box plus its name, e.g. '[x] Dry Run'.'''
+        return f'[{"x" if checked else " "}] {text}'
+
     def update_display(self):
         self.txt_config.setText(getattr(rt_cst, 'LOADED_CONFIG', None) or '')
-        parts = rt_cst.RIGPARTS
-        pairs = self._mirror_pairs()
-        pair_txt = ', '.join(f'{s}->{t}' for s, t in pairs) if pairs else '(none)'
+        parts = list(rt_cst.RIGPARTS)
         excluded = [p for p in parts
                     if p in set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])]
-        included = [p for p in parts if p not in set(excluded)]
+
+        # Same list form as the Builder's summary, so a part reads the same
+        # in both windows. Labelled EXCLUDE, not RIGPARTS_EXCLUDE, to keep
+        # the value column near the left edge.
         lines = [
-            f'ROOT = {getattr(rt_cst, "ROOT", "")}',
-            f'RIGPARTS ({len(included)} of {len(parts)}): '
-            f'{", ".join(included) if included else "(empty)"}',
-            f'Orient joints: {self.chk_orient.isChecked()}   '
-            f'Mirror orient: {self.chk_mirror_orient.isChecked()}   '
-            f'Mirror joints: {self.chk_mirror_joints.isChecked()}   '
-            f'Dry run: {self.chk_dryrun.isChecked()}',
-            f'L/R pairs: {pair_txt}',
-            f'mirror behavior: {self.cmb_behavior.currentText().lower()}'
-            f'{"" if self.chk_mirror_orient.isChecked() else " (unused)"}',
-            f'aim={self.cmb_aim.currentText()}  up={self.cmb_up.currentText()}  '
-            f'mirror axis={self.cmb_axis.currentText()}',
+            self._summary_line('ROOT', f"'{getattr(rt_cst, 'ROOT', '')}'"),
+            self._summary_line('RIGPARTS', parts),
         ]
         if excluded:
-            lines.insert(2, f'Excluded ({len(excluded)}): {", ".join(excluded)}')
+            lines.append(self._summary_line(
+                'EXCLUDE',
+                f'{excluded}   ({len(parts) - len(excluded)} of '
+                f'{len(parts)} active)'))
+
+        # The four toggles as ticked boxes in two columns, so the whole set
+        # reads at a glance in two lines. Up Mode and Mirror Behavior only
+        # shape their own operation, so each rides on that box and
+        # disappears when it is off.
+        up_mode = (f' ({self.cmb_up_mode.currentText().lower()})'
+                   if self.chk_orient.isChecked() else '')
+        behavior = (f' ({self.cmb_behavior.currentText().lower()})'
+                    if self.chk_mirror_orient.isChecked() else '')
+        left = [self._tick(self.chk_orient.isChecked(),
+                           f'Orient Joints{up_mode}'),
+                self._tick(self.chk_mirror_joints.isChecked(), 'Mirror Joints')]
+        right = [self._tick(self.chk_mirror_orient.isChecked(),
+                            f'Mirror Orient{behavior}'),
+                 self._tick(self.chk_dryrun.isChecked(), 'Dry Run')]
+        # Second column starts past the longest first-column cell, which
+        # grows and shrinks with the '(cascade)' suffix.
+        col = max(len(cell) for cell in left) + 2
+        lines.append('Setup:')
+        lines += [f'  {cell:<{col}}{other}' for cell, other in zip(left, right)]
+        lines += [
+            'Axis:',
+            f'  AIM = {self.cmb_aim.currentText()}  '
+            f'UP = {self.cmb_up.currentText()}  '
+            f'MIRROR = {self.cmb_axis.currentText()}',
+        ]
+
+        # One pair per line under its own heading, sources padded to a
+        # common width so the arrows line up under each other.
+        pairs = self._mirror_pairs()
+        if pairs:
+            width = max(len(s) for s, _ in pairs)
+            lines.append('L/R pairs:')
+            lines += [f'  {src:<{width}} -> {tgt}' for src, tgt in pairs]
+        else:
+            lines.append('L/R pairs: (none)')
         self.txt_display.setText('\n'.join(lines))
 
     # ACTIONS ==========================================================
@@ -572,7 +680,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
         '''Reuse the Builder's RIGPARTS editor.'''
         dialog = rt_ui.RigPartsEditor(self, phase='Setup')
         if dialog.exec() == QtWidgets.QDialog.Accepted:
-            self._refresh_roll_chains()
             self.update_display()
 
     def config_start_path(self):
@@ -640,39 +747,46 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 'skeleton is in the scene.')
 
     def select_roll_chain(self):
-        '''Set the Roll Chain dropdown from the current viewport selection.'''
+        '''Fill the Chain box from the current viewport selection.
+
+        Every selected joint contributes its rig part, so selecting joints
+        across several tails lists them all - each tail once, however many of
+        its joints are selected.'''
         import rig_tail_setup as rt_set
         try:
-            rigname = rt_set.rigname_from_selection()
+            rignames = rt_set.rignames_from_selection()
         except Exception as e:
             cmds.warning(f'Roll: could not read selection: {e}')
             return
-        if not rigname:
+        if not rignames:
             cmds.warning('Roll: no rig part in the selection. Select a joint '
-                         'of the tail chain, then click Select.')
+                         'of each tail chain, then click Select.')
             return
-        idx = self.cmb_roll_chain.findText(rigname)
-        if idx < 0:
-            # rigname resolved but the dropdown is stale; refresh and retry.
-            self._refresh_roll_chains()
-            idx = self.cmb_roll_chain.findText(rigname)
-        if idx >= 0:
-            self.cmb_roll_chain.setCurrentIndex(idx)
+        self.txt_roll_chain.setText(', '.join(rignames))
 
     def apply_roll(self, sign):
         '''
-        Roll the selected chain by the step angle, immediately.
+        Roll every listed chain by the step angle, immediately.
 
         sign is +1 (right arrow, add) or -1 (left arrow, subtract). No
         confirmation dialog - the roll just applies; feedback goes to the
-        Script Editor (rig_tail_setup.roll_chain logs it). Non-modal warnings
-        cover an empty selection or a zero step so a stray click is harmless.
+        Script Editor (rig_tail_setup.roll_chain logs it per chain). Non-modal
+        warnings cover an empty box, an unknown name or a zero step so a stray
+        click is harmless. One bad name does not stop the rest: each chain is
+        rolled on its own and failures are reported at the end, so a typo in a
+        list of four still rolls the other three.
         '''
         import rig_tail_setup as rt_set
 
-        rigname = self.cmb_roll_chain.currentText().strip()
-        if not rigname:
-            cmds.warning('Roll: no chain selected (RIGPARTS is empty).')
+        rignames = self._roll_chains()
+        if not rignames:
+            cmds.warning('Roll: no chain in the Chain box. Type a rig part '
+                         'name, or select joints and click Select.')
+            return
+        unknown = [n for n in rignames if n not in rt_cst.RIGPARTS]
+        if unknown:
+            cmds.warning(f'Roll: not in RIGPARTS: {", ".join(unknown)}. Check '
+                         'the spelling in the Chain box.')
             return
         angle = self.spn_roll.value() * sign
         if not angle:
@@ -680,14 +794,17 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
         # Persist the aim/up axes the roll uses, so it matches the dropdowns.
         self.save_current_values()
-        try:
-            n = rt_set.roll_chain(rigname, angle)
-        except Exception as e:
-            cmds.warning(f'Roll failed on {rigname}: {e}')
-            return
-        if not n:
-            cmds.warning(f'Roll: no BN chain found for "{rigname}". Check '
-                         'RIGPARTS and that the skeleton is in the scene.')
+        failed = []
+        for rigname in rignames:
+            try:
+                if not rt_set.roll_chain(rigname, angle):
+                    failed.append(rigname)
+            except Exception as e:
+                cmds.warning(f'Roll failed on {rigname}: {e}')
+                failed.append(rigname)
+        if failed:
+            cmds.warning(f'Roll: no BN chain rolled for: {", ".join(failed)}. '
+                         'Check RIGPARTS and that the skeleton is in the scene.')
 
     def run_setup(self):
         '''Commit options and run the Setup phase on the skeleton.'''
