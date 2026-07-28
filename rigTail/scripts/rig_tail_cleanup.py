@@ -18,7 +18,10 @@ and the joint helpers detect or (re)build the BN/FK/IK chains for RIGPARTS.
 Functions:
     cleanup_rig: entry point; per part choose full vs light teardown
     remove_rig: strip the rig back to bare skeleton + geometry
+    unique_path: resolve a name to one unambiguous full DAG path
     _rescue_from_root: move skeleton/geometry out before deleting the root
+    _sweep_rig_leftovers: delete orphaned utility/anim nodes of a rig part
+    rig_leftovers: report rig nodes still in the scene after a removal
     cleanup_rigname: full teardown of one rig part
     cleanup_connections: light teardown, break connections only
     cleanup_anim_effects: remove one part's FX expression/node network
@@ -41,7 +44,7 @@ Functions:
 
 import re
 import maya.cmds as cmds
-from logger_config import logger_setup
+from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
@@ -106,11 +109,12 @@ def cleanup_rig(fk, ik):
     # so a sweep that took their curves would strip their variable-FK
     # falloff and mode switching for good.
     logger.trace(f"Cleaning up SDK curves")
-    anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
-    keep = excluded_sdk_curves(anim_curves)
-    anim_curves = [c for c in anim_curves if c not in keep]
-    if anim_curves:
-        cmds.delete(anim_curves)
+    with rt_mya.timed('cleanup.sdk_curves'):
+        anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
+        keep = excluded_sdk_curves(anim_curves)
+        anim_curves = [c for c in anim_curves if c not in keep]
+        if anim_curves:
+            cmds.delete(anim_curves)
 
     # One conversion sweep for the whole teardown instead of one per part
     global _DEFER_CONVERSION_SWEEP
@@ -122,7 +126,8 @@ def cleanup_rig(fk, ik):
             # Validate cache
             joints_changed = rt_cache.validate_cache_joints(rigname)
             # Unbind geometry before rebuild
-            rt_mya.unbind_geometry(rigname)
+            with rt_mya.timed('cleanup.unbind'):
+                rt_mya.unbind_geometry(rigname)
 
             # Rebuild check. A full teardown always strips BOTH modes,
             # not just the ones being rebuilt: the previous build may
@@ -131,19 +136,23 @@ def cleanup_rig(fk, ik):
             # that switched between FK-only and FK+IK. The build then
             # recreates only what was asked for.
             if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
-                cleanup_rigname(rigname, fk=True, ik=True)
+                with rt_mya.timed('cleanup.teardown_full'):
+                    cleanup_rigname(rigname, fk=True, ik=True)
             else:
-                cleanup_connections(rigname, fk, ik)
+                with rt_mya.timed('cleanup.teardown_light'):
+                    cleanup_connections(rigname, fk, ik)
     finally:
         _DEFER_CONVERSION_SWEEP = False
     if _CONVERSION_SWEEP_PENDING:
-        cleanup_dangling_unit_conversions()
+        with rt_mya.timed('cleanup.conversions'):
+            cleanup_dangling_unit_conversions()
 
     # Main controller dashboard: remove stale override conditions and,
     # when the dashboard is off, every dashboard attribute. Runs after
     # the per-part loop so expressions referencing the conditions are
     # already gone on a full teardown.
-    rt_ca.cleanup_ctrlall(fk, ik)
+    with rt_mya.timed('cleanup.ctrlall'):
+        rt_ca.cleanup_ctrlall(fk, ik)
 
 def remove_rig():
     '''
@@ -173,10 +182,24 @@ def remove_rig():
        keeps deforming (same rule as cleanup_rigname and
        rig_tail_setup._apply_frames).
     4. Move skeleton and geometry out of the rig hierarchy BEFORE deleting
-       the root group, or Maya deletes them along with it.
-    5. Drop the FK/IK/FX caches and the last-build record, so a later
+       the root group, or Maya deletes them along with it. A node that
+       could NOT be moved out aborts the deletion instead of being taken
+       down with the group - a failed rescue used to be a warning, and the
+       geometry went with the root.
+    5. Sweep the DG leftovers the per-part teardown does not reach:
+       orphaned set-driven-key curves (cleanup_rig deletes those in one
+       scene-wide call, which this is not) and any utility/anim node still
+       carrying a rig part's name. Without this the scene keeps hundreds of
+       disconnected animCurve and condition nodes.
+    6. Drop the FK/IK/FX caches and the last-build record, so a later
        build re-detects from the skeleton instead of trusting names that
        no longer exist.
+
+    Every scene node is addressed by its full DAG path. Short names are
+    ambiguous the moment a scene holds two nodes with the same name under
+    different parents (a duplicated 'rivets' group), and Maya answers an
+    ambiguous name with 'More than one object matches name', which used to
+    abort the whole removal.
 
     Return
         bool: True if a rig was found and removed
@@ -185,34 +208,47 @@ def remove_rig():
     logger.info('Remove Rig')
 
     rt_con.clear_control_cache()
-    root_grp = find_existing_root_grp() or rt_nam.fstr('', rt_cst.ROOT_GRP)
+    root_grp = unique_path(find_existing_root_grp()
+                           or rt_nam.fstr('', rt_cst.ROOT_GRP))
     parts = list(rt_cst.RIGPARTS)
 
-    # 1. Capture the posed skeleton while the rig still drives it
+    # 1. Capture the posed skeleton while the rig still drives it, keyed by
+    # full path so step 3 cannot re-resolve to a different node
     poses = {}
+    bn_paths = {}
     for rigname in parts:
-        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
-            if cmds.objExists(jnt):
-                poses[jnt] = cmds.xform(jnt, q=True, ws=True, matrix=True)
+        bn_paths[rigname] = [p for p in
+                             (unique_path(j)
+                              for j in rt_cst.JOINTS_BN.get(rigname, []))
+                             if p]
+        for path in bn_paths[rigname]:
+            poses[path] = cmds.xform(path, q=True, ws=True, matrix=True)
     logger.debug(f'Captured {len(poses)} BN joint poses')
 
-    # 2. Tear down each part, then the duplicated chains
-    for rigname in parts:
-        cleanup_rigname(rigname, fk=True, ik=True)
-        cleanup_anim_effects(rigname, fk=True, ik=True)
-    for rigname in parts:
-        for typ in (rt_cst.TYPE_FK, rt_cst.TYPE_IK):
-            chain_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
-            if cmds.objExists(chain_root):
-                rt_mya.remove(chain_root)
-            jnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
-            if cmds.objExists(jnt_grp):
-                rt_mya.remove(jnt_grp)
+    # 2. Tear down each part, then the duplicated chains. One conversion
+    # sweep for the whole teardown instead of one per part (see cleanup_rig)
+    global _DEFER_CONVERSION_SWEEP
+    _DEFER_CONVERSION_SWEEP = True
+    try:
+        for rigname in parts:
+            # cleanup_rigname ends with cleanup_anim_effects, so the FX
+            # network is already gone by the time it returns
+            cleanup_rigname(rigname, fk=True, ik=True)
+        for rigname in parts:
+            for typ in (rt_cst.TYPE_FK, rt_cst.TYPE_IK):
+                chain_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
+                if cmds.objExists(chain_root):
+                    rt_mya.remove(chain_root)
+                jnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
+                if cmds.objExists(jnt_grp):
+                    rt_mya.remove(jnt_grp)
+    finally:
+        _DEFER_CONVERSION_SWEEP = False
 
     # 3. Restore the skeleton as plain joints, root to tip
     for rigname in parts:
-        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
-            if jnt not in poses or not cmds.objExists(jnt):
+        for jnt in bn_paths[rigname]:
+            if not cmds.objExists(jnt):
                 continue
             rt_mya.disconnect_all(jnt, source=True, destination=False)
             rt_mya.reset_opm(jnt)
@@ -223,21 +259,36 @@ def remove_rig():
             rot = cmds.getAttr(f'{jnt}.rotate')[0]
             cmds.setAttr(f'{jnt}.jointOrient', rot[0], rot[1], rot[2])
             cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
-        # Leave the skeleton keyable and visible, as the Setup phase does
-        rt_mya.finalize_joint_channels(True, visibility=1,
-                                       joint_dicts=[rt_cst.JOINTS_BN])
+    # Leave the skeleton keyable and visible, as the Setup phase does.
+    # Outside the part loop: it walks the whole BN cache on every call, so
+    # calling it per part re-did the same work once per rig part.
+    rt_mya.finalize_joint_channels(True, visibility=1,
+                                   joint_dicts=[rt_cst.JOINTS_BN])
 
     # 4. Rescue skeleton and geometry, then drop the hierarchy
     removed = False
-    if cmds.objExists(root_grp):
-        rescued = _rescue_from_root(root_grp)
+    if root_grp and cmds.objExists(root_grp):
+        rescued, stuck = _rescue_from_root(root_grp)
         logger.debug(f"Moved {rescued} node(s) out of '{root_grp}'")
+        if stuck:
+            abort_build(logger,
+                        f"Remove Rig stopped: {len(stuck)} node(s) could not "
+                        f"be moved out of '{root_grp}', and deleting the "
+                        f"group would delete them too: "
+                        f"{', '.join(stuck[:5])}. Reparent them by hand, "
+                        f"then run Remove Rig again.")
         rt_mya.remove(root_grp)
         removed = True
     else:
         logger.warning('No rig root group found; nothing to remove')
 
-    # 5. Forget the build. LAST_BUILD keeps its documented key set -
+    # 5. Sweep the DG leftovers
+    swept = _sweep_rig_leftovers(parts)
+    cleanup_dangling_unit_conversions()
+    if swept:
+        logger.debug(f'Swept {swept} leftover rig node(s)')
+
+    # 6. Forget the build. LAST_BUILD keeps its documented key set -
     # rig_tail_cache indexes 'rigparts'/'root'/... directly, so replacing
     # it with an empty dict would KeyError on the next build.
     for rigname in parts:
@@ -257,6 +308,37 @@ def remove_rig():
     return removed
 
 
+def unique_path(node):
+    '''
+    Resolve a node name to its one full DAG path.
+
+    Short names are only usable while they are unique. A scene that holds
+    two nodes called 'rivets' under different parents answers every command
+    given the short name with 'More than one object matches name: rivets' -
+    a RuntimeError from some commands and a ValueError from others, which is
+    why the teardown resolves names to full paths up front instead of
+    catching that error everywhere.
+
+    Arguments
+        node (str): Node name or DAG path (None/'' is accepted)
+
+    Return
+        str or None: full path, or None when the name is missing or
+        matches more than one node (both are logged)
+    '''
+    if not node:
+        return None
+    matches = cmds.ls(node, long=True) or []
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(f"'{node}' matches {len(matches)} nodes "
+                       f"({', '.join(matches[:3])}); skipped. Rename the "
+                       f"duplicates so the name is unique.")
+        return None
+    return matches[0]
+
+
 def _rescue_from_root(root_grp):
     '''
     Move the skeleton and geometry out of the rig hierarchy to the scene
@@ -267,25 +349,152 @@ def _rescue_from_root(root_grp):
     and joints the rig never touched (other parts of the character), and
     they were parented in by setup_rig just the same.
 
+    Children are addressed by full path (see unique_path): a mesh named the
+    same as a node elsewhere in the scene cannot be reparented by its short
+    name, and that failure is exactly the case where losing the node
+    matters, so it is reported to the caller rather than merely logged.
+
     Arguments
         root_grp (str): The rig root group about to be deleted
 
     Return
-        int: nodes moved out
+        tuple: (nodes moved out, list of nodes that could not be moved)
     '''
     moved = 0
+    stuck = []
     for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP):
-        grp = rt_nam.fstr('', template)
-        if not cmds.objExists(grp):
+        grp = unique_path(rt_nam.fstr('', template))
+        if not grp:
             continue
-        for child in cmds.listRelatives(grp, c=True, typ='transform') or []:
+        for child in cmds.listRelatives(grp, c=True, typ='transform',
+                                        f=True) or []:
             try:
                 cmds.parent(child, world=True)
                 moved += 1
-            except RuntimeError as e:
+            except Exception as e:
+                # Every exception type: Maya reports an ambiguous name as
+                # ValueError from some commands and RuntimeError from others
                 logger.warning(f"Could not move '{child}' out of "
                                f"'{grp}': {e}")
-    return moved
+                stuck.append(child)
+    return moved, stuck
+
+
+# Node types the leftover sweep is allowed to delete. Utility, matrix and
+# animation nodes only: no joint, transform, mesh, nurbsCurve, skinCluster
+# or dagPose type appears here, so a sweep can never take the skeleton, the
+# geometry or the skin the removal is meant to keep.
+_SWEEP_TYPES = [
+    'condition', 'multiplyDivide', 'plusMinusAverage', 'multDoubleLinear',
+    'addDoubleLinear', 'pointMatrixMult', 'blendTwoAttr', 'blendColors',
+    'clamp', 'setRange', 'choice', 'curveInfo', 'pointOnCurveInfo',
+    'remapValue', 'reverse', 'expression', 'composeMatrix',
+    'decomposeMatrix', 'multMatrix', 'inverseMatrix', 'addMatrix',
+    'wtAddMatrix', 'pickMatrix', 'quatToEuler', 'eulerToQuat',
+    'angleBetween', 'distanceBetween', 'cluster', 'ikHandle', 'ikEffector',
+    'animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT',
+]
+
+
+def _ls_types(types):
+    '''
+    cmds.ls(type=...) that tolerates a node type this Maya does not know.
+
+    The matrix nodes (multMatrix, composeMatrix, pickMatrix...) come from
+    the matrixNodes plugin, and cmds.ls raises on the whole query if one
+    type in the list is unknown - which would take the sweep down in a
+    session where the plugin never loaded. One query normally; on failure,
+    fall back to querying type by type and skip the ones Maya rejects.
+
+    Arguments
+        types (list): Node type names
+
+    Return
+        list: matching nodes
+    '''
+    try:
+        return cmds.ls(type=types) or []
+    except RuntimeError:
+        found = []
+        for typ in types:
+            try:
+                found.extend(cmds.ls(type=typ) or [])
+            except RuntimeError:
+                logger.trace(f"Unknown node type '{typ}', skipped")
+        return found
+
+
+def _sweep_rig_leftovers(parts, delete=True):
+    '''
+    Delete the DG nodes a per-part teardown leaves behind.
+
+    cleanup_rigname deletes by name pattern, and every pattern is anchored
+    on a type prefix ('FK_tail_*'). The rig also builds nodes that carry no
+    prefix - the dashboard's '{rigname}_stretch_override_condition', the FX
+    expressions, and the hundreds of set-driven-key animCurves that
+    cleanup_rig only removes in its own scene-wide call - so a removal that
+    relied on the patterns alone left them in the scene as orphans.
+
+    A node is swept when its name carries a rig part's name as a whole
+    token ('tail' matches 'FK_tail_02_condition', never 'detail') AND its
+    type is in _SWEEP_TYPES. Type is the safety net: the skeleton, the
+    meshes and their skinClusters share those names and none of their types
+    are sweepable.
+
+    Arguments
+        parts (list): Rig part names being removed
+        delete (bool): False to only report (used by rig_leftovers)
+
+    Return
+        int or list: nodes deleted, or the node list when delete is False
+    '''
+    if not parts:
+        return 0 if delete else []
+    tokens = [re.compile(rf'(?<![A-Za-z0-9]){re.escape(p)}(?![A-Za-z0-9])')
+              for p in parts]
+    found = []
+    for node in _ls_types(_SWEEP_TYPES) or []:
+        leaf = node.split('|')[-1]
+        if any(t.search(leaf) for t in tokens):
+            found.append(node)
+    if not delete:
+        return found
+    count = 0
+    for node in found:
+        # Deleting one node can cascade through its connection web (an
+        # expression takes its loop network with it), so re-check
+        if cmds.objExists(node):
+            rt_mya.remove(node)
+            count += 1
+    return count
+
+
+def rig_leftovers(parts=None):
+    '''
+    Rig nodes still in the scene, for checking a removal was complete.
+
+    Reports what Remove Rig is supposed to have deleted: the rig root
+    group, anything named with a rig type prefix, and any sweepable
+    utility/anim node carrying a part's name. Read-only.
+
+    Arguments
+        parts (list): Rig parts to check, defaulting to RIGPARTS
+
+    Return
+        dict: {'root': [...], 'prefixed': [...], 'utility': [...]}
+    '''
+    parts = list(parts if parts is not None else rt_cst.RIGPARTS)
+    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
+    prefixes = (rt_cst.TYPE_FK, rt_cst.TYPE_IK, rt_cst.TYPE_FX)
+    prefixed = []
+    for typ in prefixes:
+        for part in parts:
+            prefixed.extend(cmds.ls(f'{typ}_{part}_*', long=True) or [])
+    return {
+        'root': cmds.ls(root_grp, long=True) or [],
+        'prefixed': sorted(dict.fromkeys(prefixed)),
+        'utility': _sweep_rig_leftovers(parts, delete=False),
+    }
 
 
 def restore_fk_joint_chain(rigname):
@@ -309,20 +518,32 @@ def restore_fk_joint_chain(rigname):
     joints = rt_cst.JOINTS_FK[rigname]
     fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
 
-    # Unparent all FK joints to world temporarily
+    # Unparent all FK joints to world temporarily. One cmds.parent for the
+    # whole chain: a reparent is among the most expensive commands there is
+    # (DAG restructure plus undo state), and this runs for every FK joint of
+    # every rig part on every rebuild.
+    loose = []
     for jnt in joints:
         if cmds.objExists(jnt):
             jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
             if jnt_parent and jnt_parent[0] != fkjnt_grp:
-                cmds.parent(jnt, world=True)
+                loose.append(jnt)
+    if loose:
+        cmds.parent(*loose, world=True)
 
     # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end with the
     # SDK label. Pattern matching (not exact counts) also removes groups left
     # over from a previous NUM_CTRL_FK value.
+    # Disconnected one at a time (rt_mya.remove's reason: a delete must not
+    # cascade through an expression web), then deleted in ONE call - there
+    # are NUM_CTRL_FK+1 of these per joint, so the per-node delete was the
+    # single biggest source of commands in the teardown.
     sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
-    for sdk_grp in cmds.ls(sdk_pattern, type='transform'):
-        if cmds.objExists(sdk_grp):
-            rt_mya.remove(sdk_grp)
+    sdk_groups = cmds.ls(sdk_pattern, type='transform') or []
+    rt_mya.disconnect_nodes(sdk_groups)
+    sdk_groups = [g for g in sdk_groups if cmds.objExists(g)]
+    if sdk_groups:
+        cmds.delete(sdk_groups)
 
     # Re-parent FK joints in proper hierarchy
     for i in range(len(joints)-1, 0, -1):  # Reverse order
@@ -367,38 +588,42 @@ def cleanup_rigname(rigname, fk, ik):
     basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
     basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
 
-    # 1. Disconnect skeleton, delete joint constraints
+    # 1. Disconnect skeleton, delete joint constraints. Per CHAIN, not per
+    # joint: listRelatives and listConnections both take a node list and
+    # answer for all of them in one command, and this used to cost five
+    # commands per joint per chain per rig part.
     logger.trace(f"{rigname}: Cleaning up skeleton constraints")
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX]:
         if rigname in joints:
+            chain = [j for j in joints[rigname] if cmds.objExists(j)]
+            if not chain:
+                continue
+            # Delete constraints
+            constraints = cmds.listRelatives(chain, type='constraint') or []
+            if constraints:
+                cmds.delete(constraints)
+            # Disconnect incoming drivers (and outgoing too, except on BN
+            # where outgoing is the geometry bind).
             # BN joints carry the geometry bind (worldMatrix -> skinCluster)
             # on their OUTGOING side. Only their incoming drivers are
             # replaced by the rig, so keep their outgoing connections or the
             # skin goes with them and the mesh stops deforming. FK/IK/FX
             # joints hold no skin, so clear both directions as before.
             keep_skin = joints is rt_cst.JOINTS_BN
-            for jnt in joints[rigname]:
-                if cmds.objExists(jnt):
-                    # Delete constraints
-                    constraints = cmds.listRelatives(jnt, type='constraint') or []
-                    for constr in constraints:
-                        cmds.delete(constr)
-                    # Disconnect incoming drivers (and outgoing too, except
-                    # on BN where outgoing is the geometry bind)
-                    rt_mya.disconnect_all(jnt, source=True,
-                                          destination=not keep_skin)
+            rt_mya.disconnect_nodes(chain, source=True,
+                                    destination=not keep_skin)
 
-    # 2. Delete control constraints
+    # 2. Delete control constraints. One query for the whole control
+    # subtree (constraints are children of what they constrain), then one
+    # delete: the previous version asked every descendant transform for its
+    # constraints, and then reset the OPM and every transform channel of
+    # every control - hundreds of nodes, tens of commands each, all of them
+    # on nodes that step 4 below deletes outright a moment later.
     if cmds.objExists(basectrl):
-        all_descendants = cmds.listRelatives(basectrl, ad=True, type='transform') or []
-        for node in all_descendants:
-            constraints = cmds.listRelatives(node, type='constraint') or []
-            for constr in constraints:
-                cmds.delete(constr)
-            # Reset OPM and transforms on controls
-            if f'{rt_cst.CTRL}' in node:
-                rt_mya.reset_opm(node, unlock=True)
-                rt_mya.reset_transforms(node, unlock=True)
+        constraints = cmds.listRelatives(basectrl, ad=True,
+                                         type='constraint', f=True) or []
+        if constraints:
+            cmds.delete(constraints)
 
     # 3. Delete skinClusters from curves
     logger.trace(f"{rigname}: Cleaning up skinClusters")
@@ -510,31 +735,35 @@ def cleanup_connections(rigname, fk, ik):
         logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
         restore_fk_joint_chain(rigname)
 
+    # Per chain, not per joint (see cleanup_rigname step 1)
     for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
         if rigname in joints:
+            chain = [j for j in joints[rigname] if cmds.objExists(j)]
+            if not chain:
+                continue
             # Keep BN joints' outgoing worldMatrix -> skinCluster (the
             # geometry bind); only their incoming drivers are rebuilt.
             keep_skin = joints is rt_cst.JOINTS_BN
-            for jnt in joints[rigname]:
-                if cmds.objExists(jnt):
-                    rt_mya.disconnect_all(jnt, source=True,
-                                          destination=not keep_skin)
-                    # Remove constraints
-                    constraints = cmds.listRelatives(jnt, type='constraint') or []
-                    for constr in constraints:
-                        cmds.delete(constr)
+            rt_mya.disconnect_nodes(chain, source=True,
+                                    destination=not keep_skin)
+            # Remove constraints
+            constraints = cmds.listRelatives(chain, type='constraint') or []
+            if constraints:
+                cmds.delete(constraints)
 
-    # Disconnect FK SDK groups
+    # Disconnect FK SDK groups, the whole stack of every joint in two
+    # commands (there are NUM_CTRL_FK + 1 of them per joint)
     if fk and rigname in rt_cst.JOINTS_FK:
-        for i, jnt in enumerate(rt_cst.JOINTS_FK[rigname]):
+        sdk_groups = []
+        for jnt in rt_cst.JOINTS_FK[rigname]:
             NN = rt_nam.get_index_from_name(jnt)
             for idx in range(rt_cst.NUM_CTRL_FK + 1):
                 if idx < rt_cst.NUM_CTRL_FK:
                     sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
                 else:
                     sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
-                if cmds.objExists(sdk_grp):
-                    rt_mya.disconnect_all(sdk_grp, source=True)
+                sdk_groups.append(sdk_grp)
+        rt_mya.disconnect_nodes(sdk_groups, source=True, destination=False)
 
     # Delete FK utility node networks: the FK build (set_curveinfo_fk,
     # falloff_rotation) recreates them from scratch every run, so

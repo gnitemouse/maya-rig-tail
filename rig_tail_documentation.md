@@ -343,6 +343,28 @@ Full teardown of one rig part (controls, curves, clusters, FX nodes).
 #### `cleanup_connections(rigname, fk, ik)`
 Light teardown: break connections only, keep nodes for reuse.
 
+#### `remove_rig()`
+Strip the rig back to bare skeleton + geometry — the reverse of a build,
+for handing a scene on or starting over. Keeps the BN joints in their
+current pose (as plain joints) with the geometry still bound to them;
+removes controls, curves, clusters, ikHandles, FX and utility networks,
+the FK/IK duplicate chains and the whole rig hierarchy. **Destructive and
+not an undo:** animation on the controls goes with the controls. Aborts
+rather than deleting the root group when a mesh or joint could not be moved
+out of it first. Verified by `rt_test.test_remove_rig()`.
+
+#### `unique_path(node)`
+One full DAG path for a name, or None when the name is missing or matches
+more than one node. The teardown addresses everything by full path: in a
+scene holding two nodes with the same name (a duplicated `rivets` group)
+every command given the short name fails with *More than one object matches
+name*.
+
+#### `rig_leftovers(parts=None)`
+Rig nodes still in the scene after a removal — root group,
+`FK_`/`IK_`/`FX_`-prefixed nodes, and orphaned utility/anim nodes carrying
+a part's name. Read-only; the check behind `test_remove_rig`.
+
 #### `setup_rig(fk, ik)`
 Create the rig root, cog, and hierarchy groups.
 
@@ -613,6 +635,18 @@ Curvature loss across repeated rebuilds. **Mutating** (rebuilds the rig).
 #### `test_build_exclusion(rigname)`
 An Excluded part survives a rebuild untouched. **Mutating.**
 
+#### `test_remove_rig(tolerance=0.001)`
+Remove Rig leaves a clean scene: root group gone, every BN joint still in
+the pose the rig held it in, geometry still skinned with the same
+influences, and nothing rig-shaped left behind (`rig_leftovers`).
+**Mutating**, and not undoable — run it on a scene you can reload.
+
+#### `profile_build(root=None, fk=None, ik=None)` / `profile_cmds()`
+Which Maya command the build time goes to: calls, total and mean per
+command name, and what share of wall time is spent inside commands at all.
+`profile_build` runs a rebuild under `profile_cmds` (**mutating**);
+`profile_cmds` is a context manager for profiling any block.
+
 Individual checks (all taking `rigname`): `test_matrix`,
 `test_local_trs`, `test_fx_order`, `test_alignment`, `test_matrix_opm`,
 `test_joint_orient`, `check_expression_flags`, `test_ikfk_drive`,
@@ -699,6 +733,11 @@ Iterative traversal of transform hierarchy.
 #### `disconnect_all(node, source=True, destination=True, attrs=None)`
 Disconnect all connections from/to a node.
 
+#### `disconnect_nodes(nodes, source=True, destination=True)`
+`disconnect_all` for a list of nodes in two commands — `listConnections`
+answers for a whole joint chain at once. Used by the teardown, where the
+per-node version cost several commands per joint per chain per rig part.
+
 #### `break_connection(plug)`
 Break single plug connection.
 
@@ -770,6 +809,12 @@ left bound and returned instead; `force=True` unbinds regardless.
 
 #### `unbind_geometry_all()`
 Unbind all geometry in scene.
+
+#### `geometry_transforms(root=None)`
+Mesh transforms under the geometry group, from one typed subtree query.
+Shared by bind, unbind and the missing-geometry report, which each used to
+walk every descendant transform and ask about it node by node — once per rig
+part, in two phases.
 
 ### Skin Preservation
 

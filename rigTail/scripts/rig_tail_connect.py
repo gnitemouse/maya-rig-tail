@@ -84,13 +84,20 @@ def connect_rig_tail(fk, ik):
         if rigname not in rt_cst.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping connect")
             continue
-        connect_fk(rigname, fk, ik)
-        connect_ik(rigname, fk, ik)
+        # Step timings (rt_mya.timed) report on the build_timer's second
+        # line, so a slow connect phase says which step it was slow in
+        with rt_mya.timed('connect.fk'):
+            connect_fk(rigname, fk, ik)
+        with rt_mya.timed('connect.ik'):
+            connect_ik(rigname, fk, ik)
         # rt_test.dump_chain()
-        build_matrix_offset_network(rigname, fk, ik)
-        rt_ani.build_anim_effects(rigname, fk, ik)
-        connect_effects(rigname, fk, ik)
-        rt_mya.bind_geometry(rigname)
+        with rt_mya.timed('connect.matrix'):
+            build_matrix_offset_network(rigname, fk, ik)
+        with rt_mya.timed('connect.fx'):
+            rt_ani.build_anim_effects(rigname, fk, ik)
+            connect_effects(rigname, fk, ik)
+        with rt_mya.timed('connect.bind'):
+            rt_mya.bind_geometry(rigname)
         # rt_test.dump_chain()
 
     # Consolidated warning for parts whose mesh name did not match, so the
@@ -100,7 +107,11 @@ def connect_rig_tail(fk, ik):
     # After everything is connected the IK spline has reached its final
     # (low-CV driver) shape, so the IK joints now read their true rest -- match
     # FK onto it so the two modes agree and the tail does not pop on a switch.
-    match_fk_to_ik_rest(fk, ik)
+    # Timed separately: it forces a full-scene dirty and evaluation, which is
+    # the one step here whose cost is set by the whole scene rather than by
+    # this rig.
+    with rt_mya.timed('connect.match_rest'):
+        match_fk_to_ik_rest(fk, ik)
 
     # The mode SDKs are wired now; tuck the internal resolved IKFK
     # drivers out of the cog channel box (no-op when the dashboard is off)
@@ -110,12 +121,14 @@ def connect_rig_tail(fk, ik):
     # joint channel non-keyable (shown but not settable) so animators cannot
     # accidentally key them. Not locked -- the OPM/constraint/SDK
     # connections that drive the joints must stay intact.
-    rt_mya.finalize_joint_channels(keyable=False)
+    with rt_mya.timed('connect.joint_channels'):
+        rt_mya.finalize_joint_channels(keyable=False)
 
     # Colour the three skeletons by type (BN blue, IK orange, FK purple)
     # so they read apart in the viewport.
     if getattr(rt_cst, 'COLOR_SKELETON', True):
-        rt_mya.color_skeletons()
+        with rt_mya.timed('connect.color'):
+            rt_mya.color_skeletons()
 
     logger.debug('DONE Connected Rig Components')
     logger.debug('-----------------------------------------------------')

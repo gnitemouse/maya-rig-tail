@@ -26,9 +26,13 @@ Usage:
     rt_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
     rt_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
     rt_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
+    rt_test.test_remove_rig()                          # Remove Rig leaves a clean scene (MUTATES)
+    rt_test.profile_build()                            # which Maya command the build time goes to (MUTATES)
 '''
+import contextlib
 import math
 import re
+import time
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
@@ -487,6 +491,297 @@ def test_build_exclusion(rigname, root=None):
         print(f'  PASS: all {len(before_nodes)} node(s) and '
               f'{len(before_curves)} SDK curve(s) survived the rebuild')
     return ok
+
+
+def test_remove_rig(tolerance=0.001):
+    '''
+    Remove Rig strips the rig and leaves the scene clean.
+
+    MUTATING, and not undoable in any reliable way: it removes the rig in
+    the current scene, so run it on a scene you can reload. It is the only
+    way to check the teardown - the thing being verified is what the scene
+    looks like afterwards.
+
+    Checks, in the order they matter:
+      1. the rig root group is gone
+      2. every BN joint still exists, in the same world position and
+         orientation it held while the rig drove it (this is the check that
+         catches the skeleton collapsing: the build zeroes BN local TRS and
+         poses through offsetParentMatrix, so a teardown that deletes the
+         matrix network without baking the pose back flattens the chain)
+      3. BN joints are plain joints again: identity offsetParentMatrix, no
+         incoming connections, no constraints
+      4. geometry survived and is still skinned, with the same influence
+         count - the mesh must keep deforming
+      5. nothing rig-shaped is left in the scene (rig_leftovers): no root,
+         no FK/IK/FX-prefixed nodes, no orphaned SDK curves, condition
+         nodes or FX expressions
+
+    Usage:
+        import rig_tail_test as rt_test
+        rt_test.test_remove_rig()
+
+    Arguments:
+        tolerance (float): allowed world-position drift per joint, in
+            scene units.
+
+    Return:
+        bool: True when every check passed.
+    '''
+    import rig_tail_cleanup as rt_cln
+    import rig_tail_maya as rt_mya
+
+    parts = list(rt_cst.RIGPARTS)
+    root_grp = rt_cln.find_existing_root_grp()
+    print('\n--- REMOVE RIG ---')
+    if not root_grp:
+        print('  SKIP: no rig root group in this scene, nothing to remove')
+        return False
+
+    # BEFORE: skeleton pose, and the skin on every mesh the parts own
+    before_jnts = {}
+    for part in parts:
+        for jnt in rt_cst.JOINTS_BN.get(part, []):
+            path = rt_cln.unique_path(jnt)
+            if path:
+                before_jnts[path.split('|')[-1]] = (
+                    cmds.xform(path, q=1, ws=1, t=1),
+                    cmds.xform(path, q=1, ws=1, ro=1))
+    before_skin = {}
+    for part in parts:
+        for geo in rt_mya.find_geometry_for_rigname(part):
+            skin = rt_mya.find_skincluster(geo)
+            if skin:
+                influences = cmds.skinCluster(skin, q=True, inf=True) or []
+                before_skin[geo.split('|')[-1]] = len(influences)
+    print(f'  before: {len(before_jnts)} BN joint(s), '
+          f'{len(before_skin)} skinned mesh(es) under {len(parts)} part(s)')
+
+    removed = rt_cln.remove_rig()
+
+    fails = []
+    if not removed:
+        fails.append('remove_rig() returned False')
+
+    # 1. Root group gone
+    if cmds.objExists(root_grp):
+        fails.append(f"rig root group '{root_grp}' still exists")
+
+    # 2 + 3. Skeleton kept, in place, and plain again
+    moved, lost, driven = [], [], []
+    for leaf, (pos, rot) in before_jnts.items():
+        path = rt_cln.unique_path(leaf)
+        if not path:
+            lost.append(leaf)
+            continue
+        now_pos = cmds.xform(path, q=1, ws=1, t=1)
+        now_rot = cmds.xform(path, q=1, ws=1, ro=1)
+        drift = max(abs(a - b) for a, b in zip(pos, now_pos))
+        # Orientation is compared as a direction, not raw euler values:
+        # the same orientation has several euler representations, and the
+        # teardown moves it from rotate into jointOrient
+        spin = max(abs((a - b + 180) % 360 - 180) for a, b in zip(rot, now_rot))
+        if drift > tolerance or spin > 0.1:
+            moved.append(f'{leaf} (moved {drift:.3f}, turned {spin:.2f}deg)')
+        incoming = cmds.listConnections(path, s=True, d=False) or []
+        constraints = cmds.listRelatives(path, type='constraint') or []
+        opm = cmds.getAttr(f'{path}.offsetParentMatrix')
+        if incoming or constraints or \
+                max(abs(a - b) for a, b in zip(opm, IDENTITY_MTX)) > 1e-6:
+            driven.append(leaf)
+    if lost:
+        fails.append(f'{len(lost)} BN joint(s) deleted: '
+                     f'{", ".join(lost[:5])}')
+    if moved:
+        fails.append(f'{len(moved)} BN joint(s) shifted: '
+                     f'{", ".join(moved[:5])}')
+    if driven:
+        fails.append(f'{len(driven)} BN joint(s) still driven '
+                     f'(connection, constraint or non-identity opm): '
+                     f'{", ".join(driven[:5])}')
+
+    # 4. Geometry survived, still skinned. The meshes were reparented out
+    # of the deleted rig hierarchy, so they are found by leaf name now.
+    unskinned = []
+    for leaf, influences in before_skin.items():
+        path = rt_cln.unique_path(leaf)
+        if not path:
+            unskinned.append(f'{leaf} (deleted)')
+            continue
+        skin = rt_mya.find_skincluster(path)
+        if not skin:
+            unskinned.append(f'{leaf} (skin gone)')
+        else:
+            now = len(cmds.skinCluster(skin, q=True, inf=True) or [])
+            if now != influences:
+                unskinned.append(f'{leaf} ({influences} -> {now} influences)')
+    if unskinned:
+        fails.append(f'{len(unskinned)} mesh(es) lost their bind: '
+                     f'{", ".join(unskinned[:5])}')
+
+    # 5. No strays
+    leftovers = rt_cln.rig_leftovers(parts)
+    for label, nodes in leftovers.items():
+        if nodes:
+            fails.append(f'{len(nodes)} {label} node(s) left behind: '
+                         f'{", ".join(n.split("|")[-1] for n in nodes[:5])}')
+
+    if fails:
+        for line in fails:
+            print(f'  FAIL: {line}')
+    else:
+        print(f'  PASS: rig removed; {len(before_jnts)} BN joint(s) kept in '
+              f'place, {len(before_skin)} mesh(es) still skinned, no '
+              f'leftover rig nodes')
+    return not fails
+
+
+# BUILD PROFILING ============================================
+#
+# Where the build's time actually goes, by Maya command.
+#
+# The phase timer (rt_mya.build_timer) says which phase is slow and the
+# step timings say which step, but neither settles the question the numbers
+# raise: is the build slow because it issues too many commands, or because
+# a handful of commands are individually expensive? Those have opposite
+# fixes - batching versus not calling the command at all - and the answer
+# is different for cleanup, build and connect.
+#
+# So measure it. profile_cmds wraps maya.cmds for the duration of a call
+# and reports, per command name: how many times it was called, how long
+# those calls took in total, and the mean. The summary line compares the
+# total time spent inside commands against wall-clock time, which is the
+# actual test of the 'command overhead is the ceiling' hypothesis: if
+# commands account for most of the wall time, batching is the only lever
+# left; if they do not, the time is in the Python around them.
+
+
+@contextlib.contextmanager
+def profile_cmds(top=25, threshold=0.05):
+    '''
+    Count and time every maya.cmds call made inside the block.
+
+    Every callable in maya.cmds is temporarily replaced with a counting
+    wrapper. Modules that did 'import maya.cmds as cmds' look the function
+    up on the module object at call time, so they get the wrapper too
+    without being reloaded. Everything is restored in a finally block.
+
+    The wrapper itself costs roughly a microsecond per call - visible in the
+    mean for trivial commands like objExists, negligible for the ones that
+    matter. Do not read the totals as absolute build cost; read them
+    against each other.
+
+    Usage:
+        with rt_test.profile_cmds():
+            rig_tail.rig_tail_multiple(root='squid')
+
+    Arguments:
+        top (int): How many commands to list, slowest first.
+        threshold (float): Also list any command whose mean call time
+            exceeds this many milliseconds, however rarely it is called.
+
+    Yield:
+        dict: name -> [calls, seconds], live during the block.
+    '''
+    stats = {}
+    originals = {}
+
+    def wrap(name, func):
+        def profiled(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                entry = stats.get(name)
+                if entry is None:
+                    stats[name] = [1, time.perf_counter() - started]
+                else:
+                    entry[0] += 1
+                    entry[1] += time.perf_counter() - started
+        return profiled
+
+    for name in dir(cmds):
+        if name.startswith('_'):
+            continue
+        func = getattr(cmds, name)
+        if callable(func):
+            originals[name] = func
+            setattr(cmds, name, wrap(name, func))
+
+    wall = time.perf_counter()
+    try:
+        yield stats
+    finally:
+        for name, func in originals.items():
+            setattr(cmds, name, func)
+        wall = time.perf_counter() - wall
+        report_cmds(stats, wall, top=top, threshold=threshold)
+
+
+def report_cmds(stats, wall, top=25, threshold=0.05):
+    '''
+    Print a profile_cmds table: the slowest commands, then the ones with
+    the worst mean call time, then the totals.
+
+    Arguments:
+        stats (dict): name -> [calls, seconds] from profile_cmds
+        wall (float): Wall-clock seconds the profiled block took
+        top (int): How many commands to list, slowest first
+        threshold (float): Mean call time (ms) worth calling out
+    '''
+    calls = sum(c for c, _ in stats.values())
+    in_cmds = sum(s for _, s in stats.values())
+    print('\n' + '=' * 72)
+    print(f'  MAYA COMMAND PROFILE  ({calls} calls, {in_cmds:.1f}s in '
+          f'commands, {wall:.1f}s wall)')
+    print('=' * 72)
+    print(f'  {"command":<26}{"calls":>8}{"total":>10}{"mean":>11}{"share":>8}')
+    ranked = sorted(stats.items(), key=lambda kv: -kv[1][1])
+    for name, (count, secs) in ranked[:top]:
+        print(f'  {name:<26}{count:>8}{secs:>9.2f}s{secs / count * 1000:>10.3f}ms'
+              f'{secs / wall * 100:>7.1f}%')
+    slow = [(n, c, s) for n, (c, s) in ranked[top:]
+            if s / c * 1000 > threshold]
+    if slow:
+        print(f'  -- below the top {top}, but expensive per call:')
+        for name, count, secs in slow[:10]:
+            print(f'  {name:<26}{count:>8}{secs:>9.2f}s'
+                  f'{secs / count * 1000:>10.3f}ms{secs / wall * 100:>7.1f}%')
+    print('-' * 72)
+    print(f'  {calls} commands, {in_cmds / max(calls, 1) * 1000000:.0f}us '
+          f'mean, {in_cmds / wall * 100:.0f}% of wall time inside commands')
+    print('=' * 72 + '\n')
+
+
+def profile_build(root=None, fk=None, ik=None):
+    '''
+    Run a full rebuild under profile_cmds and print the command profile.
+
+    MUTATING: this is a real build of the current scene, with the current
+    settings. Run it when a timing report needs explaining - the phase and
+    step lines say where, this says what.
+
+    Usage:
+        import rig_tail_test as rt_test
+        rt_test.profile_build()
+
+    Arguments:
+        root (str): Rig root; defaults to the scene's existing root group.
+        fk (bool): Build FK; defaults to the BUILD_FK setting.
+        ik (bool): Build IK; defaults to the BUILD_IK setting.
+
+    Return:
+        dict: name -> [calls, seconds] for every command the build used.
+    '''
+    import rig_tail as rig_tail
+    import rig_tail_cleanup as rt_cln
+
+    root = root or rt_cln.find_existing_root_grp() or rt_cst.ROOT
+    fk = rt_cst.BUILD_FK if fk is None else fk
+    ik = rt_cst.BUILD_IK if ik is None else ik
+    with profile_cmds() as stats:
+        rig_tail.rig_tail_multiple(root=root, fk=fk, ik=ik)
+    return stats
 
 
 # TEST ORCHESTRATION =========================================

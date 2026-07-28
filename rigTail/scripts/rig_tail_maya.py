@@ -6,6 +6,7 @@ Consolidated Maya wrappers and scene helpers for Rig Tail.
 
 Functions:
     build_performance_scope: Suspend refresh/EM for the duration of a build
+    timed: Time one step of the build in progress (see build_timer)
     build_timer: Time each build phase and report them in one line
     obj_exists: Check if object exists
     remove: Delete object safely
@@ -18,6 +19,7 @@ Functions:
     is_control: Check if node is curve control
     is_geometry: Check if node is mesh
     disconnect_all: Disconnect all connections from node
+    disconnect_nodes: disconnect_all for a list of nodes, in two commands
     break_connection: Break single plug connection
     opm: Move transforms to offsetParentMatrix
     reset_opm: Reset offsetParentMatrix to identity
@@ -42,6 +44,7 @@ Functions:
     list_hierarchy: Iterative traversal helper
     has_non_default_locked_attributes: Check for locked attributes
     bind_geometry: Bind geometry to BN joints
+    geometry_transforms: Mesh transforms under the geometry group
     find_geometry_for_rigname: Geometry matching a rig part by name
     report_missing_geometry: Warn about rig parts with no matching mesh
     unbind_geometry: Unbind geometry from rig
@@ -127,6 +130,13 @@ def build_performance_scope(name='rig_tail build'):
         cmds.undoInfo(closeChunk=True)
         _refresh(force=True)
 
+# The build_timer of the run in progress, so any step anywhere in the build
+# can time itself with timed() without every function in between having to
+# take a timer argument. None outside a build; nested timers restore the
+# outer one on exit.
+_ACTIVE_TIMER = None
+
+
 @contextmanager
 def build_timer(name='build'):
     """
@@ -142,19 +152,59 @@ def build_timer(name='build'):
             with timer.phase('cleanup'):
                 ...
 
+    Steps inside a phase are timed with the module-level timed(), which
+    finds this timer on its own and reports on a second line.
+
     Arguments:
         name (str): Label for the run, normally the entry point's name
 
     Yield:
         _PhaseTimer: Call .phase(label) around each phase
     """
+    global _ACTIVE_TIMER
     timer = _PhaseTimer(name)
+    previous = _ACTIVE_TIMER
+    _ACTIVE_TIMER = timer
     try:
         yield timer
     finally:
+        _ACTIVE_TIMER = previous
         # Report even on an aborted build: knowing which phase it died in,
         # and how long it had been running, is the point
         timer.report()
+
+
+@contextmanager
+def timed(label):
+    """
+    Time one step of the build in progress; a no-op outside a build_timer.
+
+    The phase totals say which phase is slow, never which step inside it,
+    and the steps that dominate are not the ones anyone predicts -- they are
+    whichever ones repeat per rig part per joint. Wrapping the suspects
+    turns the next build into the measurement:
+
+        with rt_mya.timed('cleanup.unbind'):
+            rt_mya.unbind_geometry(rigname)
+
+    Re-entering a label accumulates, and the call count is reported with
+    the total, so 'per part' costs are visible as such. Labels are free
+    text; the convention is '<phase>.<step>'.
+
+    Arguments:
+        label (str): Step name, e.g. 'cleanup.unbind'
+    """
+    timer = _ACTIVE_TIMER
+    if timer is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - started
+        total, count = timer.steps.get(label, (0.0, 0))
+        timer.steps[label] = (total + elapsed, count + 1)
 
 
 class _PhaseTimer:
@@ -163,6 +213,7 @@ class _PhaseTimer:
     def __init__(self, name):
         self.name = name
         self.phases = []          # (label, seconds), in the order run
+        self.steps = {}           # label -> (seconds, calls), from timed()
         self.start = time.perf_counter()
 
     @contextmanager
@@ -180,15 +231,28 @@ class _PhaseTimer:
             else:
                 self.phases.append((label, elapsed))
 
-    def report(self):
-        """Log one summary line: per-phase times and the total."""
+    def report(self, top=12):
+        """
+        Log the summary: per-phase times and the total, then the slowest
+        timed() steps (they overlap the phases, and each other where a step
+        wraps another, so they are listed rather than summed).
+
+        Arguments:
+            top (int): How many steps to list, slowest first
+        """
         total = time.perf_counter() - self.start
         if not self.phases:
             logger.info(f'{self.name}: {total:.1f}s')
+        else:
+            parts = ' | '.join(f'{label} {secs:.1f}s'
+                               for label, secs in self.phases)
+            logger.info(f'{self.name} timing: {parts} | total {total:.1f}s')
+        if not self.steps:
             return
-        parts = ' | '.join(f'{label} {secs:.1f}s'
-                           for label, secs in self.phases)
-        logger.info(f'{self.name} timing: {parts} | total {total:.1f}s')
+        ranked = sorted(self.steps.items(), key=lambda kv: -kv[1][0])[:top]
+        steps = ' | '.join(f'{label} {secs:.1f}s x{count}'
+                           for label, (secs, count) in ranked)
+        logger.info(f'{self.name} steps: {steps}')
 
 
 def force_refresh():
@@ -489,6 +553,49 @@ def disconnect_all(node, source=True, destination=True, attrs=None):
             conns = cmds.listConnections(node, s=False, d=True, p=True, c=True) or []
             for i in range(0, len(conns), 2):
                 disconnect(conns[i], conns[i + 1])
+
+
+def disconnect_nodes(nodes, source=True, destination=True):
+    """
+    disconnect_all for a whole list of nodes, in two commands.
+
+    cmds.listConnections takes a list of nodes and answers for all of them
+    at once, so a chain of joints costs two queries instead of two per
+    joint. Teardown calls this for every joint of every chain of every rig
+    part, which is where the command count adds up.
+
+    Arguments:
+        nodes (list): Nodes to disconnect
+        source (bool): Disconnect incoming connections
+        destination (bool): Disconnect outgoing connections
+
+    Return:
+        int: connections broken
+    """
+    nodes = [n for n in nodes if cmds.objExists(n)]
+    if not nodes:
+        return 0
+
+    broken = 0
+    def disconnect(src, dst):
+        # One undisconnectable pair must not abort the cleanup; same rule
+        # as disconnect_all
+        nonlocal broken
+        try:
+            cmds.disconnectAttr(src, dst)
+            broken += 1
+        except RuntimeError as err:
+            logger.trace(f"Skip disconnect '{src}' -> '{dst}': {err}")
+
+    if source:
+        conns = cmds.listConnections(nodes, s=True, d=False, p=True, c=True) or []
+        for i in range(0, len(conns), 2):
+            disconnect(conns[i + 1], conns[i])
+    if destination:
+        conns = cmds.listConnections(nodes, s=False, d=True, p=True, c=True) or []
+        for i in range(0, len(conns), 2):
+            disconnect(conns[i], conns[i + 1])
+    return broken
 
 
 def ensure_connect(src, dst):
@@ -873,15 +980,19 @@ def set_joint_color(joint, color):
         return
     index = rt_cst.COLOR_OVERRIDE.get(color, color) if isinstance(color, str) \
         else color
-    # The drawing-override plugs exist on every DAG node, so the settable
-    # check alone is enough; colour_skeletons calls this for every rig
-    # joint of every part at the end of each build
+    # The drawing-override plugs exist on every DAG node, so there is
+    # nothing to check for but settability - and asking costs as much as
+    # setting, so set and skip the ones that refuse. colour_skeletons calls
+    # this for every rig joint of every part at the end of every build, so
+    # the getAttr it used to pay per plug was a third of the pass.
     for plug, value in (('overrideEnabled', 1),
                         ('overrideRGBColors', 0),
                         ('overrideColor', index)):
-        attr = f'{joint}.{plug}'
-        if cmds.getAttr(attr, settable=True):
-            cmds.setAttr(attr, value)
+        try:
+            cmds.setAttr(f'{joint}.{plug}', value)
+        except RuntimeError as err:
+            # Locked, or driven by a display layer / referenced override
+            logger.trace(f"Skip '{joint}.{plug}': {err}")
 
 
 def color_skeletons(bn_color=None, ik_color=None, fk_color=None):
@@ -1374,30 +1485,53 @@ def bind_geometry(rigname):
         logger.warning(f'No BN joints found for {rigname}, skipping geometry bind')
         return
 
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    if not cmds.objExists(geometry_grp):
-        logger.trace(f'Geometry group not found, skip bind')
-        return
-
-    # Full paths: descendant short names are frequently ambiguous under a
-    # geometry group (L_fin|body and R_fin|body both come back as 'body'),
-    # and an ambiguous name binds the skinCluster to the wrong mesh
-    geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
+    geos = geometry_transforms()
     if not geos:
-        logger.trace(f'No geometry under {geometry_grp}, skip bind')
+        logger.trace('No geometry under the geometry group, skip bind')
         return
 
     bound = []
     for geo in geos:
         if geometry_matches_rigname(rigname, geo, warn=True):
-            if is_geometry(geo):
-                geo_leaf = geo.split('|')[-1]
-                bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
-                                 f'{geo_leaf}_skinCluster',
-                                 preserve=preserve_skin())
-                bound.append(geo_leaf)
+            geo_leaf = geo.split('|')[-1]
+            bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
+                             f'{geo_leaf}_skinCluster',
+                             preserve=preserve_skin())
+            bound.append(geo_leaf)
     if not bound:
         logger.trace(f'{rigname}: No geometry named after rig part, skip bind')
+
+
+def geometry_transforms(root=None):
+    '''
+    Mesh transforms under the geometry group (or any given root).
+
+    ONE typed listRelatives for the whole subtree, and the transforms come
+    from the mesh shapes it returns. The obvious version - list every
+    descendant transform, then ask is_geometry(t) about each - costs two
+    more commands per transform, and it is called once per rig part in
+    cleanup (unbind), in connect (bind) and again in report_missing_
+    geometry, so on a character with a few hundred meshes that walk was a
+    measurable slice of both phases.
+
+    Intermediate shapes (the 'Orig' mesh a skinCluster leaves behind) share
+    their transform with the visible shape, so the result is deduped;
+    dict.fromkeys keeps the scene order the callers used to see.
+
+    Arguments:
+        root (str): Subtree to search, defaulting to the rig geometry group.
+
+    Return:
+        list: full paths of mesh transforms (empty when there is no root).
+    '''
+    root = root or rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
+    if not cmds.objExists(root):
+        return []
+    # Full paths: descendant short names are frequently ambiguous under a
+    # geometry group (L_fin|body and R_fin|body both come back as 'body'),
+    # and an ambiguous name binds the skinCluster to the wrong mesh
+    shapes = cmds.listRelatives(root, typ='mesh', ad=1, f=1) or []
+    return list(dict.fromkeys(s.rsplit('|', 1)[0] for s in shapes))
 
 
 def find_geometry_for_rigname(rigname):
@@ -1415,12 +1549,8 @@ def find_geometry_for_rigname(rigname):
     Return:
         list: full paths of matching geometry transforms (empty if none).
     '''
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    if not cmds.objExists(geometry_grp):
-        return []
-    geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
-    return [g for g in geos
-            if geometry_matches_rigname(rigname, g) and is_geometry(g)]
+    return [g for g in geometry_transforms()
+            if geometry_matches_rigname(rigname, g)]
 
 
 def report_missing_geometry(rignames):
@@ -1442,7 +1572,10 @@ def report_missing_geometry(rignames):
     '''
     if not cmds.objExists(rt_nam.fstr('', rt_cst.GEOMETRY_GRP)):
         return []
-    missing = [rn for rn in rignames if not find_geometry_for_rigname(rn)]
+    # One subtree scan for every part, not one per part
+    geos = geometry_transforms()
+    missing = [rn for rn in rignames
+               if not any(geometry_matches_rigname(rn, g) for g in geos)]
     if missing:
         logger.warning(
             f'Geometry not found for {len(missing)} rig part(s): '
@@ -1495,15 +1628,8 @@ def unbind_geometry_all():
     for geo in geos:
         if is_geometry(geo):
             unbind_skincluster(geo)
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    if cmds.objExists(geometry_grp):
-        # Full paths: descendant short names are frequently ambiguous
-        # under a geometry group (L_fin|body and R_fin|body both come
-        # back as 'body'), and an ambiguous name hits the wrong mesh
-        geos = cmds.listRelatives(geometry_grp, typ='transform', ad=1, f=1) or []
-        for geo in geos:
-            if is_geometry(geo):
-                unbind_skincluster(geo)
+    for geo in geometry_transforms():
+        unbind_skincluster(geo)
 
 
 def _delete_orphan_bindposes(poses):

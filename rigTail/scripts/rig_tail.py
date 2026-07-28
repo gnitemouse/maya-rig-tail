@@ -142,10 +142,14 @@ def build_rig_tail(fk, ik):
         if rigname not in rt_cst.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping build")
             continue
+        # Step timings (rt_mya.timed) report on the build_timer's second
+        # line; the phase total alone never says which half was slow
         if fk:
-            rig_tail_fk(rigname)
+            with rt_mya.timed('build.fk'):
+                rig_tail_fk(rigname)
         if ik:
-            rig_tail_ik(rigname)
+            with rt_mya.timed('build.ik'):
+                rig_tail_ik(rigname)
         # FK/IK rest match happens after connect_rig_tail (see
         # rig_tail_connect.match_fk_to_ik_rest): the IK spline only reaches its
         # final low-CV shape once the IK system is fully connected, so the IK
@@ -177,26 +181,30 @@ def rig_tail_fk(rigname, typ=rt_cst.TYPE_FK):
     curve_fk = rt_crv.create_curve(rigname, jnt_pos, typ)
 
     # Create controls
-    varfk_controls = rt_ctl.create_controls_fk(rigname, joints, jnt_pos)
-
-    rt_ctl.add_fk_attributes_to_controls(varfk_controls, joints)
+    with rt_mya.timed('build.fk.controls'):
+        varfk_controls = rt_ctl.create_controls_fk(rigname, joints, jnt_pos)
+        rt_ctl.add_fk_attributes_to_controls(varfk_controls, joints)
     rt_fk.set_curveinfo_fk(rigname, curve_fk, varfk_controls)
 
     # Create SDK groups
-    fkjnt_grp = rt_fk.create_sdk_groups(rigname, joints)
-    sdk_groups = rt_fk.get_sdk_groups(joints)
+    with rt_mya.timed('build.fk.sdk_groups'):
+        fkjnt_grp = rt_fk.create_sdk_groups(rigname, joints)
+        sdk_groups = rt_fk.get_sdk_groups(joints)
 
     # Falloff Rotation
-    for n in range(rt_cst.NUM_CTRL_FK):
-       rt_fk.falloff_rotation(rigname, n, joints, sdk_groups[n])
+    with rt_mya.timed('build.fk.falloff'):
+        for n in range(rt_cst.NUM_CTRL_FK):
+            rt_fk.falloff_rotation(rigname, n, joints, sdk_groups[n])
 
     # Bind curve
     logger.debug(f"Bind Curve '{curve_fk}' to FK joints")
-    rt_mya.bind_skincluster(joints, curve_fk, f'{curve_fk}_skinCluster')
+    with rt_mya.timed('build.fk.bind_curve'):
+        rt_mya.bind_skincluster(joints, curve_fk, f'{curve_fk}_skinCluster')
 
     # Build stretch
     if rt_cst.EFFECTS['stretchy']:
-        rt_str.build_stretch(rigname, curve_fk, joints, typ)
+        with rt_mya.timed('build.fk.stretch'):
+            rt_str.build_stretch(rigname, curve_fk, joints, typ)
 
 def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     '''
@@ -227,26 +235,29 @@ def rig_tail_ik(rigname, typ=rt_cst.TYPE_IK):
     curve_ik_spline = rt_crv.create_curve(rigname, jnt_pos, typ, tag='spline') # Solver curve
 
     # Create clusters
-    clusters = rt_crv.create_clusters_on_curve(rigname, curve_ik, typ)
+    with rt_mya.timed('build.ik.clusters'):
+        clusters = rt_crv.create_clusters_on_curve(rigname, curve_ik, typ)
 
     # Create spline
-    spline_list = rt_crv.create_spline_handle(rigname, joints, curve_ik_spline, typ)
-
-    # Connect curves
-    rt_crv.connect_driver_to_solver_curve(rigname, curve_ik, curve_ik_spline, typ)
+    with rt_mya.timed('build.ik.spline'):
+        spline_list = rt_crv.create_spline_handle(rigname, joints, curve_ik_spline, typ)
+        # Connect curves
+        rt_crv.connect_driver_to_solver_curve(rigname, curve_ik, curve_ik_spline, typ)
 
     # Create controls
-    ik_controls, ik_ctrlgrps = rt_ctl.create_controls_ik(rigname, joints, clusters)
+    with rt_mya.timed('build.ik.controls'):
+        ik_controls, ik_ctrlgrps = rt_ctl.create_controls_ik(rigname, joints, clusters)
 
     # Build stretch
     if rt_cst.EFFECTS['stretchy']:
-        rt_str.build_stretch(rigname, curve_ik, joints, typ)
+        with rt_mya.timed('build.ik.stretch'):
+            rt_str.build_stretch(rigname, curve_ik, joints, typ)
 
-        # Advanced twist
-        srt_vec = cmds.xform(joints[0], q=1, ws=1, m=1)[8:11]
-        end_vec = cmds.xform(joints[-1], q=1, ws=1, m=1)[8:11]
-        rt_str.build_advanced_twist(spline_list[0], clusters[0][1], clusters[1][1],
-                             srt_vec, end_vec)
+            # Advanced twist
+            srt_vec = cmds.xform(joints[0], q=1, ws=1, m=1)[8:11]
+            end_vec = cmds.xform(joints[-1], q=1, ws=1, m=1)[8:11]
+            rt_str.build_advanced_twist(spline_list[0], clusters[0][1], clusters[1][1],
+                                 srt_vec, end_vec)
 
 
 # RUN: RIG TAIL ========================================================
