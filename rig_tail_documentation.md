@@ -733,6 +733,23 @@ Iterative traversal of transform hierarchy.
 #### `disconnect_all(node, source=True, destination=True, attrs=None)`
 Disconnect all connections from/to a node.
 
+#### `remove_nodes(nodes)`
+`remove` for a list of nodes in a handful of commands: one disconnect pass
+for the whole list (so a delete still cannot cascade through a connection
+web), then a single `cmds.delete`. Teardown deletes utility nodes by the
+thousand and per-node `remove` spent ~8 commands on each.
+
+#### `existing(nodes)`
+The nodes in a list that exist, in one `cmds.ls` instead of an `objExists`
+per node.
+
+#### `set_channel_flags(node, attrs, k=None, cb=None, l=None, compound=False)`
+Keyable / channel-box / lock flags written straight to the plugs via the
+API, with a `cmds.setAttr` fallback. A compound name flags its per-axis
+children, as the loops it replaces did. **Not undoable** — which is why
+attribute VALUES still go through `cmds.setAttr`, and why only display
+flags use this.
+
 #### `disconnect_nodes(nodes, source=True, destination=True)`
 `disconnect_all` for a list of nodes in two commands — `listConnections`
 answers for a whole joint chain at once. Used by the teardown, where the

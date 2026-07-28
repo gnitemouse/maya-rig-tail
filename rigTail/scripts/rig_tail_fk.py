@@ -364,17 +364,23 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
                 rt_mya.create_group(sdk_grp)
 
             if idx > 0:
-                # Set joint_pos attribute on SDK group (copy from joint)
+                # Set joint_pos attribute on SDK group (copy from joint).
+                # The channel-box and lock flags go through the API
+                # (rt_mya.set_channel_flags): this runs NUM_CTRL_FK times
+                # per joint per rig part, so it is the hottest loop in the
+                # build, and a flag write there is a command spent on
+                # display state.
                 v = joint_pos
                 if cmds.attributeQuery('joint_pos', n=sdk_grp, ex=1):
-                    cmds.setAttr(f'{sdk_grp}.joint_pos', l=0)
+                    rt_mya.set_channel_flags(sdk_grp, ['joint_pos'], l=False)
                     cmds.addAttr(f'{sdk_grp}.joint_pos', e=1, at='float',
                         min=0, max=1, k=False, h=False, dv=v)
                 else:
                     cmds.addAttr(sdk_grp, ln='joint_pos', nn='Joint Pos', at='float',
                         min=0, max=1, k=False, h=False, dv=v)
                 cmds.setAttr(f'{sdk_grp}.joint_pos', v)
-                cmds.setAttr(f'{sdk_grp}.joint_pos', cb=1, l=1)
+                rt_mya.set_channel_flags(sdk_grp, ['joint_pos'],
+                                         cb=True, l=True)
 
             if prev_sdk_grp: # Nest current SDK group under previous
                 rt_mya.parent_to(sdk_grp, prev_sdk_grp, r=True)

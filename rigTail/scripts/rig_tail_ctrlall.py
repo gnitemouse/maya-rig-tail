@@ -367,9 +367,13 @@ def cleanup_ctrlall(fk, ik):
             attrs.append('ikfk')
         expected_nodes = {condition_node(rigname, attr)
                           for rigname in rt_cst.RIGPARTS for attr in attrs}
-    for node in cmds.ls(f'*_override_{rt_cst.COND}', type='condition') or []:
-        if node not in expected_nodes:
-            rt_mya.remove(node)
+    # One disconnect pass and one delete for every stale condition
+    # (rt_mya.remove_nodes keeps remove()'s disconnect-before-delete rule,
+    # so a condition still referenced by an FX expression cannot cascade)
+    rt_mya.remove_nodes([node for node
+                         in cmds.ls(f'*_override_{rt_cst.COND}',
+                                    type='condition') or []
+                         if node not in expected_nodes])
 
     # Basectrl override attrs (before their cog masters, so a proxy is
     # not left pointing at a deleted master). When the dashboard is off

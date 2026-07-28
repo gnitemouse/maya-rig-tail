@@ -459,13 +459,12 @@ def _sweep_rig_leftovers(parts, delete=True):
             found.append(node)
     if not delete:
         return found
-    count = 0
-    for node in found:
-        # Deleting one node can cascade through its connection web (an
-        # expression takes its loop network with it), so re-check
-        if cmds.objExists(node):
-            rt_mya.remove(node)
-            count += 1
+    # Expressions first, then everything else, in two batched passes (see
+    # cleanup_anim_effects)
+    expressions = [n for n in found if cmds.nodeType(n) == 'expression']
+    count = rt_mya.remove_nodes(expressions)
+    count += rt_mya.remove_nodes([n for n in found
+                                  if n not in set(expressions)])
     return count
 
 
@@ -667,8 +666,10 @@ def cleanup_rigname(rigname, fk, ik):
                      for typ in types for node_typ in node_types]
     # Guard the unpack: cmds.ls() with no pattern returns the whole scene
     found = cmds.ls(*node_patterns) if node_patterns else []
-    for node in dict.fromkeys(found):
-        rt_mya.remove(node)
+    # One disconnect pass and one delete for the lot (rt_mya.remove_nodes):
+    # the FK falloff and curve-info networks are hundreds of nodes per rig
+    # part, and per-node remove() spent ~8 commands on each
+    rt_mya.remove_nodes(dict.fromkeys(found))
 
     # 7. Delete curves, clusters, ikHandles
     logger.trace(f"{rigname}: Cleaning up curves and clusters")
@@ -781,9 +782,9 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_*setRange',
             f'{typ}_{rigname}_*pointOnCurveInfo',
         ]
-        # One scene scan for all seven patterns, deduped (see cleanup_rigname)
-        for node in dict.fromkeys(cmds.ls(*fk_patterns) or []):
-            rt_mya.remove(node)
+        # One scene scan for all seven patterns, one disconnect pass and one
+        # delete for everything it finds (see cleanup_rigname)
+        rt_mya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
@@ -821,8 +822,12 @@ def cleanup_anim_effects(rigname, fk, ik):
     # instead, so sort on node type - which states the rule outright and
     # holds even if an expression matches one of the later patterns.
     nodes = list(dict.fromkeys(cmds.ls(*node_patterns) or []))
-    for node in sorted(nodes, key=lambda n: cmds.nodeType(n) != 'expression'):
-        rt_mya.remove(node)
+    # Two batches rather than a node at a time, expressions first: within a
+    # batch everything is disconnected before anything is deleted, so the
+    # cascade the ordering guards against cannot happen either way
+    expressions = [n for n in nodes if cmds.nodeType(n) == 'expression']
+    rt_mya.remove_nodes(expressions)
+    rt_mya.remove_nodes([n for n in nodes if n not in set(expressions)])
 
     cleanup_dangling_unit_conversions()
 

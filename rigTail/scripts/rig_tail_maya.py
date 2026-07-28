@@ -10,6 +10,8 @@ Functions:
     build_timer: Time each build phase and report them in one line
     obj_exists: Check if object exists
     remove: Delete object safely
+    remove_nodes: remove() for a list of nodes, in a handful of commands
+    set_channel_flags: keyable/channel-box/lock flags via the API
     parent_to: Parent node to given parent
     is_parent: Check if node is already parent
     get_constraint: Get constraints on node
@@ -325,6 +327,70 @@ def remove(node):
         cmds.delete(node)
 
 
+def remove_nodes(nodes):
+    """
+    remove() for a whole list of nodes, in a handful of commands.
+
+    Same safety rule as remove() - disconnect everything before deleting, so
+    a delete cannot cascade through a connection web (deleting a connected
+    expression takes its loop network, its sibling FX expressions and their
+    composeMatrix nodes with it) - but the disconnect is one pass for the
+    whole list (see disconnect_nodes) and the delete is a single call.
+
+    That matters because teardown deletes utility nodes by the thousand: the
+    FK falloff and curve-info networks alone are hundreds of nodes per rig
+    part, and per-node remove() spent ~8 commands on each of them. A command
+    profile of a 12-part rebuild put delete at 18.8k calls / 6.3s.
+
+    Constraints keep remove()'s exemption from the disconnect pass.
+
+    Arguments:
+        nodes (list): Nodes to delete
+
+    Return:
+        int: nodes deleted
+    """
+    nodes = existing(nodes)
+    if not nodes:
+        return 0
+
+    # Downstream curveInfo nodes go too, as remove() does
+    extra = cmds.listConnections(nodes, s=False, d=True,
+                                 type='curveInfo') or []
+    targets = list(dict.fromkeys(nodes + extra))
+    constraints = set(cmds.ls(targets, type='constraint') or [])
+    disconnect_nodes([n for n in targets if n not in constraints],
+                     verified=True)
+    # A delete can cascade (an expression takes its network with it), so
+    # re-check before deleting - one command for the whole list
+    targets = existing(targets)
+    if targets:
+        cmds.delete(targets)
+    return len(targets)
+
+
+def existing(nodes):
+    """
+    The nodes in a list that exist, in ONE command.
+
+    cmds.ls resolves a whole list at once, where objExists asks per node.
+    The teardown filters lists of hundreds of nodes, so the per-node version
+    was the most-called command in a build (68k calls in a 12-part profile).
+
+    Arguments:
+        nodes (list): Node names, possibly with duplicates or None
+
+    Return:
+        list: the existing ones, deduped
+    """
+    nodes = [n for n in dict.fromkeys(nodes) if n]
+    if not nodes:
+        # cmds.ls with no arguments returns the whole scene, and this feeds
+        # cmds.delete
+        return []
+    return cmds.ls(nodes) or []
+
+
 # PARENT OPERATIONS ====================================================
 
 def parent_to(node, parent, a=False, r=False):
@@ -555,7 +621,7 @@ def disconnect_all(node, source=True, destination=True, attrs=None):
                 disconnect(conns[i], conns[i + 1])
 
 
-def disconnect_nodes(nodes, source=True, destination=True):
+def disconnect_nodes(nodes, source=True, destination=True, verified=False):
     """
     disconnect_all for a whole list of nodes, in two commands.
 
@@ -568,11 +634,12 @@ def disconnect_nodes(nodes, source=True, destination=True):
         nodes (list): Nodes to disconnect
         source (bool): Disconnect incoming connections
         destination (bool): Disconnect outgoing connections
+        verified (bool): The caller already dropped missing nodes
 
     Return:
         int: connections broken
     """
-    nodes = [n for n in nodes if cmds.objExists(n)]
+    nodes = list(nodes) if verified else existing(nodes)
     if not nodes:
         return 0
 
@@ -620,7 +687,11 @@ def break_connection(plug):
     Arguments:
         plug (str): Attribute plug to disconnect
     """
-    cmds.setAttr(plug, l=0)
+    # The unlock goes through the API: this is called per plug from
+    # reset_opm and reset_transforms, and on a plug that is not locked (the
+    # usual case) the setAttr was a command spent to change nothing
+    node, _, attr = plug.partition('.')
+    set_channel_flags(node, [attr], l=False, compound=True)
     if cmds.connectionInfo(plug, id=True):
         plug = cmds.connectionInfo(plug, ged=True)
         readonly = cmds.ls(plug, ro=True)
@@ -633,22 +704,53 @@ def break_connection(plug):
 
 # TRANSFORM OPERATIONS =================================================
 
+IDENTITY_MATRIX = om.MMatrix()
+
+
 def opm(node):
     """
     Move transform values to Offset Parent Matrix.
     Node must be transform or joint type and have attributes unlocked.
 
+    A node whose local matrix is ALREADY identity has nothing to bake:
+    identity * opm == opm, so the write would set the value it already
+    holds, and every channel is already at its default so there is nothing
+    to reset either. That case is not an edge case - it is most of the
+    build. create_sdk_groups matches and bakes every SDK group the moment
+    it creates it (NUM_CTRL_FK + 1 per joint), and a freshly created group
+    is at identity. The full path costs ~35 Maya commands (a locked-attr
+    scan, the bake, then a reset of twelve channels); the check costs
+    three, and a command profile of a 12-part build put this function's
+    step at 13.7s of a 51s build.
+
+    The skip is only taken when nothing is locked and nothing drives the
+    node, because clearing those is the other half of what reset_transforms
+    does and a caller may be relying on it (falloff_rotation connects to an
+    SDK group's rotate, which fails on a plug left locked).
+
     Arguments:
         node (str): Node to bake transforms
     """
-    if has_non_default_locked_attributes(node):
+    local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
+    if local_matrix.isEquivalent(IDENTITY_MATRIX):
+        # Nothing to bake, and no locked plug can be off its default either:
+        # an identity local matrix IS every channel at its default, which is
+        # the whole of what has_non_default_locked_attributes tests for.
+        # reset_transforms still runs - it is what clears locks and incoming
+        # connections - and takes its own fast path when there is nothing
+        # left to clear.
+        logger.trace(f"'{node}' is already at identity, nothing to bake")
+        reset_transforms(node, local_matrix=local_matrix)
+        return
+
+    locked = cmds.listAttr(node, locked=True) or []
+    if has_non_default_locked_attributes(node, locked=locked):
         abort_build(logger, f'Node {node} has at least one non default locked attribute(s)')
 
-    local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
     offset_parent_matrix = om.MMatrix(cmds.getAttr(f"{node}.offsetParentMatrix"))
     baked_matrix = local_matrix * offset_parent_matrix
     cmds.setAttr(f"{node}.offsetParentMatrix", baked_matrix, typ='matrix')
-    reset_transforms(node)
+    reset_transforms(node, local_matrix=local_matrix, locked=locked)
 
 
 def reset_opm(node, unlock=True):
@@ -667,13 +769,16 @@ def reset_opm(node, unlock=True):
         cmds.setAttr(opm_attr, *identity_mtx, type='matrix')
 
 
-def reset_transforms(node, unlock=True):
+def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
     """
     Reset translate, rotate, scale, shear, jointOrient to defaults.
 
     Arguments:
         node (str): Node to reset
         unlock (bool): If True, unlock and break connections
+        local_matrix (MMatrix): The node's local matrix if the caller
+            already read it, so opm() does not pay for it twice
+        locked (list): The node's locked attributes if already queried
     """
     # Node-level lock/connection queries once, instead of an existence
     # check, unlock and connection lookup per plug (this runs inside
@@ -683,10 +788,42 @@ def reset_transforms(node, unlock=True):
     # existence check never matched it anyway.
     conns = cmds.listConnections(node, s=True, d=False, p=True, c=True) or []
     connected = {conns[i].split('.', 1)[-1] for i in range(0, len(conns), 2)}
-    locked = set(cmds.listAttr(node, locked=True) or [])
+    if locked is None:
+        locked = cmds.listAttr(node, locked=True) or []
+    locked = set(locked)
+
+    # Nothing driven and already at identity: every channel holds its
+    # default, so the twelve value writes below would all be no-ops. Only
+    # the unlock is still owed - callers rely on it (falloff_rotation
+    # connects to an SDK group's rotate, which fails on a locked plug) - and
+    # that is an API write, not a command. See opm(): this is the common
+    # case, because a freshly created group is at identity and create_group
+    # locks its channels.
+    if not connected:
+        if local_matrix is None:
+            local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
+        if local_matrix.isEquivalent(IDENTITY_MATRIX):
+            if unlock and locked:
+                # jointOrient is passed unconditionally: a node that does
+                # not have it costs nothing to skip (see set_channel_flags),
+                # which saves asking whether this is a joint
+                set_channel_flags(node, ['translate', 'rotate', 'scale',
+                                         'jointOrient'],
+                                  l=False, compound=True)
+            return
+
     attributes = ['translate', 'rotate', 'scale']
     if cmds.objectType(node, i='joint'):
         attributes.append('jointOrient')
+
+    # One API pass unlocks every channel and its compound parent, replacing
+    # a setAttr(l=0) per plug and the getAttr that had to follow it to catch
+    # a plug still locked through its compound. A plug that stays locked
+    # anyway (referenced node) now shows up as the setAttr below failing,
+    # which is handled the same way: skip it.
+    if unlock and locked:
+        set_channel_flags(node, attributes, l=False, compound=True)
+
     for attribute in attributes:
         default_value = 1 if attribute == "scale" else 0
         for axis in 'XYZ':
@@ -700,13 +837,12 @@ def reset_transforms(node, unlock=True):
             maybe_locked = attr in locked or attribute in locked
             maybe_connected = attr in connected or attribute in connected
             if unlock:
-                if maybe_locked:
-                    cmds.setAttr(plug, l=0)
                 if maybe_connected:
                     break_connection(plug)
-                if maybe_locked and cmds.getAttr(plug, lock=True):
-                    continue  # still locked (compound parent)
-                cmds.setAttr(plug, default_value)
+                try:
+                    cmds.setAttr(plug, default_value)
+                except RuntimeError as err:
+                    logger.trace(f"Could not reset '{plug}': {err}")
             elif not maybe_locked and not maybe_connected:
                 # Not unlocking, so a driven plug is left as it is rather
                 # than raising.
@@ -778,13 +914,15 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
         opm(source)
 
 
-def has_non_default_locked_attributes(node, attrcheck=None):
+def has_non_default_locked_attributes(node, attrcheck=None, locked=None):
     """
     Check whether node has locked non-default attributes.
 
     Arguments:
         node (str): Node to check
         attrcheck (list): Specific attributes to check
+        locked (list): The node's locked attributes if the caller already
+            queried them (opm does), to save the repeat query
 
     Return:
         bool: True if locked non-default attributes exist
@@ -801,7 +939,8 @@ def has_non_default_locked_attributes(node, attrcheck=None):
     # attributes once instead of value+lock reads on every plug. This
     # runs inside opm(), which the build calls for every SDK group and
     # control, so the per-plug version dominated build time.
-    locked = cmds.listAttr(node, locked=True) or []
+    if locked is None:
+        locked = cmds.listAttr(node, locked=True) or []
     if not locked:
         return False
     defaults = {f'{attribute}{axis}': (1 if attribute == 'scale' else 0)
@@ -816,6 +955,140 @@ def has_non_default_locked_attributes(node, attrcheck=None):
 
 
 # VISIBILITY ===========================================================
+
+# Channel flags (keyable / channel-box / lock) are the one part of the
+# build that is pure per-plug bookkeeping: nine plugs per group, on every
+# group the build creates, and the FK SDK stack alone is NUM_CTRL_FK + 1
+# groups per joint. A command profile of a 12-part build put 75k setAttr
+# calls at 6.9s of a 51s build, and a fifth of those were flag writes.
+#
+# The API sets a flag directly on the plug with no command engine in the
+# way, which is roughly two orders of magnitude cheaper. The trade is that
+# API writes are NOT undoable: undoing a build restores the nodes but
+# leaves these display flags where the build put them. That is acceptable
+# for keyable/channel-box/lock (cosmetic, and reset by the next build) and
+# is why VALUES still go through cmds.setAttr, which is undoable.
+_API_FLAGS_AVAILABLE = True
+
+
+def set_channel_flags(node, attrs, k=None, cb=None, l=None,
+                      compound=False):
+    """
+    Set keyable / channel-box / lock flags on a node's plugs via the API.
+
+    A compound name ('translate') flags its CHILDREN - translateX/Y/Z -
+    which is exactly what the per-axis cmds.setAttr loops this replaces
+    did, so the resulting channel box is unchanged. The compound itself is
+    only touched with compound=True, used when unlocking: a lock on the
+    compound blocks its children too, and the old per-axis unlock could not
+    clear it (it queried the lock afterwards and gave up).
+
+    Keyable is written before channel-box on purpose: Maya treats a keyable
+    plug as being in the channel box regardless, so the order decides the
+    final state of a plug set non-keyable and channel-box visible (the
+    'shown but not settable' state the rig uses on joints and groups).
+
+    Falls back to cmds.setAttr for the whole call if the API path fails, so
+    a plug this does not understand is still set (just slower).
+
+    Arguments:
+        node (str): Node whose plugs to flag
+        attrs (list): Attribute names, compound or leaf
+        k (bool|int|None): Keyable, None to leave alone
+        cb (bool|int|None): Show in channel box, None to leave alone
+        l (bool|int|None): Locked, None to leave alone
+        compound (bool): Also flag the compound plug itself, not only its
+            per-axis children
+
+    Return:
+        bool: True when the flags were applied
+    """
+    global _API_FLAGS_AVAILABLE
+    if _API_FLAGS_AVAILABLE:
+        try:
+            sel = om.MSelectionList()
+            sel.add(node)
+            fn = om.MFnDependencyNode(sel.getDependNode(0))
+            plugs = []
+            for attr in attrs:
+                try:
+                    plug = fn.findPlug(attr, False)
+                except RuntimeError:
+                    # Attribute this node does not have ('radius' on a
+                    # plain transform): the same skip the callers used to
+                    # pay an attributeQuery for
+                    continue
+                if plug.isCompound:
+                    if compound:
+                        plugs.append(plug)
+                    plugs.extend(plug.child(i)
+                                 for i in range(plug.numChildren()))
+                else:
+                    plugs.append(plug)
+            for plug in plugs:
+                # Unlock first: a locked plug rejects nothing here, but
+                # leaving the lock for last matches the cmds call order
+                if l is not None and not l:
+                    plug.isLocked = False
+                if k is not None:
+                    plug.isKeyable = bool(k)
+                if cb is not None:
+                    plug.isChannelBox = bool(cb)
+                if l:
+                    plug.isLocked = True
+            return True
+        except (AttributeError, TypeError) as err:
+            # The API itself is not behaving as expected (a Maya version
+            # without one of these properties): stop trying it altogether
+            logger.debug(f"API channel flags unavailable ({err}); "
+                         f'falling back to setAttr for the session')
+            _API_FLAGS_AVAILABLE = False
+        except Exception as err:
+            # This NODE could not be resolved - most often an ambiguous
+            # short name in a scene with duplicates. Fall back for this
+            # call only: disabling the API path here would quietly slow
+            # every remaining flag write in the session.
+            logger.trace(f"API channel flags on '{node}' failed ({err}); "
+                         f'using setAttr')
+
+    flags = {}
+    if k is not None:
+        flags['k'] = int(bool(k))
+    if cb is not None:
+        flags['cb'] = int(bool(cb))
+    if l is not None:
+        flags['l'] = int(bool(l))
+    for attr in attrs:
+        if not cmds.attributeQuery(attr, n=node, ex=1):
+            continue
+        for plug in plug_and_children(node, attr, compound=compound):
+            try:
+                cmds.setAttr(plug, **flags)
+            except RuntimeError as err:
+                logger.trace(f"Skip flags on '{plug}': {err}")
+    return True
+
+
+def plug_and_children(node, attr, compound=False):
+    """
+    A plug's per-axis children (and the plug itself when compound), for the
+    cmds fallback path of set_channel_flags.
+
+    Arguments:
+        node (str): Node name
+        attr (str): Attribute name
+        compound (bool): Include the compound plug itself
+
+    Return:
+        list: plug strings
+    """
+    if attr in ('translate', 'rotate', 'scale', 'jointOrient', 'shear'):
+        plugs = [f'{node}.{attr}{axis}' for axis in 'XYZ']
+        if compound:
+            plugs.insert(0, f'{node}.{attr}')
+        return plugs
+    return [f'{node}.{attr}']
+
 
 def set_visibility(node, value, k=1, cb=1, l=0):
     """
@@ -832,10 +1105,12 @@ def set_visibility(node, value, k=1, cb=1, l=0):
         logger.error(f"'{node}' does not exist.")
         return
     # No attributeQuery for 'visibility': every DAG node has it, and this
-    # runs on every group, control and joint the build touches
-    cmds.setAttr(f"{node}.visibility", l=0)
+    # runs on every group, control and joint the build touches. The value
+    # is a real scene change so it goes through cmds (undoable); the flags
+    # go through the API (see set_channel_flags).
+    set_channel_flags(node, ['visibility'], l=False)
     cmds.setAttr(f"{node}.visibility", value)
-    cmds.setAttr(f"{node}.visibility", k=k, cb=cb, l=l)
+    set_channel_flags(node, ['visibility'], k=k, cb=cb, l=l)
 
 
 def set_transform_visibility(node, k=1, cb=1, l=0):
@@ -848,11 +1123,9 @@ def set_transform_visibility(node, k=1, cb=1, l=0):
         cb (int): Channel box flag
         l (int): Lock flag
     """
-    # translate/rotate exist on every transform-derived node, so skip the
+    # translate/rotate exist on every transform-derived node, so no
     # per-axis attributeQuery (same reasoning as set_joint_channels)
-    for attribute in ['translate', 'rotate']:
-        for axis in 'XYZ':
-            cmds.setAttr(f"{node}.{attribute}{axis}", k=k, cb=cb, l=l)
+    set_channel_flags(node, ['translate', 'rotate'], k=k, cb=cb, l=l)
 
 
 def set_curve_visibility(curve, visibility=1):
@@ -863,11 +1136,8 @@ def set_curve_visibility(curve, visibility=1):
         curve (str): Curve transform
         visibility (int): Visibility value
     """
-    # translate/rotate/scale exist on every transform-derived node, so skip
-    # the per-axis attributeQuery (same reasoning as set_joint_channels)
-    for attribute in ['translate', 'rotate', 'scale']:
-        for axis in 'XYZ':
-            cmds.setAttr(f"{curve}.{attribute}{axis}", k=0, cb=0, l=1)
+    set_channel_flags(curve, ['translate', 'rotate', 'scale'],
+                      k=False, cb=False, l=True)
     set_visibility(curve, visibility, k=1, cb=0, l=0)
 
 
@@ -879,13 +1149,11 @@ def set_group_visibility(group, visibility=1):
         group (str): Group transform
         visibility (int): Visibility value
     """
-    # translate/rotate/scale exist on every transform-derived node, so skip
-    # the per-axis attributeQuery. create_group calls this for every group
-    # the build makes, and the FK SDK stack alone is (NUM_CTRL_FK + 1)
-    # groups per joint (same reasoning as set_joint_channels).
-    for attribute in ['translate', 'rotate', 'scale']:
-        for axis in 'XYZ':
-            cmds.setAttr(f"{group}.{attribute}{axis}", k=0, cb=0, l=1)
+    # create_group calls this for every group the build makes, and the FK
+    # SDK stack alone is (NUM_CTRL_FK + 1) groups per joint - twelve plug
+    # flags each, which is why they go through the API
+    set_channel_flags(group, ['translate', 'rotate', 'scale'],
+                      k=False, cb=False, l=True)
     set_visibility(group, visibility, k=0, cb=1, l=0)
 
 
@@ -912,14 +1180,13 @@ def set_joint_channels(joint, keyable, visibility=None):
         return
     k = 1 if keyable else 0
     cb = 0 if keyable else 1
-    # translate/rotate/scale exist on every transform-derived node, so
-    # skip the per-axis attributeQuery (this runs on every rig joint at
-    # the end of each build)
-    for attribute in ['translate', 'rotate', 'scale']:
-        for axis in 'XYZ':
-            cmds.setAttr(f"{joint}.{attribute}{axis}", k=k, cb=cb)
-    if cmds.attributeQuery('radius', n=joint, ex=1):
-        cmds.setAttr(f"{joint}.radius", k=k, cb=cb)
+    # translate/rotate/scale exist on every transform-derived node, and so
+    # does radius on a joint, so no per-axis or per-attribute
+    # attributeQuery. This runs on every rig joint at the end of every
+    # build - ~700 joints on a 12-part roster, ten plug flags each - so the
+    # flags go through the API (see set_channel_flags).
+    set_channel_flags(joint, ['translate', 'rotate', 'scale', 'radius'],
+                      k=k, cb=cb)
     if visibility is not None:
         set_visibility(joint, visibility, k=k, cb=1, l=0)
 
