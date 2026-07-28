@@ -285,14 +285,16 @@ class RigTailUI(QtWidgets.QDialog):
             'losing the weights.')
         self.style_checkbox(self.chk_main)
         self.style_checkbox(self.chk_preserve)
-        # Equal margins either side: the same stretch outside both
-        # checkboxes and a wider one between them, so the pair sits
-        # centred with matching left and right gaps
-        toggles_layout.addStretch(2)
-        toggles_layout.addWidget(self.chk_main)
+        # Stretch shares of the row's slack: 3/20 before Control All
+        # Tails, 13/20 between, 4/20 after. Leading + middle still comes
+        # to 80%, the same as the previous 4:12:4, so nudging Control All
+        # Tails left moves only that checkbox - Preserve skinClusters
+        # keeps its position and the gap between them widens.
         toggles_layout.addStretch(3)
+        toggles_layout.addWidget(self.chk_main)
+        toggles_layout.addStretch(13)
         toggles_layout.addWidget(self.chk_preserve)
-        toggles_layout.addStretch(2)
+        toggles_layout.addStretch(4)
         options_layout.addLayout(toggles_layout)
 
         options_group.setLayout(options_layout)
@@ -342,7 +344,7 @@ class RigTailUI(QtWidgets.QDialog):
         main_layout.addSpacing(10)
 
         button_layout = QtWidgets.QHBoxLayout()
-        button_layout.setSpacing(4)
+        button_layout.setSpacing(7)
 
         self.btn_remove = QtWidgets.QPushButton('Remove Rig')
         self.btn_force = QtWidgets.QPushButton('Force Rebuild')
@@ -362,9 +364,12 @@ class RigTailUI(QtWidgets.QDialog):
         self.btn_force.clicked.connect(lambda: self.build_rig(force=True))
         self.btn_build.clicked.connect(lambda: self.build_rig())
 
-        self.style_button(self.btn_remove, 3)
-        self.style_button(self.btn_force, 2)
-        self.style_button(self.btn_build, 1)
+        # Remove Rig wears the same grey outline as Setup's Cancel: it is
+        # the step back, not the loud one. Force Rebuild carries the
+        # burnt orange warning, Build Rig the olive primary.
+        self.style_button(self.btn_remove, 0)
+        self.style_button(self.btn_force, 3)
+        self.style_button(self.btn_build, 4)
 
         button_layout.addWidget(self.btn_remove)
         button_layout.addWidget(self.btn_force)
@@ -444,7 +449,7 @@ class RigTailUI(QtWidgets.QDialog):
                     background-color: #A58509;
                 }
             ''')
-        elif style == 3: # burnt orange (destructive)
+        elif style == 3: # burnt orange (Force Rebuild)
             button.setStyleSheet('''
                 QPushButton {
                     background-color: #8F3B12;
@@ -460,6 +465,24 @@ class RigTailUI(QtWidgets.QDialog):
                 }
                 QPushButton:pressed {
                     background-color: #66290C;
+                }
+            ''')
+        elif style == 4: # olive green (primary action)
+            button.setStyleSheet('''
+                QPushButton {
+                    background-color: #6B7A45;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    font-weight: bold;
+                    text-align: center;
+                }
+                QPushButton:hover {
+                    background-color: #7C8C52;
+                }
+                QPushButton:pressed {
+                    background-color: #525E33;
                 }
             ''')
         button.setMinimumHeight(32)

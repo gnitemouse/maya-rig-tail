@@ -498,14 +498,15 @@ class RigTailSetupUI(QtWidgets.QDialog):
         return group
 
     def style_button(self, button, style):
-        if style == 1:  # blue (primary)
+        if style == 1:  # olive green (primary) - matches Build Rig in the
+                        # Build UI, and complements its burnt orange
             button.setStyleSheet('''
                 QPushButton {
-                    background-color: #4166F5; color: white; border: none;
+                    background-color: #6B7A45; color: white; border: none;
                     border-radius: 4px; padding: 8px 16px; font-weight: bold;
                 }
-                QPushButton:hover { background-color: #4153F5; }
-                QPushButton:pressed { background-color: #304EB8; }
+                QPushButton:hover { background-color: #7C8C52; }
+                QPushButton:pressed { background-color: #525E33; }
             ''')
         elif style == 2:  # yellow (used by the shared RIGPARTS editor)
             button.setStyleSheet('''
