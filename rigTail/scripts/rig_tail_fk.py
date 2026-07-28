@@ -25,6 +25,7 @@ import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
 import rig_tail_maya as rt_mya
 import rig_tail_math as rt_mat
+import rig_tail_ctrlall as rt_ca
 
 logger = logger_setup(__name__)
 
@@ -468,3 +469,173 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         # No parent - simple case
         rt_mya.match_transform(first_sdk_grp, jnt, moc=0)
         rt_mya.parent_to(jnt, last_sdk_grp, a=1)
+
+
+# TWIST / ROLL (FK) ====================================================
+
+def connect_twist_roll(rigname, joints):
+    '''
+    Give the FK chain its own twist/roll/offset network, so the same three
+    basectrl attributes that drive the IK spline handle also work in FK
+    mode. The BN chain follows a blendMatrix of the FK and IK drivers
+    (rig_tail_matrix), so building both is what makes the dials switch
+    with the IKFK mode - there is no separate switching network.
+
+    Sources come from rt_ca.resolved_plug, NOT the basectrl attribute
+    directly: with the Main Controller dashboard active the tail's own
+    value is only one input of its override condition, and reading the
+    basectrl behind that condition's back is what makes the cog's
+    'All Twist' appear to do nothing while the rig sits in FK mode.
+
+    twist - linear world-space ramp, 0 at the base to full value at the
+        tip. Every joint gets the SAME local increment (twist / N) about
+        the aim axis, on its SDK_JNT layer. A serial FK chain's local
+        rotations compound additively down the hierarchy about one
+        consistent (Setup-guaranteed twist-free) aim axis, so a constant
+        per-joint increment integrates into a linear world ramp on its
+        own. Weighting by joint index would double-compound into a curved
+        ramp - do not do that.
+    roll - uniform rigid roll of the whole chain, no ramp. Only the FIRST
+        joint receives the full value; everything below inherits it
+        through the hierarchy. Adding it to every joint (as twist does)
+        would stack into a staircase instead.
+    offset - slides the chain along its own length, on the base joint's
+        SDK_GRP layer-1 translate (aim axis). This is an APPROXIMATION of
+        the IK meaning: on the spline handle, offset re-samples the joints
+        along the curve, which has no exact analog in a chain whose shape
+        comes from rotations rather than a curve. Here it is a rigid slide
+        along the base joint's aim axis - visually close on a straight or
+        gently curved tail, not on a tight curl.
+
+    Channel choice is deliberate: layer-1 translateX of joints 1..N is
+    already driven by FK stretch (connect_fk_stretch_to_joints), which
+    skips joint 0 - so the base joint's layer-1 translate is the one free
+    channel of its kind, and offset can use it without contending with
+    stretch. SDK_JNT.rotate may already be driven by an individual FK
+    control under INDIV_FK, so twist/roll reroute that through an add node
+    rather than overwriting it.
+
+    Arguments
+        rigname (str): Name of rig component
+        joints (list): FK joints, base to tip
+    '''
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    if not cmds.objExists(basectrl) \
+            or not cmds.attributeQuery('twist', n=basectrl, ex=1):
+        return
+
+    # plusMinusAverage's input3D[i] children are lowercase (.input3Dx),
+    # unlike multiplyDivide's uppercase .outputX used elsewhere here.
+    if rt_cst.ORIENT_AIM_AXIS not in ('x', 'y', 'z'):
+        logger.warning(f"{rigname}: Unknown ORIENT_AIM_AXIS "
+                       f"'{rt_cst.ORIENT_AIM_AXIS}', skipping twist/roll")
+        return
+    axis = rt_cst.ORIENT_AIM_AXIS
+    n = len(joints)
+    if not n:
+        return
+
+    twist_src = rt_ca.resolved_plug(rigname, 'twist')
+    roll_src = rt_ca.resolved_plug(rigname, 'roll')
+    offset_src = rt_ca.resolved_plug(rigname, 'offset')
+
+    # twist / N, shared by every joint (see docstring: the constant term
+    # is what produces a linear ramp once it compounds down the hierarchy)
+    twist_step = f'{rt_cst.TYPE_FK}_{rigname}_twist_step_multiplyDivide'
+    if not cmds.objExists(twist_step):
+        cmds.createNode('multiplyDivide', n=twist_step, s=1, ss=1)
+        cmds.setAttr(f'{twist_step}.operation', 2)  # divide
+    cmds.connectAttr(twist_src, f'{twist_step}.input1X', f=1)
+    cmds.setAttr(f'{twist_step}.input2X', n)
+
+    for i, jnt in enumerate(joints):
+        NN = rt_nam.get_index_from_name(jnt)
+        sdk_jnt = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+        if not cmds.objExists(sdk_jnt):
+            continue
+
+        sum_node = f'{rt_cst.TYPE_FK}_{rigname}_{NN}_twistroll_plusMinusAverage'
+        if not cmds.objExists(sum_node):
+            cmds.createNode('plusMinusAverage', n=sum_node, s=1, ss=1)
+            cmds.setAttr(f'{sum_node}.operation', 1)  # add
+
+        # Reroute whatever currently drives this SDK_JNT layer through the
+        # sum node instead of overwriting it. Skip if it is already this
+        # sum node (rebuild-safe: re-running must not feed the node's own
+        # output back into itself).
+        existing = cmds.listConnections(f'{sdk_jnt}.rotate', s=True,
+                                        d=False, p=True) or []
+        if existing and existing[0].split('.')[0] != sum_node:
+            cmds.connectAttr(existing[0], f'{sum_node}.input3D[0]', f=1)
+
+        cmds.connectAttr(f'{twist_step}.outputX',
+                         f'{sum_node}.input3D[1].input3D{axis}', f=1)
+        if i == 0:
+            cmds.connectAttr(roll_src,
+                             f'{sum_node}.input3D[2].input3D{axis}', f=1)
+
+        cmds.connectAttr(f'{sum_node}.output3D', f'{sdk_jnt}.rotate', f=1)
+
+    # offset: rigid slide along the base joint's aim axis. Layer-1 of
+    # joint 0 is free of FK stretch (which starts at joint 1), so this
+    # needs no summing node. Scaled into the IK handle's units first.
+    base_NN = rt_nam.get_index_from_name(joints[0])
+    base_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, base_NN, 1)
+    if not cmds.objExists(base_sdk):
+        logger.warning(f'{rigname}: No base SDK group {base_sdk}, '
+                       f'skipping FK offset')
+        return
+    scale_node = f'{rt_cst.TYPE_FK}_{rigname}_offset_scale_multiplyDivide'
+    if not cmds.objExists(scale_node):
+        cmds.createNode('multiplyDivide', n=scale_node, s=1, ss=1)
+        cmds.setAttr(f'{scale_node}.operation', 1)  # multiply
+    cmds.connectAttr(offset_src, f'{scale_node}.input1X', f=1)
+    cmds.setAttr(f'{scale_node}.input2X', offset_unit_scale(rigname))
+    cmds.connectAttr(f'{scale_node}.outputX',
+                     f'{base_sdk}.translate{axis.upper()}', f=1)
+
+
+def offset_unit_scale(rigname):
+    '''
+    Scene units the chain must slide per 1.0 of `offset`, so FK offset
+    matches what IK offset does at the same dial value.
+
+    The two are not natively in the same units. On the spline handle
+    `.offset` is a CURVE PARAMETER shift: the joints re-sample along the
+    curve, so one unit of offset moves them by one parameter's worth of
+    arc length. The FK network instead writes scene units straight onto a
+    translate. Measured on a 9-joint tail the same dial value gave 1.0
+    unit per joint in FK against ~3.3 in IK, so switching mode with
+    offset dialled in visibly jumped.
+
+    Converting needs the curve the IK handle actually solves against
+    (its parameter range is what offset indexes) - the FK curve is only
+    the fallback for an FK-only build, where there is no IK to match and
+    the scale merely has to stay sane. Returns 1.0 when no curve is
+    available, leaving the raw behaviour rather than guessing.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        float: multiplier from offset units to scene units
+    '''
+    curves = [rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline'),
+              rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)]
+    for curve in curves:
+        if not cmds.objExists(curve):
+            continue
+        shapes = cmds.listRelatives(curve, s=True, ni=True) or []
+        if not shapes:
+            continue
+        span = (cmds.getAttr(f'{shapes[0]}.maxValue')
+                - cmds.getAttr(f'{shapes[0]}.minValue'))
+        if span <= 1e-6:
+            continue
+        scale = cmds.arclen(curve) / span
+        logger.trace(f'{rigname}: FK offset unit scale {scale:.4f} '
+                     f"from '{curve}'")
+        return scale
+    logger.warning(f'{rigname}: No curve to derive the FK offset unit '
+                   f'scale from; offset stays in raw scene units')
+    return 1.0

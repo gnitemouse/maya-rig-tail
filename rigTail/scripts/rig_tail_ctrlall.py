@@ -123,7 +123,12 @@ def routed_attr_specs(fk, ik):
             ('squash', dict(at='float', dv=0, min=-10, max=10)),
             ('preserveVolume', dict(at='float', dv=1, min=0, max=1)),
         ]
-    if ik:
+    # twist/roll/offset drive the IK spline handle AND the FK SDK network
+    # (rig_tail_fk.connect_twist_roll), so they are routed whenever either
+    # mode is built - gating them on ik alone left an FK-only rig with
+    # basectrl attributes the ALL section could not reach, and left a
+    # dual-mode rig's ALL values doing nothing while it sat in FK mode.
+    if fk or ik:
         specs += [(atr, dict(at='float', dv=0))
                   for atr in ('twist', 'roll', 'offset')]
     if rt_cst.EFFECTS['wave']:

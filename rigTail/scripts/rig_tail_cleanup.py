@@ -17,6 +17,8 @@ and the joint helpers detect or (re)build the BN/FK/IK chains for RIGPARTS.
 
 Functions:
     cleanup_rig: entry point; per part choose full vs light teardown
+    remove_rig: strip the rig back to bare skeleton + geometry
+    _rescue_from_root: move skeleton/geometry out before deleting the root
     cleanup_rigname: full teardown of one rig part
     cleanup_connections: light teardown, break connections only
     cleanup_anim_effects: remove one part's FX expression/node network
@@ -94,8 +96,9 @@ def cleanup_rig(fk, ik):
     rt_con.clear_control_cache()
     # Validate cache
     rt_cache.validate_cache()
-    # Control count changes invalidate the node layout for every part
-    structure_changed = rt_cache.validate_cache_structure()
+    # Control count and build-mode changes invalidate the node layout for
+    # every part
+    structure_changed = rt_cache.validate_cache_structure(fk, ik)
 
     # Delete SDK animCurves in one call (a rebuild has hundreds of them,
     # and per-node deletes each pay full command overhead), minus the
@@ -121,9 +124,14 @@ def cleanup_rig(fk, ik):
             # Unbind geometry before rebuild
             rt_mya.unbind_geometry(rigname)
 
-            # Rebuild check
+            # Rebuild check. A full teardown always strips BOTH modes,
+            # not just the ones being rebuilt: the previous build may
+            # have created the other mode's curves, clusters and spline
+            # handles, and leaving those behind is what broke rebuilds
+            # that switched between FK-only and FK+IK. The build then
+            # recreates only what was asked for.
             if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
-                cleanup_rigname(rigname, fk, ik)
+                cleanup_rigname(rigname, fk=True, ik=True)
             else:
                 cleanup_connections(rigname, fk, ik)
     finally:
@@ -136,6 +144,149 @@ def cleanup_rig(fk, ik):
     # the per-part loop so expressions referencing the conditions are
     # already gone on a full teardown.
     rt_ca.cleanup_ctrlall(fk, ik)
+
+def remove_rig():
+    '''
+    Strip the rig back to bare skeleton + geometry: the reverse of a
+    build, for handing a scene on or starting over. Destructive and NOT
+    an undo - animation on the controls goes with the controls, and the
+    pre-build scene is not otherwise restored.
+
+    Kept: BN joints (posed as they are now, as plain joints) and all
+    geometry, still bound to them. Removed: controls, curves, clusters,
+    ikHandles, FX and utility networks, the duplicated FK/IK chains, and
+    the whole rig group hierarchy including root and cog.
+
+    Order matters, and each step exists for a reason:
+
+    1. Capture every BN joint's world matrix FIRST, while the build's
+       drivers are still live. The build zeroes BN local TRS and drives
+       the pose through offsetParentMatrix (rig_tail_matrix), so deleting
+       that network without capturing first collapses the skeleton onto
+       its parents.
+    2. Full per-part teardown (cleanup_rigname), then delete the FK/IK
+       duplicate chains, which teardown unwraps but does not remove.
+    3. Turn each BN joint back into a plain joint at its captured matrix -
+       incoming drivers detached, opm identity, orientation moved into
+       jointOrient. Only INCOMING connections are cut, so the outgoing
+       worldMatrix -> skinCluster geometry bind survives and the mesh
+       keeps deforming (same rule as cleanup_rigname and
+       rig_tail_setup._apply_frames).
+    4. Move skeleton and geometry out of the rig hierarchy BEFORE deleting
+       the root group, or Maya deletes them along with it.
+    5. Drop the FK/IK/FX caches and the last-build record, so a later
+       build re-detects from the skeleton instead of trusting names that
+       no longer exist.
+
+    Return
+        bool: True if a rig was found and removed
+    '''
+    logger.debug('-----------------------------------------------------')
+    logger.info('Remove Rig')
+
+    rt_con.clear_control_cache()
+    root_grp = find_existing_root_grp() or rt_nam.fstr('', rt_cst.ROOT_GRP)
+    parts = list(rt_cst.RIGPARTS)
+
+    # 1. Capture the posed skeleton while the rig still drives it
+    poses = {}
+    for rigname in parts:
+        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
+            if cmds.objExists(jnt):
+                poses[jnt] = cmds.xform(jnt, q=True, ws=True, matrix=True)
+    logger.debug(f'Captured {len(poses)} BN joint poses')
+
+    # 2. Tear down each part, then the duplicated chains
+    for rigname in parts:
+        cleanup_rigname(rigname, fk=True, ik=True)
+        cleanup_anim_effects(rigname, fk=True, ik=True)
+    for rigname in parts:
+        for typ in (rt_cst.TYPE_FK, rt_cst.TYPE_IK):
+            chain_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
+            if cmds.objExists(chain_root):
+                rt_mya.remove(chain_root)
+            jnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
+            if cmds.objExists(jnt_grp):
+                rt_mya.remove(jnt_grp)
+
+    # 3. Restore the skeleton as plain joints, root to tip
+    for rigname in parts:
+        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
+            if jnt not in poses or not cmds.objExists(jnt):
+                continue
+            rt_mya.disconnect_all(jnt, source=True, destination=False)
+            rt_mya.reset_opm(jnt)
+            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+            cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
+            cmds.setAttr(f'{jnt}.scale', 1, 1, 1)
+            cmds.xform(jnt, ws=True, matrix=poses[jnt])
+            rot = cmds.getAttr(f'{jnt}.rotate')[0]
+            cmds.setAttr(f'{jnt}.jointOrient', rot[0], rot[1], rot[2])
+            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+        # Leave the skeleton keyable and visible, as the Setup phase does
+        rt_mya.finalize_joint_channels(True, visibility=1,
+                                       joint_dicts=[rt_cst.JOINTS_BN])
+
+    # 4. Rescue skeleton and geometry, then drop the hierarchy
+    removed = False
+    if cmds.objExists(root_grp):
+        rescued = _rescue_from_root(root_grp)
+        logger.debug(f"Moved {rescued} node(s) out of '{root_grp}'")
+        rt_mya.remove(root_grp)
+        removed = True
+    else:
+        logger.warning('No rig root group found; nothing to remove')
+
+    # 5. Forget the build. LAST_BUILD keeps its documented key set -
+    # rig_tail_cache indexes 'rigparts'/'root'/... directly, so replacing
+    # it with an empty dict would KeyError on the next build.
+    for rigname in parts:
+        for jdict in (rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+            jdict.pop(rigname, None)
+    rt_cst.LAST_BUILD.update({
+        'rigparts': [],
+        'root': '',
+        'joints_pos': {},
+        'num_ctrl_fk': None,
+        'num_ctrl_ik': None,
+        'indiv_fk': None,
+        'build_mode': None,
+    })
+
+    logger.info(f'Remove Rig complete ({len(poses)} skeleton joints kept)')
+    return removed
+
+
+def _rescue_from_root(root_grp):
+    '''
+    Move the skeleton and geometry out of the rig hierarchy to the scene
+    root, so deleting the rig root group cannot take them with it.
+
+    Everything directly under the geometry and skeleton groups is moved,
+    rather than only the cached BN chains: a scene usually holds meshes
+    and joints the rig never touched (other parts of the character), and
+    they were parented in by setup_rig just the same.
+
+    Arguments
+        root_grp (str): The rig root group about to be deleted
+
+    Return
+        int: nodes moved out
+    '''
+    moved = 0
+    for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP):
+        grp = rt_nam.fstr('', template)
+        if not cmds.objExists(grp):
+            continue
+        for child in cmds.listRelatives(grp, c=True, typ='transform') or []:
+            try:
+                cmds.parent(child, world=True)
+                moved += 1
+            except RuntimeError as e:
+                logger.warning(f"Could not move '{child}' out of "
+                               f"'{grp}': {e}")
+    return moved
+
 
 def restore_fk_joint_chain(rigname):
     '''

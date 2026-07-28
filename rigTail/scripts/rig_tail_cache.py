@@ -123,16 +123,28 @@ def validate_cache():
         rt_cst.LAST_BUILD['root'] = rt_cst.ROOT
 
 
-def validate_cache_structure():
+def validate_cache_structure(fk=None, ik=None):
     """
-    Check whether the rig structure constants changed since the last
-    build. Changing NUM_CTRL_FK / NUM_CTRL_IK alters the SDK group,
-    curve CV and cluster layout, and toggling INDIV_FK adds/removes the
-    per-joint FK controls, so reusing the previous nodes (light cleanup
-    path) would mix old and new layouts and corrupt the build; a change
-    forces the full teardown path instead.
+    Check whether the rig structure changed since the last build.
+    Changing NUM_CTRL_FK / NUM_CTRL_IK alters the SDK group, curve CV and
+    cluster layout, and toggling INDIV_FK adds/removes the per-joint FK
+    controls, so reusing the previous nodes (light cleanup path) would
+    mix old and new layouts and corrupt the build; a change forces the
+    full teardown path instead.
+
+    The BUILD MODE counts as structure too. cleanup_rigname only tears
+    down the modes it is asked to build, so switching FK+IK -> FK-only
+    down the light path left the previous run's IK curves, clusters and
+    spline handles behind; the next FK+IK build then met half an IK
+    system it had not created and aborted on the missing pieces. A mode
+    change forces the full teardown, which cleanup_rig runs across BOTH
+    modes.
 
     Stored values are refreshed on every call.
+
+    Arguments:
+        fk (bool): FK is being built this run; None skips the mode check
+        ik (bool): IK is being built this run; None skips the mode check
 
     Return:
         bool: True if the structure changed (full rebuild needed)
@@ -140,9 +152,13 @@ def validate_cache_structure():
     prev_fk = rt_cst.LAST_BUILD.get('num_ctrl_fk')
     prev_ik = rt_cst.LAST_BUILD.get('num_ctrl_ik')
     prev_indiv = rt_cst.LAST_BUILD.get('indiv_fk')
+    prev_mode = rt_cst.LAST_BUILD.get('build_mode')
     rt_cst.LAST_BUILD['num_ctrl_fk'] = rt_cst.NUM_CTRL_FK
     rt_cst.LAST_BUILD['num_ctrl_ik'] = rt_cst.NUM_CTRL_IK
     rt_cst.LAST_BUILD['indiv_fk'] = rt_cst.INDIV_FK
+    mode = None if fk is None and ik is None else (bool(fk), bool(ik))
+    if mode is not None:
+        rt_cst.LAST_BUILD['build_mode'] = mode
 
     if prev_fk is None and prev_ik is None:
         # No recorded build in this session: joint validation decides
@@ -150,12 +166,17 @@ def validate_cache_structure():
     changed = (prev_fk != rt_cst.NUM_CTRL_FK
                or prev_ik != rt_cst.NUM_CTRL_IK
                or prev_indiv != rt_cst.INDIV_FK)
+    mode_changed = (mode is not None and prev_mode is not None
+                    and prev_mode != mode)
+    if mode_changed:
+        logger.debug(f'Build mode changed: (fk, ik) {prev_mode} -> {mode}. '
+                     f'Full rebuild.')
     if changed:
         logger.debug(f'Structure changed: NUM_CTRL_FK '
                     f'{prev_fk} -> {rt_cst.NUM_CTRL_FK}, NUM_CTRL_IK '
                     f'{prev_ik} -> {rt_cst.NUM_CTRL_IK}, INDIV_FK '
                     f'{prev_indiv} -> {rt_cst.INDIV_FK}. Full rebuild.')
-    return changed
+    return changed or mode_changed
 
 
 def validate_cache_joints(rigname, tol=None):

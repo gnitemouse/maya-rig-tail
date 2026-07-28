@@ -143,10 +143,20 @@ def create_basectrl(rigname, aim_axis=None):
         # missing from ROT_AXIS_DICT). Orienting off a default would leave
         # every IK control rolled off a made-up up-vector, so stop here
         # with the rig component named rather than build something wrong.
+        #
+        # The usual cause is not a bad skeleton but a PREVIOUS build that
+        # aborted: build_matrix_offset_network zeroes every BN joint's
+        # local TRS and jointOrient before re-driving the pose through
+        # offsetParentMatrix, so a run that died in between leaves the
+        # whole chain stacked on one point. Rebuilding cannot recover it -
+        # the pose is gone from the scene - so say so instead of letting
+        # the next run fail somewhere less obvious.
         raise ValueError(
             f"{rigname}: cannot orient base control, chain direction is "
-            f"'{aim_axis}'. Check that '{joints[0]}' and the joints after "
-            f'it are not all at the same position.')
+            f"'{aim_axis}': every joint from '{joints[0]}' is at the same "
+            f'position. If this followed a build that errored, the BN '
+            f'skeleton was left collapsed - reopen the scene (or undo back '
+            f'past that build) rather than building again over it.')
     rot_offset = rt_cst.ROT_AXIS_DICT[aim_axis]
     logger.trace(f"{rigname}: aim_axis '{aim_axis}' rot_offset '{rot_offset}'")
     cmds.setAttr(f'{basectrl_grp}.rotate', rot_offset[0], rot_offset[1], rot_offset[2])

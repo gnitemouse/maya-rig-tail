@@ -30,7 +30,10 @@ LAST_BUILD = {
     'joints_pos': {},  # {rigname: [[x, y, z] per joint] from last build}
     'num_ctrl_fk': None,  # control counts of the last build; a change
     'num_ctrl_ik': None,  # forces the full teardown path on re-rig
-    'indiv_fk': None      # individual-FK toggle; a change forces rebuild
+    'indiv_fk': None,     # individual-FK toggle; a change forces rebuild
+    'build_mode': None    # (fk, ik) of the last build; switching mode
+                          # forces the full teardown, which strips BOTH
+                          # modes so the old one leaves nothing behind
 }
 
 

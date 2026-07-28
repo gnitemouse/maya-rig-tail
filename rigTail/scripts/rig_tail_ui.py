@@ -14,12 +14,14 @@ options, and buttons that open pop-up editors:
     ikfk attributes)
   - ConstantsEditor: edit numeric constants (control counts and sizes)
 
-Two build buttons: Build Rig keeps unchanged tails as they are (the
-joint cache decides), Force Rebuild tears everything down first. The
-force flag lasts exactly one click - it is never persisted, so a saved
-config can never leave every build forcing. The other options,
-including Preserve skinClusters (PRESERVE_SKIN), are committed to
-rig_tail_constants on build AND on close, so they survive reopening.
+Three buttons along the bottom: Remove Rig strips an existing rig back
+to skeleton + geometry (destructive, confirms first), Build Rig keeps
+unchanged tails as they are (the joint cache decides), and Force Rebuild
+tears everything down first. The force flag lasts exactly one click - it
+is never persisted, so a saved config can never leave every build
+forcing. The other options, including Preserve skinClusters
+(PRESERVE_SKIN), are committed to rig_tail_constants on build AND on
+close, so they survive reopening.
 
 All edited values live in rig_tail_constants and can be imported or
 exported through a user-chosen JSON config file (Load/Save Config).
@@ -270,15 +272,11 @@ class RigTailUI(QtWidgets.QDialog):
         options_layout.addSpacing(8)
 
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_main = QtWidgets.QCheckBox('Main Controller (dashboard)')
+        self.chk_main = QtWidgets.QCheckBox('Control All Tails (cog)')
         self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
         self.chk_main.setToolTip(
-            'Build a centralized dashboard on the cog control: an ALL '
-            'section (IKFK mode, Stretch, Twist, Animation values '
-            'applied to every tail) plus a per-tail Override flag. '
-            'Override Off (default) makes the tail follow the ALL '
-            "values; On makes it use its own base control values. "
-            'Enabled when RIGPARTS has 2+ parts.')
+            'Drive every tail from one ALL section on the cog, with a '
+            'per-tail Override flag to opt out. Needs 2+ rig parts.')
         self.chk_preserve = QtWidgets.QCheckBox('Preserve skinClusters')
         self.chk_preserve.setToolTip(
             'Keep existing skinClusters when rebuilding: rig joints are '
@@ -287,8 +285,14 @@ class RigTailUI(QtWidgets.QDialog):
             'losing the weights.')
         self.style_checkbox(self.chk_main)
         self.style_checkbox(self.chk_preserve)
+        # Equal margins either side: the same stretch outside both
+        # checkboxes and a wider one between them, so the pair sits
+        # centred with matching left and right gaps
+        toggles_layout.addStretch(2)
         toggles_layout.addWidget(self.chk_main)
+        toggles_layout.addStretch(3)
         toggles_layout.addWidget(self.chk_preserve)
+        toggles_layout.addStretch(2)
         options_layout.addLayout(toggles_layout)
 
         options_group.setLayout(options_layout)
@@ -338,24 +342,31 @@ class RigTailUI(QtWidgets.QDialog):
         main_layout.addSpacing(10)
 
         button_layout = QtWidgets.QHBoxLayout()
-        button_layout.setSpacing(10)
+        button_layout.setSpacing(4)
 
+        self.btn_remove = QtWidgets.QPushButton('Remove Rig')
         self.btn_force = QtWidgets.QPushButton('Force Rebuild')
         self.btn_build = QtWidgets.QPushButton('Build Rig')
+        self.btn_remove.setToolTip(
+            'Delete the whole rig, leaving only the posed skeleton and '
+            'the geometry still bound to it. Not an undo: asks first.')
         self.btn_force.setToolTip(
-            'Tear the existing rig down completely and rebuild, even if '
-            'the joints are unchanged since the last build.')
+            'Rebuild everything from scratch, ignoring the cache that '
+            'normally leaves unchanged tails alone.')
         self.btn_build.setToolTip(
-            'Build the rig with the settings above. Unchanged tails are '
-            'kept as they are; Force Rebuild ignores that cache.')
+            'Build with the settings above, reusing tails whose joints '
+            'have not changed since the last build.')
 
         # Lambdas so Qt's clicked(checked) bool cannot land in `force`
+        self.btn_remove.clicked.connect(lambda: self.remove_rig())
         self.btn_force.clicked.connect(lambda: self.build_rig(force=True))
         self.btn_build.clicked.connect(lambda: self.build_rig())
 
+        self.style_button(self.btn_remove, 3)
         self.style_button(self.btn_force, 2)
         self.style_button(self.btn_build, 1)
 
+        button_layout.addWidget(self.btn_remove)
         button_layout.addWidget(self.btn_force)
         button_layout.addWidget(self.btn_build)
 
@@ -406,6 +417,7 @@ class RigTailUI(QtWidgets.QDialog):
                     border-radius: 4px;
                     padding: 8px 16px;
                     font-weight: bold;
+                    text-align: center;
                 }
                 QPushButton:hover {
                     background-color: #4153F5;
@@ -422,12 +434,32 @@ class RigTailUI(QtWidgets.QDialog):
                     border: none;
                     border-radius: 4px;
                     padding: 8px 16px;
+                    font-weight: normal;
+                    text-align: center;
                 }
                 QPushButton:hover {
                     background-color: #ECBE0C;
                 }
                 QPushButton:pressed {
                     background-color: #A58509;
+                }
+            ''')
+        elif style == 3: # burnt orange (destructive)
+            button.setStyleSheet('''
+                QPushButton {
+                    background-color: #8F3B12;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    font-weight: normal;
+                    text-align: center;
+                }
+                QPushButton:hover {
+                    background-color: #A6461A;
+                }
+                QPushButton:pressed {
+                    background-color: #66290C;
                 }
             ''')
         button.setMinimumHeight(32)
@@ -746,6 +778,64 @@ class RigTailUI(QtWidgets.QDialog):
             self.close()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to build rig:\n{str(e)}')
+
+    def remove_rig(self):
+        '''
+        Strip the rig back to skeleton + geometry (the Remove Rig button).
+
+        Confirms first: this deletes controls and their animation, and
+        Maya's undo is not a reliable way back from a teardown this
+        large. The scene is left with the posed BN skeleton and the
+        geometry still bound to it, ready to build again or hand on.
+        '''
+        import rig_tail_cleanup as rt_cln
+
+        # A session started before this feature existed holds a stale
+        # rig_tail_cleanup (modules are only reloaded by TailReload), and
+        # the call below would die with a bare AttributeError
+        if not hasattr(rt_cln, 'remove_rig'):
+            QtWidgets.QMessageBox.warning(self, 'Remove Rig',
+                'This Maya session is running an older rig_tail_cleanup.\n'
+                'Run the TailReload shelf button, then try again.')
+            return
+
+        root_grp = rt_cln.find_existing_root_grp()
+        if not root_grp:
+            QtWidgets.QMessageBox.information(self, 'Remove Rig',
+                'No built rig found in this scene.')
+            return
+
+        answer = QtWidgets.QMessageBox.warning(
+            self, 'Remove Rig',
+            f"Delete the rig under '{root_grp}'?\n\n"
+            'Controls, curves, clusters, FX networks and the FK/IK joint '
+            'chains are deleted, along with any animation on them.\n\n'
+            'The BN skeleton is kept in its current pose and the geometry '
+            'stays bound to it.\n\nThis cannot be reliably undone.',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
+            QtWidgets.QMessageBox.Cancel)
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+
+        try:
+            # One undo chunk, so a failed teardown is not left half-applied
+            cmds.undoInfo(openChunk=True, chunkName='rigTail Remove Rig')
+            try:
+                removed = rt_cln.remove_rig()
+            finally:
+                cmds.undoInfo(closeChunk=True)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Error',
+                f'Failed to remove rig:\n{str(e)}')
+            return
+
+        if removed:
+            QtWidgets.QMessageBox.information(self, 'Remove Rig',
+                'Rig removed. The skeleton and geometry are still here.')
+            self.update_display()
+        else:
+            QtWidgets.QMessageBox.warning(self, 'Remove Rig',
+                'Nothing was removed - no rig root group was found.')
 
 
 class RigPartsEditor(QtWidgets.QDialog):

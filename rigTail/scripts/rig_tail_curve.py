@@ -434,8 +434,16 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
             cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
-    # Organize under cluster group
+    # Organize under cluster group. Created here if missing rather than
+    # assumed: the callers make it, but a build that switched modes (or
+    # aborted partway through a previous run) can reach this point
+    # without it, and parenting to a name that is not there aborts the
+    # whole build on 'No object matches name'.
     cluster_grp = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, typ)
+    if not cmds.objExists(cluster_grp):
+        logger.warning(f"Cluster group '{cluster_grp}' missing, creating it")
+        rt_mya.create_group(cluster_grp,
+                            parent=rt_nam.fstr('', rt_cst.CLUSTERS_GRP))
     for cluster_node, cluster_handle in clusters:
         rt_mya.parent_to(cluster_handle, cluster_grp)
         cmds.setAttr(f'{cluster_handle}.displayHandle', show_handle)

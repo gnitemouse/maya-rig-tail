@@ -46,6 +46,7 @@ from rig_tail_matrix import build_matrix_offset_network
 import rig_tail_ctrlall as rt_ca
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
+import rig_tail_fk as rt_fk
 import rig_tail_test as rt_test
 import re
 
@@ -361,8 +362,8 @@ def connect_basectrl(rigname, fk, ik):
     if ik:
         add_ikfk_attributes_to_basectrl(rigname, basectrl)
     rt_str.add_stretch_attributes_to_basectrl(rigname, basectrl)
-    if ik:
-        add_twist_attributes_to_basectrl(rigname, basectrl)
+    if ik or fk:
+        add_twist_attributes_to_basectrl(rigname, basectrl, fk, ik)
     rt_ani.add_anim_attributes_to_basectrl(rigname, basectrl)
     rt_str.add_jntscale_attributes_to_basectrl(rigname, basectrl)
 
@@ -402,6 +403,12 @@ def connect_fk(rigname, fk, ik):
                 cmds.parentConstraint(last_sdk, fk_ctrl_grp)
 
             cmds.connectAttr(f'{fk_ctrl}.rotate', f'{sdk_grp}.rotate', f=1)
+
+    # Twist/roll/offset for FK. Runs after the INDIV_FK block above so it
+    # reroutes that block's SDK_JNT connection rather than being
+    # overwritten by it. Reads rt_ca.resolved_plug internally, so the cog's
+    # ALL values reach FK mode the same way they reach IK.
+    rt_fk.connect_twist_roll(rigname, rt_cst.JOINTS_FK[rigname])
 
     if ik:
         fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)
@@ -527,7 +534,18 @@ def add_ikfk_attributes_to_basectrl(rigname, basectrl):
     rt_mya.add_attribute_enum(basectrl, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1],
                        pxy=f'{cog_ctrl}.{ikfk_switch}')
 
-def add_twist_attributes_to_basectrl(rigname, basectrl):
+def add_twist_attributes_to_basectrl(rigname, basectrl, fk, ik):
+    '''
+    twist/roll/offset are created once and drive BOTH modes' networks:
+    the IK spline handle's native .twist/.roll/.offset (connect_spline_ik)
+    and the FK SDK network (rig_tail_fk.connect_twist_roll). The BN chain
+    follows a blendMatrix of the FK and IK drivers (rig_tail_matrix), so
+    wiring both is what makes one dial work in whichever mode is active -
+    there is no separate switching network to build.
+
+    This list MUST stay in step with rig_tail_ctrlall.routed_attr_specs,
+    or the dashboard's ALL values cannot reach the attributes.
+    '''
     rt_mya.add_attribute_enum(basectrl, rt_cst.TWIST_DIVIDER[0], rt_cst.TWIST_DIVIDER[1], rt_cst.TWIST_DIVIDER[2])
 
     for attr in ['twist', 'roll', 'offset']:

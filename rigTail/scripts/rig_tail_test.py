@@ -22,6 +22,7 @@ Usage:
     rt_test.show_data_flow()        # per-joint data-flow diagram
     rt_test.test_wave() / rt_test.test_curl()
     rt_test.test_time_evaluation()  # time-varying FX across frames
+    rt_test.test_twist_roll_offset('C_fintail')        # twist/roll/offset in FK and IK (MUTATES)
     rt_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
     rt_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
     rt_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
@@ -1067,6 +1068,218 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     cmds.setAttr(f'{fk_ctrl0}.rotate', *saved_rot)
     cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved)
     print()
+
+
+def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
+    '''
+    Verify twist / roll / offset move the BN chain in EVERY IKFK mode, by
+    both routes: the tail's own basectrl values and the Main Controller's
+    ALL values (MUTATES, restores everything it touches).
+
+    Each attribute is swept 0 -> value and the chain measured three ways.
+    An attribute counts as wired if EITHER moved or rot changed: spline-IK
+    twist rolls the joints about the curve they are constrained to, so it
+    rotates every joint while moving none, and a displacement-only test
+    reports a working IK twist as NOT WIRED.
+
+      moved     sum of per-joint world translation change
+      rot       sum of per-joint world ORIENTATION change, in degrees
+      relTwist  max change in RELATIVE orientation between consecutive
+                joints - classifies the shape, does not detect wiring
+
+    Expected signatures:
+      twist   rot > 0, relTwist > 0   (ramp)
+      roll    rot > 0, relTwist ~ 0   (rigid)
+      offset  moved > 0, rot ~ 0      (slide)
+
+    Both rows per mode matter, and they need OPPOSITE override settings:
+
+      local   the tail's basectrl attribute, tested with its override flag
+              On. With the dashboard active and the flag Off (the default)
+              the override condition ignores the basectrl input by design,
+              so driving it proves nothing - an earlier version of this
+              test set it with the flag Off and reported a false NOT WIRED
+              on a rig that was working.
+      ALL     the cog's all_* attribute, tested with the flag Off. This is
+              the route that really did break once, when a consumer read
+              the basectrl directly instead of rt_ca.resolved_plug.
+
+    Arguments
+        rigname (str): Rig part to test
+        amount (float): Degrees to drive twist/roll to
+        offset_amount (float): Scene units to drive offset to. Separate
+            because offset is a distance, not an angle.
+
+    Return
+        bool: True if every mode responded to every attribute by both routes
+    '''
+    print(f'\n=== TWIST / ROLL / OFFSET CHECK: {rigname} ===\n')
+
+    import rig_tail_ctrlall as rt_ca
+
+    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    if not cmds.objExists(basectrl):
+        print(f'  x basectrl {basectrl} not found - build the rig first')
+        return False
+    bn = rt_cst.JOINTS_BN.get(rigname) or []
+    if len(bn) < 3:
+        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        return False
+
+    ai = {'x': 0, 'y': 1, 'z': 2}.get(
+        getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'), 0)
+
+    def _state():
+        '''Every BN joint's full world matrix.'''
+        return [cmds.xform(j, q=1, ws=1, m=1) for j in bn]
+
+    def _ang(u, v):
+        d = sum(u[k] * v[k] for k in range(3))
+        return math.degrees(math.acos(max(-1.0, min(1.0, d))))
+
+    def _row(m, r):
+        return m[r * 4: r * 4 + 3]
+
+    def _compare(a, b):
+        '''
+        Three independent measures. Position change alone is NOT enough to
+        tell whether an attribute did anything: spline-IK twist rolls the
+        joints about the curve they are constrained to, so it rotates every
+        joint while moving none of them. Reporting only displacement made a
+        working IK twist read as NOT WIRED.
+
+          moved    sum of per-joint world translation change
+          rotated  sum of per-joint world ORIENTATION change (max angle
+                   over the three basis rows, so a rotation about any axis
+                   is caught)
+          rel      max change in RELATIVE orientation between consecutive
+                   joints - a shape classifier, not a detector: it tells a
+                   ramp (twist) from a rigid turn (roll), and is near zero
+                   for both a rigid turn and a pure slide
+        '''
+        moved = sum(sum((b[i][12 + k] - a[i][12 + k]) ** 2
+                        for k in range(3)) ** 0.5
+                    for i in range(len(a)))
+        rotated = sum(max(_ang(_row(a[i], r), _row(b[i], r)) for r in range(3))
+                      for i in range(len(a)))
+        rel = 0.0
+        for i in range(len(a) - 1):
+            up = (ai + 1) % 3
+            rel = max(rel, abs(_ang(_row(a[i], up), _row(a[i + 1], up))
+                               - _ang(_row(b[i], up), _row(b[i + 1], up))))
+        return moved, rotated, rel
+
+    def _eval():
+        t = cmds.currentTime(q=1)
+        cmds.currentTime(t + 0.01, e=1)
+        cmds.currentTime(t, e=1)
+
+    # Which modes exist on this rig
+    ikfk_attr = rt_nam.fstr(rigname, rt_cst.IKFK)
+    has_switch = (cmds.objExists(cog_ctrl)
+                  and cmds.attributeQuery(ikfk_attr, n=cog_ctrl, ex=1))
+    modes = []
+    if has_switch:
+        enum = cmds.attributeQuery(ikfk_attr, n=cog_ctrl, le=1)[0].split(':')
+        for i, name in enumerate(enum):
+            modes.append((name, i))
+    else:
+        modes.append(('(single mode)', None))
+
+    saved_mode = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}') if has_switch else None
+    attrs = [a for a in ('twist', 'roll', 'offset')
+             if cmds.attributeQuery(a, n=basectrl, ex=1)]
+    if not attrs:
+        print(f'  x no twist/roll/offset attributes on {basectrl}')
+        return False
+
+    def _drive(plug, value):
+        '''Sweep one plug 0 -> value, return (moved, relTwist). Restores.'''
+        saved = cmds.getAttr(plug)
+        cmds.setAttr(plug, 0)
+        _eval()
+        before = _state()
+        cmds.setAttr(plug, value)
+        _eval()
+        result = _compare(before, _state())
+        cmds.setAttr(plug, saved)
+        _eval()
+        return result
+
+    # With the dashboard active the tail's override flag decides which
+    # input of the override condition is live, so each path has to be
+    # tested with the flag set the way that path requires: On for the
+    # tail's own basectrl values, Off for the cog's ALL values. Driving a
+    # basectrl attribute with the flag Off is SUPPOSED to do nothing.
+    dash = rt_ca.active()
+    override = f'{cog_ctrl}.{rt_nam.fstr(rigname, rt_cst.OVERRIDE)}'
+    has_override = dash and cmds.objExists(cog_ctrl) \
+        and cmds.attributeQuery(rt_nam.fstr(rigname, rt_cst.OVERRIDE),
+                                n=cog_ctrl, ex=1)
+    saved_ovr = cmds.getAttr(override) if has_override else None
+
+    # (label, plug builder, override value the path needs)
+    paths = [('local', lambda a: f'{basectrl}.{a}', 1)]
+    if dash:
+        paths.append(('ALL', lambda a: f'{cog_ctrl}.{rt_ca.all_attr(a)}', 0))
+
+    ok = True
+    failures = []
+    for mode_name, mode_val in modes:
+        if mode_val is not None:
+            cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', mode_val)
+        print(f'MODE {mode_name}:')
+        for label, plug_of, need_ovr in paths:
+            if has_override:
+                cmds.setAttr(override, need_ovr)
+            for attr in attrs:
+                plug = plug_of(attr)
+                if not cmds.objExists(plug.split('.')[0]) \
+                        or not cmds.attributeQuery(plug.split('.', 1)[1],
+                                                   n=plug.split('.')[0], ex=1):
+                    print(f'  {label:5s} {attr:7s} x attribute not found')
+                    ok = False
+                    continue
+                if cmds.listConnections(plug, s=1, d=0, p=1):
+                    print(f'  {label:5s} {attr:7s} (driven by a connection, '
+                          f'skipped)')
+                    continue
+                # offset is a DISTANCE, not an angle: driving it to the
+                # same number as twist/roll slides the chain by that many
+                # scene units per joint, which says nothing extra about
+                # whether it is wired.
+                value = offset_amount if attr == 'offset' else amount
+                moved, rotated, rel = _drive(plug, value)
+                # Wired = the chain changed AT ALL, by translation or by
+                # rotation. Requiring translation hides spline-IK twist,
+                # which rotates joints in place along the curve.
+                good = moved > 1e-4 or rotated > 1e-2
+                ok &= good
+                if rotated < 1e-2:
+                    shape = 'slide'
+                elif rel > 1.0:
+                    shape = 'ramp'
+                else:
+                    shape = 'rigid'
+                if not good:
+                    failures.append(f'{mode_name}/{label}/{attr}')
+                print(f'  {label:5s} {attr:7s} moved={moved:8.3f}  '
+                      f'rot={rotated:7.2f}  relTwist={rel:6.2f} '
+                      f'({shape:5s})  {"OK" if good else "x NOT WIRED"}')
+        print()
+
+    if has_override:
+        cmds.setAttr(override, saved_ovr)
+
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
+    _eval()
+
+    if failures:
+        print(f'  not wired: {", ".join(failures)}')
+    print('RESULT:', 'PASS' if ok else 'FAIL')
+    return ok
 
 
 def test_matrix_opm(rigname='tail', count=0):
