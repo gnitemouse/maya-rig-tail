@@ -353,6 +353,15 @@ not an undo:** animation on the controls goes with the controls. Aborts
 rather than deleting the root group when a mesh or joint could not be moved
 out of it first. Verified by `rt_test.test_remove_rig()`.
 
+#### `cleanup_dangling_curveinfo()`
+Delete curveInfo nodes with no input curve. `cmds.ikHandle` creates one on
+the temporary curve it makes for every spline build, and that curve is
+thrown away immediately — leaving a node that can only print
+`curveInfoNN (Curve Info): No valid NURBS curve`, twice per evaluation,
+forever. A curveInfo with no input curve is dead by construction, which is
+what makes the scene-wide sweep safe (same rule as
+`cleanup_dangling_unit_conversions`).
+
 #### `unique_path(node)`
 One full DAG path for a name, or None when the name is missing or matches
 more than one node. The teardown addresses everything by full path: in a
@@ -738,6 +747,14 @@ Disconnect all connections from/to a node.
 for the whole list (so a delete still cannot cascade through a connection
 web), then a single `cmds.delete`. Teardown deletes utility nodes by the
 thousand and per-node `remove` spent ~8 commands on each.
+
+#### `curveinfo_consumers(nodes)`
+The curveInfo nodes fed by a list of nodes, **including through their
+shapes** — a curve feeds a curveInfo from `curveShape.worldSpace[0]`, so a
+transform-only query misses it and deleting the curve leaves a curveInfo
+with no input, which then prints `No valid NURBS curve` on every evaluation
+for the rest of the session. `remove`/`remove_nodes` take these down with
+the curve.
 
 #### `existing(nodes)`
 The nodes in a list that exist, in one `cmds.ls` instead of an `objExists`

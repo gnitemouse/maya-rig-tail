@@ -318,13 +318,44 @@ def remove(node):
         node (str): Node to delete
     """
     if cmds.objExists(node):
-        conns = cmds.listConnections(node, s=0, d=1) or []
-        for c in conns:
-            if cmds.nodeType(c) == 'curveInfo':
-                cmds.delete(c)
+        consumers = curveinfo_consumers([node])
+        if consumers:
+            cmds.delete(consumers)
         if 'Constraint' not in cmds.objectType(node):
             disconnect_all(node)
         cmds.delete(node)
+
+
+def curveinfo_consumers(nodes):
+    """
+    The curveInfo nodes fed by a list of nodes, INCLUDING through their
+    shapes.
+
+    A curve's connection to a curveInfo is 'curveShape.worldSpace[0] ->
+    curveInfo.inputCurve', so it hangs off the SHAPE. Asking the transform
+    for its connections never sees it, and deleting the transform therefore
+    left a curveInfo with no input behind - which then prints
+    'curveInfoNN (Curve Info): No valid NURBS curve' on every evaluation for
+    the rest of the session. cmds.ikHandle creates one of these per spline
+    build (on the temporary curve it makes and this rig throws away), so
+    they accumulated one per rig part per build.
+
+    Arguments:
+        nodes (list): Nodes about to be deleted
+
+    Return:
+        list: curveInfo nodes that would be orphaned
+    """
+    nodes = [n for n in nodes if n]
+    if not nodes:
+        return []
+    # listRelatives raises on a DG node ('not a DAG object'), and this is
+    # called with lists of utility nodes, so ask which are DAG first
+    dag = cmds.ls(nodes, dag=True) or []
+    shapes = (cmds.listRelatives(dag, s=True, f=True) or []) if dag else []
+    return list(dict.fromkeys(
+        cmds.listConnections(nodes + shapes, s=False, d=True,
+                             type='curveInfo') or []))
 
 
 def remove_nodes(nodes):
@@ -355,9 +386,7 @@ def remove_nodes(nodes):
         return 0
 
     # Downstream curveInfo nodes go too, as remove() does
-    extra = cmds.listConnections(nodes, s=False, d=True,
-                                 type='curveInfo') or []
-    targets = list(dict.fromkeys(nodes + extra))
+    targets = list(dict.fromkeys(nodes + curveinfo_consumers(nodes)))
     constraints = set(cmds.ls(targets, type='constraint') or [])
     disconnect_nodes([n for n in targets if n not in constraints],
                      verified=True)
@@ -692,14 +721,26 @@ def break_connection(plug):
     # usual case) the setAttr was a command spent to change nothing
     node, _, attr = plug.partition('.')
     set_channel_flags(node, [attr], l=False, compound=True)
+    if not cmds.connectionInfo(plug, id=True):
+        return
+    plug = cmds.connectionInfo(plug, ged=True)
+
+    # -icn takes the driver node down with the connection (an animCurve, a
+    # conversion node), which is what keeps rebuilds from accumulating
+    # orphans. It cannot touch a read-only destination though - a plug on a
+    # referenced node - and the cmds.ls(-ro) that used to test for that
+    # cost 0.8ms a call, thousands of times a build (7.9% of a profiled
+    # build was in ls). So attempt the delete and check the result: a plug
+    # still connected afterwards gets a plain disconnect, which needs no
+    # up-front test and costs two cheap connectionInfo queries.
+    try:
+        cmds.delete(plug, icn=True)
+    except RuntimeError as err:
+        logger.trace(f"delete -icn on '{plug}' refused: {err}")
     if cmds.connectionInfo(plug, id=True):
-        plug = cmds.connectionInfo(plug, ged=True)
-        readonly = cmds.ls(plug, ro=True)
-        if readonly:
-            source = cmds.connectionInfo(plug, sfd=True)
+        source = cmds.connectionInfo(plug, sfd=True)
+        if source:
             cmds.disconnectAttr(source, plug)
-        else:
-            cmds.delete(plug, icn=True)
 
 
 # TRANSFORM OPERATIONS =================================================
@@ -887,7 +928,10 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
             opm(source)
             return
         child_uids = cmds.ls(src_children, uuid=True)
-        tmp_grp = cmds.group(em=True, n=f"{source}_tmp")
+        # createNode, not cmds.group(em=True): the same empty transform at
+        # the world origin for a sixth of the cost (0.13ms against 0.76ms),
+        # and this runs per node in the maintain-offset path
+        tmp_grp = cmds.createNode('transform', n=f"{source}_tmp", ss=1)
         apply_transform(tmp_grp, target, pos, rot, scl)
 
         for uid in child_uids:

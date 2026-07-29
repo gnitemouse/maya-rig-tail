@@ -32,6 +32,7 @@ Usage:
 import contextlib
 import math
 import re
+import sys
 import time
 
 import maya.cmds as cmds
@@ -657,7 +658,7 @@ def test_remove_rig(tolerance=0.001):
 
 
 @contextlib.contextmanager
-def profile_cmds(top=25, threshold=0.05):
+def profile_cmds(top=25, threshold=0.05, callers_for=()):
     '''
     Count and time every maya.cmds call made inside the block.
 
@@ -671,6 +672,13 @@ def profile_cmds(top=25, threshold=0.05):
     matter. Do not read the totals as absolute build cost; read them
     against each other.
 
+    A command's total says WHAT is expensive, never WHERE it is issued from,
+    and the answer is rarely the obvious call site: 'ls' turned out to be
+    one line inside break_connection, not the pattern scans in cleanup. Name
+    commands in callers_for to get a per-call-site breakdown for them:
+
+        rt_test.profile_build(callers_for=['ls', 'delete', 'setAttr'])
+
     Usage:
         with rt_test.profile_cmds():
             rig_tail.rig_tail_multiple(root='squid')
@@ -679,25 +687,44 @@ def profile_cmds(top=25, threshold=0.05):
         top (int): How many commands to list, slowest first.
         threshold (float): Also list any command whose mean call time
             exceeds this many milliseconds, however rarely it is called.
+        callers_for (list): Commands to also break down by call site.
+            Costs an extra frame lookup per call of those commands only.
 
     Yield:
         dict: name -> [calls, seconds], live during the block.
     '''
     stats = {}
     originals = {}
+    callers = {}
+    watched = set(callers_for)
 
     def wrap(name, func):
+        watch = name in watched
+
         def profiled(*args, **kwargs):
             started = time.perf_counter()
             try:
                 return func(*args, **kwargs)
             finally:
+                elapsed = time.perf_counter() - started
                 entry = stats.get(name)
                 if entry is None:
-                    stats[name] = [1, time.perf_counter() - started]
+                    stats[name] = [1, elapsed]
                 else:
                     entry[0] += 1
-                    entry[1] += time.perf_counter() - started
+                    entry[1] += elapsed
+                if watch:
+                    frame = sys._getframe(1)
+                    path = frame.f_code.co_filename.replace('\\', '/')
+                    site = (f'{path.rsplit("/", 1)[-1]}:{frame.f_lineno} '
+                            f'{frame.f_code.co_name}')
+                    seen = callers.setdefault(name, {})
+                    hit = seen.get(site)
+                    if hit is None:
+                        seen[site] = [1, elapsed]
+                    else:
+                        hit[0] += 1
+                        hit[1] += elapsed
         return profiled
 
     for name in dir(cmds):
@@ -715,19 +742,22 @@ def profile_cmds(top=25, threshold=0.05):
         for name, func in originals.items():
             setattr(cmds, name, func)
         wall = time.perf_counter() - wall
-        report_cmds(stats, wall, top=top, threshold=threshold)
+        report_cmds(stats, wall, top=top, threshold=threshold,
+                    callers=callers)
 
 
-def report_cmds(stats, wall, top=25, threshold=0.05):
+def report_cmds(stats, wall, top=25, threshold=0.05, callers=None):
     '''
     Print a profile_cmds table: the slowest commands, then the ones with
-    the worst mean call time, then the totals.
+    the worst mean call time, then the totals, then any per-call-site
+    breakdown that was collected.
 
     Arguments:
         stats (dict): name -> [calls, seconds] from profile_cmds
         wall (float): Wall-clock seconds the profiled block took
         top (int): How many commands to list, slowest first
         threshold (float): Mean call time (ms) worth calling out
+        callers (dict): name -> {call site: [calls, seconds]}
     '''
     calls = sum(c for c, _ in stats.values())
     in_cmds = sum(s for _, s in stats.values())
@@ -750,10 +780,17 @@ def report_cmds(stats, wall, top=25, threshold=0.05):
     print('-' * 72)
     print(f'  {calls} commands, {in_cmds / max(calls, 1) * 1000000:.0f}us '
           f'mean, {in_cmds / wall * 100:.0f}% of wall time inside commands')
-    print('=' * 72 + '\n')
+    print('=' * 72)
+    for name, sites in (callers or {}).items():
+        print(f'\n  WHERE {name} IS CALLED FROM')
+        print('  ' + '-' * 68)
+        for site, (count, secs) in sorted(sites.items(),
+                                          key=lambda kv: -kv[1][1])[:10]:
+            print(f'  {site:<48}{count:>8}{secs:>9.2f}s')
+    print()
 
 
-def profile_build(root=None, fk=None, ik=None):
+def profile_build(root=None, fk=None, ik=None, callers_for=()):
     '''
     Run a full rebuild under profile_cmds and print the command profile.
 
@@ -764,11 +801,14 @@ def profile_build(root=None, fk=None, ik=None):
     Usage:
         import rig_tail_test as rt_test
         rt_test.profile_build()
+        rt_test.profile_build(callers_for=['ls', 'delete'])
 
     Arguments:
         root (str): Rig root; defaults to the scene's existing root group.
         fk (bool): Build FK; defaults to the BUILD_FK setting.
         ik (bool): Build IK; defaults to the BUILD_IK setting.
+        callers_for (list): Commands to break down by call site, for when
+            the totals say what is expensive but not which line issues it.
 
     Return:
         dict: name -> [calls, seconds] for every command the build used.
@@ -779,7 +819,7 @@ def profile_build(root=None, fk=None, ik=None):
     root = root or rt_cln.find_existing_root_grp() or rt_cst.ROOT
     fk = rt_cst.BUILD_FK if fk is None else fk
     ik = rt_cst.BUILD_IK if ik is None else ik
-    with profile_cmds() as stats:
+    with profile_cmds(callers_for=callers_for) as stats:
         rig_tail.rig_tail_multiple(root=root, fk=fk, ik=ik)
     return stats
 

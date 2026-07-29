@@ -27,6 +27,7 @@ Functions:
     cleanup_anim_effects: remove one part's FX expression/node network
     excluded_sdk_curves: SDK curves the scene-wide sweep must spare
     cleanup_dangling_unit_conversions: sweep orphaned conversion nodes
+    cleanup_dangling_curveinfo: sweep curveInfo nodes with no input curve
     restore_fk_joint_chain: unwrap FK SDK stack back to a flat chain
     fk_sdk_structure_is_current: is the FK SDK layout the current one
     setup_rig: create root/cog and the rig hierarchy groups
@@ -146,6 +147,9 @@ def cleanup_rig(fk, ik):
     if _CONVERSION_SWEEP_PENDING:
         with rt_mya.timed('cleanup.conversions'):
             cleanup_dangling_unit_conversions()
+            # Same sweep, for the curveInfo nodes cmds.ikHandle leaves on
+            # the temporary curve it makes for every spline build
+            cleanup_dangling_curveinfo()
 
     # Main controller dashboard: remove stale override conditions and,
     # when the dashboard is off, every dashboard attribute. Runs after
@@ -285,6 +289,7 @@ def remove_rig():
     # 5. Sweep the DG leftovers
     swept = _sweep_rig_leftovers(parts)
     cleanup_dangling_unit_conversions()
+    swept += cleanup_dangling_curveinfo()
     if swept:
         logger.debug(f'Swept {swept} leftover rig node(s)')
 
@@ -897,15 +902,63 @@ def cleanup_dangling_unit_conversions():
 
     conversions = cmds.ls(type=['unitConversion', 'timeToUnitConversion',
                                 'unitToTimeConversion']) or []
-    for uc in conversions:
-        # Deleting one conversion node can cascade-delete others still in
-        # this pre-captured list; skip any that Maya already removed so the
-        # .input/.output query below can't raise 'No object matches name'.
-        if not cmds.objExists(uc):
-            continue
-        if not cmds.listConnections(f'{uc}.input', s=True, d=False) \
-                or not cmds.listConnections(f'{uc}.output', s=False, d=True):
-            cmds.delete(uc)
+    if not conversions:
+        return
+
+    # Two queries for the whole scene's conversion nodes, not two per node:
+    # cmds.listConnections takes the list, and with connections=True each
+    # answer names the plug it came from, so the owning node reads straight
+    # off it. The per-node version was ~1.4s of a profiled build.
+    def _wired(source, suffix):
+        conns = cmds.listConnections(conversions, s=source, d=not source,
+                                     p=True, c=True) or []
+        return {conns[i].rsplit('.', 1)[0]
+                for i in range(0, len(conns), 2)
+                if conns[i].endswith(suffix)}
+
+    has_input = _wired(True, '.input')
+    has_output = _wired(False, '.output')
+    dangling = [uc for uc in conversions
+                if uc not in has_input or uc not in has_output]
+    if dangling:
+        cmds.delete(dangling)
+
+
+def cleanup_dangling_curveinfo():
+    '''
+    Sweep curveInfo nodes with no input curve.
+
+    A curveInfo whose curve has been deleted cannot do anything except
+    print 'curveInfoNN (Curve Info): No valid NURBS curve' every time the
+    graph evaluates, twice per evaluation, forever. They come from
+    cmds.ikHandle, which creates a curveInfo on the temporary curve it
+    makes for a spline solver - one per spline build, and the temporary
+    curve is thrown away immediately afterwards.
+
+    rt_mya.remove/remove_nodes now take a curve's curveInfo down with it
+    (rt_mya.curveinfo_consumers), so new ones are not created. This clears
+    the ones a previous build already left in the scene.
+
+    A curveInfo with no input curve is dead by construction, whoever made
+    it, which is what makes a scene-wide sweep safe here - the same rule
+    cleanup_dangling_unit_conversions uses.
+
+    Return
+        int: nodes deleted
+    '''
+    curveinfos = cmds.ls(type='curveInfo') or []
+    if not curveinfos:
+        return 0
+    conns = cmds.listConnections(curveinfos, s=True, d=False,
+                                 p=True, c=True) or []
+    fed = {conns[i].rsplit('.', 1)[0] for i in range(0, len(conns), 2)
+           if conns[i].endswith('.inputCurve')}
+    dead = [c for c in curveinfos if c not in fed]
+    if dead:
+        logger.debug(f'Deleting {len(dead)} curveInfo node(s) with no '
+                     f'input curve: {", ".join(dead[:5])}')
+        cmds.delete(dead)
+    return len(dead)
 
 
 # SETUP ================================================================
