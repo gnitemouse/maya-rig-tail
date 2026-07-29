@@ -529,14 +529,21 @@ def test_remove_rig(tolerance=0.001):
     Return:
         bool: True when every check passed.
     '''
+    import rig_tail_cache as rt_cache
     import rig_tail_cleanup as rt_cln
     import rig_tail_maya as rt_mya
 
-    parts = list(rt_cst.RIGPARTS)
+    # The included roster only: an excluded part is left built on purpose,
+    # so it must NOT be checked for removal (see rt_cln.remove_rig)
+    parts = rt_cache.active_parts()
+    kept = [p for p in rt_cst.RIGPARTS if p not in parts]
     root_grp = rt_cln.find_existing_root_grp()
     print('\n--- REMOVE RIG ---')
     if not root_grp:
         print('  SKIP: no rig root group in this scene, nothing to remove')
+        return False
+    if not parts:
+        print('  SKIP: every rig part is excluded, nothing to remove')
         return False
 
     # BEFORE: skeleton pose, and the skin on every mesh the parts own
@@ -556,7 +563,10 @@ def test_remove_rig(tolerance=0.001):
                 influences = cmds.skinCluster(skin, q=True, inf=True) or []
                 before_skin[geo.split('|')[-1]] = len(influences)
     print(f'  before: {len(before_jnts)} BN joint(s), '
-          f'{len(before_skin)} skinned mesh(es) under {len(parts)} part(s)')
+          f'{len(before_skin)} skinned mesh(es) under {len(parts)} '
+          f'included part(s)'
+          + (f'; {len(kept)} excluded part(s) must survive: '
+             f'{", ".join(kept)}' if kept else ''))
 
     removed = rt_cln.remove_rig()
 
@@ -564,8 +574,17 @@ def test_remove_rig(tolerance=0.001):
     if not removed:
         fails.append('remove_rig() returned False')
 
-    # 1. Root group gone
-    if cmds.objExists(root_grp):
+    # 1. Root group gone - unless parts were excluded, in which case their
+    # rig is still built and the hierarchy has to stay standing for it
+    if kept:
+        if not cmds.objExists(root_grp):
+            fails.append(f"rig root group '{root_grp}' was deleted, but "
+                         f"{len(kept)} excluded part(s) are still built in "
+                         f"it: {', '.join(kept)}")
+        for part in kept:
+            if not cmds.ls(f'*{part}*{rt_cst.CTRL}') :
+                fails.append(f"excluded part '{part}' lost its controls")
+    elif cmds.objExists(root_grp):
         fails.append(f"rig root group '{root_grp}' still exists")
 
     # 2 + 3. Skeleton kept, in place, and plain again

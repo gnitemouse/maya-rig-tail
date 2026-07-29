@@ -345,7 +345,10 @@ Light teardown: break connections only, keep nodes for reuse.
 
 #### `remove_rig()`
 Strip the rig back to bare skeleton + geometry — the reverse of a build,
-for handing a scene on or starting over. Keeps the BN joints in their
+for handing a scene on or starting over. Scoped to the **Included** rig
+parts, the same roster the builder works on: an Excluded part is left built
+and untouched, and when anything is excluded the rig hierarchy stays
+standing (their controls and joints live in it). Keeps the BN joints in their
 current pose (as plain joints) with the geometry still bound to them;
 removes controls, curves, clusters, ikHandles, FX and utility networks,
 the FK/IK duplicate chains and the whole rig hierarchy. **Destructive and

@@ -43,6 +43,7 @@ Functions:
     rename_components: apply legacy node-name migrations
 '''
 
+import fnmatch
 import re
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
@@ -66,6 +67,15 @@ logger = logger_setup(__name__)
 # immediately, so the helper is safe to call on its own.
 _DEFER_CONVERSION_SWEEP = False
 _CONVERSION_SWEEP_PENDING = False
+
+# The utility node types the build creates and a teardown deletes. Used as
+# a TYPE filter for cmds.ls (a DG lookup) and as the name suffixes the
+# nodes carry, which is how one scan replaces a wildcard pattern per type
+# per rig-part prefix - see cleanup_rigname.
+UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
+                      'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
+                      'clamp', 'setRange', 'choice', 'curveInfo',
+                      'pointOnCurveInfo']
 
 
 # CLEANUP ==============================================================
@@ -123,6 +133,12 @@ def cleanup_rig(fk, ik):
     try:
         cleanup_dangling_unit_conversions()
 
+        # One typed scan of the scene's utility nodes for the whole
+        # teardown, shared by every part (see cleanup_rigname). Nodes
+        # deleted for an earlier part are filtered out downstream by
+        # rt_mya.remove_nodes, and nothing new is created during cleanup.
+        utility_nodes = cmds.ls(type=UTILITY_NODE_TYPES) or []
+
         for rigname in rt_cache.active_parts():
             # Validate cache
             joints_changed = rt_cache.validate_cache_joints(rigname)
@@ -138,7 +154,8 @@ def cleanup_rig(fk, ik):
             # recreates only what was asked for.
             if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
                 with rt_mya.timed('cleanup.teardown_full'):
-                    cleanup_rigname(rigname, fk=True, ik=True)
+                    cleanup_rigname(rigname, fk=True, ik=True,
+                                    utility_nodes=utility_nodes)
             else:
                 with rt_mya.timed('cleanup.teardown_light'):
                     cleanup_connections(rigname, fk, ik)
@@ -169,6 +186,12 @@ def remove_rig():
     geometry, still bound to them. Removed: controls, curves, clusters,
     ikHandles, FX and utility networks, the duplicated FK/IK chains, and
     the whole rig group hierarchy including root and cog.
+
+    Scoped to the INCLUDED rig parts (rig_tail_cache.active_parts), the
+    same roster the builder works on. An excluded part is one the build
+    leaves alone, so a removal takes nothing of it either. When anything is
+    excluded this is a PARTIAL removal and the rig hierarchy STAYS - the
+    excluded parts' controls and joints live inside it.
 
     Order matters, and each step exists for a reason:
 
@@ -214,7 +237,19 @@ def remove_rig():
     rt_con.clear_control_cache()
     root_grp = unique_path(find_existing_root_grp()
                            or rt_nam.fstr('', rt_cst.ROOT_GRP))
-    parts = list(rt_cst.RIGPARTS)
+    # Only the INCLUDED parts, the same roster the build works on
+    # (rig_tail_cache.active_parts): an excluded part is one the builder
+    # leaves alone, and removing what it never built is not this action's
+    # job. With anything excluded this becomes a PARTIAL removal - see
+    # step 4, which then has to leave the hierarchy standing.
+    parts = rt_cache.active_parts()
+    kept = [p for p in rt_cst.RIGPARTS if p not in parts]
+    if kept:
+        logger.info(f'Removing {len(parts)} included part(s); leaving '
+                    f'{len(kept)} excluded part(s) built: {", ".join(kept)}')
+    if not parts:
+        logger.warning('Every rig part is excluded; nothing to remove')
+        return False
 
     # 1. Capture the posed skeleton while the rig still drives it, keyed by
     # full path so step 3 cannot re-resolve to a different node
@@ -265,13 +300,24 @@ def remove_rig():
             cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
     # Leave the skeleton keyable and visible, as the Setup phase does.
     # Outside the part loop: it walks the whole BN cache on every call, so
-    # calling it per part re-did the same work once per rig part.
-    rt_mya.finalize_joint_channels(True, visibility=1,
-                                   joint_dicts=[rt_cst.JOINTS_BN])
+    # calling it per part re-did the same work once per rig part. Scoped to
+    # the parts being removed - an excluded part's joints are still driven
+    # by its rig and must stay non-keyable.
+    rt_mya.finalize_joint_channels(
+        True, visibility=1,
+        joint_dicts=[{p: rt_cst.JOINTS_BN[p] for p in parts
+                      if p in rt_cst.JOINTS_BN}])
 
-    # 4. Rescue skeleton and geometry, then drop the hierarchy
+    # 4. Rescue skeleton and geometry, then drop the hierarchy - but only
+    # when the WHOLE roster went. With parts excluded, their rig is still
+    # live and lives in this hierarchy: their controls hang under the root
+    # group, their joints under the skeleton group, so deleting it would
+    # take the rig this action was told to leave alone.
     removed = False
-    if root_grp and cmds.objExists(root_grp):
+    if kept:
+        logger.debug(f"Kept '{root_grp}': excluded parts are still built")
+        removed = True
+    elif root_grp and cmds.objExists(root_grp):
         rescued, stuck = _rescue_from_root(root_grp)
         logger.debug(f"Moved {rescued} node(s) out of '{root_grp}'")
         if stuck:
@@ -293,21 +339,31 @@ def remove_rig():
     if swept:
         logger.debug(f'Swept {swept} leftover rig node(s)')
 
-    # 6. Forget the build. LAST_BUILD keeps its documented key set -
-    # rig_tail_cache indexes 'rigparts'/'root'/... directly, so replacing
-    # it with an empty dict would KeyError on the next build.
+    # 6. Forget the build, for the parts that went. LAST_BUILD keeps its
+    # documented key set - rig_tail_cache indexes 'rigparts'/'root'/...
+    # directly, so replacing it with an empty dict would KeyError on the
+    # next build.
     for rigname in parts:
         for jdict in (rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
             jdict.pop(rigname, None)
-    rt_cst.LAST_BUILD.update({
-        'rigparts': [],
-        'root': '',
-        'joints_pos': {},
-        'num_ctrl_fk': None,
-        'num_ctrl_ik': None,
-        'indiv_fk': None,
-        'build_mode': None,
-    })
+        (rt_cst.LAST_BUILD.get('joints_pos') or {}).pop(rigname, None)
+    if kept:
+        # A partial removal: the excluded parts are still built, so their
+        # build record has to survive or the next build would treat them as
+        # new and rebuild what it was told to leave alone
+        rt_cst.LAST_BUILD['rigparts'] = [
+            p for p in rt_cst.LAST_BUILD.get('rigparts') or []
+            if p not in parts]
+    else:
+        rt_cst.LAST_BUILD.update({
+            'rigparts': [],
+            'root': '',
+            'joints_pos': {},
+            'num_ctrl_fk': None,
+            'num_ctrl_ik': None,
+            'indiv_fk': None,
+            'build_mode': None,
+        })
 
     logger.info(f'Remove Rig complete ({len(poses)} skeleton joints kept)')
     return removed
@@ -582,10 +638,18 @@ def fk_sdk_structure_is_current(rigname):
     return True
 
 
-def cleanup_rigname(rigname, fk, ik):
+def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     '''
     Cleanup components for a single RIGPART (rigname).
     Can be called independently for targeted cleanup.
+
+    Arguments
+        rigname (str): Name of rig component
+        fk (bool): Clean up FK components
+        ik (bool): Clean up IK components
+        utility_nodes (list): Every utility node in the scene, when the
+            caller has already listed them (cleanup_rig does, once for the
+            whole teardown). Listed here when not given.
     '''
     logger.debug(f"{rigname}: Cleanup rig part")
     types = ['', rt_cst.TYPE_BN, rt_cst.TYPE_IK, rt_cst.TYPE_FK, rt_cst.TYPE_FX]
@@ -663,18 +727,26 @@ def cleanup_rigname(rigname, fk, ik):
     # rig part; a roster of tails multiplied that again. Names can match
     # more than one pattern, so dedupe (dict keeps first-seen order).
     logger.trace(f"{rigname}: Cleaning up utility nodes")
-    node_types = ['condition', 'multiplyDivide', 'plusMinusAverage',
-                  'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
-                  'clamp', 'setRange', 'choice', 'curveInfo',
-                  'pointOnCurveInfo']
-    node_patterns = [f'{typ}_{rigname}_*{node_typ}'
-                     for typ in types for node_typ in node_types]
-    # Guard the unpack: cmds.ls() with no pattern returns the whole scene
-    found = cmds.ls(*node_patterns) if node_patterns else []
+    # ONE TYPED scan, filtered in Python. A name pattern makes cmds.ls walk
+    # the whole scene, and passing 55 of them in one call does not change
+    # that - it was measured at 195ms per rig part, 2.3s of a 32s build,
+    # the single most expensive thing in cleanup. Listing by TYPE is a DG
+    # lookup instead, and the name test it replaces costs nothing in
+    # Python. cleanup_rig hands the same scan to every part.
+    if utility_nodes is None:
+        utility_nodes = cmds.ls(type=UTILITY_NODE_TYPES) or []
+    # Same match as '{typ}_{rigname}_*{node_typ}': the empty type is
+    # dropped, since it only ever produced '_{rigname}_...' with a leading
+    # underscore, which matches nothing
+    prefixes = tuple(f'{typ}_{rigname}_' for typ in types if typ)
+    suffixes = tuple(UTILITY_NODE_TYPES)
+    found = [n for n in utility_nodes
+             if n.split('|')[-1].startswith(prefixes)
+             and n.endswith(suffixes)]
     # One disconnect pass and one delete for the lot (rt_mya.remove_nodes):
     # the FK falloff and curve-info networks are hundreds of nodes per rig
     # part, and per-node remove() spent ~8 commands on each
-    rt_mya.remove_nodes(dict.fromkeys(found))
+    rt_mya.remove_nodes(found)
 
     # 7. Delete curves, clusters, ikHandles
     logger.trace(f"{rigname}: Cleaning up curves and clusters")
@@ -711,14 +783,21 @@ def cleanup_rigname(rigname, fk, ik):
     basectrl_name = basectrl.rsplit(rt_cst.CTRL, 1)[0]
     rt_mya.remove(f'{basectrl_name}{rt_cst.VIS}{rt_cst.COND}')
 
-    # Clean up old items (one scene scan for every pattern, as above)
+    # Clean up old items. Only exact names go to cmds.ls - a name it can
+    # look up costs nothing, a wildcard makes it walk the scene - so the
+    # one wildcard pattern is matched against the typed scan instead
+    # (switch conditions are conditions, so they are already in it).
     patterns = list()
     for typ in types:
         patterns.extend([
             f'{typ}_{rigname}_revik_{rt_cst.NUM_CTRL_IK:02d}{rt_cst.CTRL}{rt_cst.GRP}',
-            f'{typ}_{rigname}_switch_*{rt_cst.VIS}{rt_cst.COND}',
             f'{typ}_{rigname}_measure_scale{rt_cst.GRP}'
         ])
+    switch_cond = tuple(f'{typ}_{rigname}_switch_' for typ in types if typ)
+    switch_end = f'{rt_cst.VIS}{rt_cst.COND}'
+    patterns.extend(n for n in utility_nodes
+                    if n.split('|')[-1].startswith(switch_cond)
+                    and n.endswith(switch_end))
     # Guard the unpack: cmds.ls() with no pattern returns the WHOLE scene,
     # and this one feeds straight into cmds.delete
     nodes = cmds.ls(*patterns) if patterns else []
@@ -826,7 +905,16 @@ def cleanup_anim_effects(rigname, fk, ik):
     # "expressions first" rule implicitly; a single ls returns scene order
     # instead, so sort on node type - which states the rule outright and
     # holds even if an expression matches one of the later patterns.
-    nodes = list(dict.fromkeys(cmds.ls(*node_patterns) or []))
+    # Two scene patterns instead of twelve. Every pattern above starts with
+    # '{rigname}_' or '{typ}_{rigname}_', so those two are a superset; the
+    # twelve are then matched in Python, where a name test is free. A
+    # pattern makes cmds.ls walk the whole scene, and twelve of them cost
+    # 36ms per rig part (see cleanup_rigname, which had the same problem
+    # five times over).
+    candidates = cmds.ls(f'{rigname}_*', f'{typ}_{rigname}_*') or []
+    nodes = [n for n in dict.fromkeys(candidates)
+             if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
+                    for p in node_patterns)]
     # Two batches rather than a node at a time, expressions first: within a
     # batch everything is disconnected before anything is deleted, so the
     # cascade the ordering guards against cannot happen either way

@@ -828,9 +828,31 @@ class RigTailUI(QtWidgets.QDialog):
                 'No built rig found in this scene.')
             return
 
+        # Removal follows the Include/Exclude roster, so say what it will
+        # actually take before asking - the answer differs from "the rig"
+        # whenever anything is excluded
+        import rig_tail_cache as rt_cache
+        parts = rt_cache.active_parts()
+        kept = [p for p in rt_cst.RIGPARTS if p not in parts]
+        if not parts:
+            QtWidgets.QMessageBox.information(self, 'Remove Rig',
+                'Every rig part is Excluded, so there is nothing to remove.\n'
+                'Include the parts you want removed and try again.')
+            return
+        scope = (f"Remove {len(parts)} included rig part(s):\n"
+                 f"{', '.join(parts)}\n\n")
+        if kept:
+            scope += (f"{len(kept)} Excluded part(s) are left built and "
+                      f"untouched:\n{', '.join(kept)}\n\n"
+                      f"The rig hierarchy '{root_grp}' stays, because their "
+                      f"controls and joints live in it.\n\n")
+        else:
+            scope += (f"The whole rig hierarchy '{root_grp}' goes with "
+                      f"them.\n\n")
+
         answer = QtWidgets.QMessageBox.warning(
             self, 'Remove Rig',
-            f"Delete the rig under '{root_grp}'?\n\n"
+            scope +
             'Controls, curves, clusters, FX networks and the FK/IK joint '
             'chains are deleted, along with any animation on them.\n\n'
             'The BN skeleton is kept in its current pose and the geometry '
