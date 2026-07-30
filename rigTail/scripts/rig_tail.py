@@ -15,11 +15,12 @@ switches, matrix network, stretch, FX, bind geometry). The optional
 Setup phase (rig_tail_setup) runs separately, BEFORE a build.
 
 Run in Maya Script Editor (Python):
-import importlib as il
-import rig_tail
-il.reload(rig_tail)
-rig_tail.rig_tail_single('tail', fk=True, ik=True)
-rig_tail.main()
+# Build a single tail from a single joint chain
+rig_tail.rig_tail_single(root='tail', fk=True, ik=True)
+# Build multiple tails with each part defined in rig_tail_constants.RIGPARTS
+rig_tail.rig_tail_multiple(root='tail', fk=True, ik=True)
+rig_tail.main()         # or launch the Builder UI
+
 
 Rig Hierarchy:
 
@@ -59,13 +60,7 @@ Rig component {rigname}s can be changed under RIGPARTS in rig_tail_constants.py
 import maya.cmds as cmds
 import importlib as il
 
-# logger_config is reloaded before it is imported from, so editing it does
-# not need a Maya restart. Every other module does 'from logger_config
-# import ...' at its own module level and reads whatever is cached, so a
-# stale copy here would make all of them import names that no longer
-# match the file on disk.
 import logger_config
-il.reload(logger_config)
 from logger_config import logger_setup, abort_build
 
 import rig_tail_constants as rt_cst
@@ -87,8 +82,6 @@ import rig_tail_cleanup as rt_cln
 # rig_tail_setup: pre-build Setup phase, orient/mirror (former rig_tail_orient)
 import rig_tail_setup as rt_set
 import rig_tail_restpose as rt_rest
-import rig_tail_ui as rt_ui
-import rig_tail_test as rt_test
 
 # rig_tail_constants is deliberately NOT reloaded. It is the only module
 # holding session state: the settings edited in the UI, the loaded config
@@ -113,8 +106,6 @@ il.reload(rt_con)
 il.reload(rt_cln)
 il.reload(rt_set)
 il.reload(rt_rest)
-il.reload(rt_ui)
-il.reload(rt_test)
 
 logger = logger_setup(__name__)
 
@@ -366,12 +357,14 @@ def main():
     '''
     Launch the Tail Rig Builder UI (the build phase).
     '''
-    return rt_ui.show_ui()
+    import rig_tail_build_ui as rt_build_ui
+    il.reload(rt_build_ui)
+    return rt_build_ui.show_ui()
 
 def main_setup():
     '''
     Launch the Tail Rig Setup UI (skeleton orient / mirror, pre-build).
     '''
-    import rig_tail_setup_ui as rt_setui
-    il.reload(rt_setui)
-    return rt_setui.show_ui()
+    import rig_tail_setup_ui as rt_setup_ui
+    il.reload(rt_setup_ui)
+    return rt_setup_ui.show_ui()

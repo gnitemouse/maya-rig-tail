@@ -1,5 +1,5 @@
 '''
-# rig_tail_ui.py
+# rig_tail_build_ui.py
 author: Daisy Jane @gnitemouse
 
 PySide2 UI for Rig Tail
@@ -1646,7 +1646,7 @@ def show_ui():
     What does reset them is reloading rig_tail_constants, since that
     re-executes the module and runs load_config() again. Reopening with
 
-        rig_tail.main()          (or rig_tail_ui.show_ui())
+        rig_tail.main()          (or rig_tail_build_ui.show_ui())
 
     keeps the session's settings; the usual development snippet
 

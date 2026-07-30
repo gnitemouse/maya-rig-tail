@@ -2,7 +2,7 @@
 rig_tail_chain_spacing.py
 author: Daisy Jane @gnitemouse
 
-Pure-math joint spacing for Tail Chain Builder.
+Pure-math joint spacing for Joint Chain Builder.
 No Maya imports — testable in plain Python.
 
 Shape and distribution are separate:
@@ -33,7 +33,14 @@ SNAP_TOL = 1e-4       # normalised-arclength window for snap-to-existing
 EPS = 1e-9
 ALPHA = 0.5           # centripetal Catmull–Rom
 K_RANGE = (0.2, 5.0)  # power exponent clamping
-R_RANGE = (0.5, 1.5)  # ratio clamping
+K_DEFAULT = 1.7       # power exponent when none is given
+# Ratio is capped at 1.0: r < 1 packs joints toward the tip and r == 1 is
+# uniform, so the whole useful range is (0, 1] and the other direction is
+# reached with invert.  The floor is NOT 0 — small r collapses the far end
+# of the chain (r = 0.7 over 30 joints ends on a segment 2e-5 of the chain
+# length), and a zero-length bone breaks aim-orient downstream in Setup.
+R_RANGE = (0.5, 1.0)  # ratio clamping
+R_DEFAULT = 0.90      # ratio when none is given
 
 
 # VECTOR HELPERS (inline, no numpy) ====================================
@@ -234,8 +241,8 @@ def distribute(mode, n, param=None, invert=False, source=None):
 
     Modes:
         uniform  — u = t
-        power    — u = t ** k          (k default 1.7, clamped to K_RANGE)
-        ratio    — geometric ratio r    (r default 0.90, clamped to R_RANGE)
+        power    — u = t ** k         (k K_DEFAULT, clamped to K_RANGE)
+        ratio    — geometric ratio r  (r R_DEFAULT, clamped to R_RANGE)
         keep     — PCHIP resample of source distribution (source required)
 
     Arguments:
@@ -257,14 +264,16 @@ def distribute(mode, n, param=None, invert=False, source=None):
         u_vals = list(t_vals)
 
     elif mode == 'power':
-        k = K_RANGE[0] if param is None else max(K_RANGE[0], min(K_RANGE[1], param))
+        k = K_DEFAULT if param is None else param
+        k = max(K_RANGE[0], min(K_RANGE[1], k))
         if abs(k - 1.0) < EPS:
             u_vals = list(t_vals)
         else:
             u_vals = [t ** k for t in t_vals]
 
     elif mode == 'ratio':
-        r = R_RANGE[0] if param is None else max(R_RANGE[0], min(R_RANGE[1], param))
+        r = R_DEFAULT if param is None else param
+        r = max(R_RANGE[0], min(R_RANGE[1], r))
         if abs(r - 1.0) < EPS:
             u_vals = list(t_vals)
         else:
@@ -454,11 +463,13 @@ def resample(source_points, n, mode, param=None, invert=False, snap=True):
             snapped_indices)
     """
     N = len(source_points)
-    if n == N:
-        # Exact no-op at unchanged count — the Catmull–Rom interpolates
-        # at its knots, so no resampling is needed.
-        return [list(p) for p in source_points], [i for i in range(N)]
-
+    # No short-circuit at n == N.  Re-spacing an existing chain WITHOUT
+    # changing its count is the tool's main job (Keep -> Uniform on 21
+    # joints), so returning the input unchanged there would make three of
+    # the four modes do nothing.  Exactness at unchanged count comes from
+    # the maths instead: Catmull-Rom and PCHIP both interpolate at their
+    # knots, so Keep at n == N evaluates back onto the original positions,
+    # and any mode re-applied to its own result is a true no-op.
     knots = catmull_rom_knots(source_points)
     table, total = arclength_table(source_points)
 

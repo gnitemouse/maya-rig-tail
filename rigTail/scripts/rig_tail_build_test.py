@@ -1,5 +1,5 @@
 '''
-# rig_tail_test.py
+# rig_tail_build_test.py
 author: Daisy Jane @gnitemouse
 
 Diagnostics for the matrix-based FX rig (per-FX composeMatrix + OPM
@@ -12,22 +12,22 @@ copy in ~/Documents/maya/scripts shadows this one, because Maya adds the
 user script directories ahead of module script directories.
 
 Usage:
-    import rig_tail_test as rt_test
-    rt_test.run_all()               # every read-only check + PASS/FAIL summary
-    rt_test.test_matrix()           # FX matrix / OPM node wiring
-    rt_test.test_local_trs()        # BN joints have identity local TRS
-    rt_test.test_fx_order()         # FX multiplies before baseLocal
-    rt_test.test_alignment()        # BN vs IK/FK world-position alignment
-    rt_test.test_matrix_opm()       # offsetParentMatrix parent-space math
-    rt_test.show_data_flow()        # per-joint data-flow diagram
-    rt_test.test_wave() / rt_test.test_curl()
-    rt_test.test_time_evaluation()  # time-varying FX across frames
-    rt_test.test_twist_roll_offset('C_fintail')        # twist/roll/offset in FK and IK (MUTATES)
-    rt_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
-    rt_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
-    rt_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
-    rt_test.test_remove_rig()                          # Remove Rig leaves a clean scene (MUTATES)
-    rt_test.profile_build()                            # which Maya command the build time goes to (MUTATES)
+    import rig_tail_build_test as rt_build_test
+    rt_build_test.run_all()               # every read-only check + PASS/FAIL summary
+    rt_build_test.test_matrix()           # FX matrix / OPM node wiring
+    rt_build_test.test_local_trs()        # BN joints have identity local TRS
+    rt_build_test.test_fx_order()         # FX multiplies before baseLocal
+    rt_build_test.test_alignment()        # BN vs IK/FK world-position alignment
+    rt_build_test.test_matrix_opm()       # offsetParentMatrix parent-space math
+    rt_build_test.show_data_flow()        # per-joint data-flow diagram
+    rt_build_test.test_wave() / rt_build_test.test_curl()
+    rt_build_test.test_time_evaluation()  # time-varying FX across frames
+    rt_build_test.test_twist_roll_offset('C_fintail')        # twist/roll/offset in FK and IK (MUTATES)
+    rt_build_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
+    rt_build_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
+    rt_build_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
+    rt_build_test.test_remove_rig()                          # Remove Rig leaves a clean scene (MUTATES)
+    rt_build_test.profile_build()                            # which Maya command the build time goes to (MUTATES)
 '''
 import contextlib
 import math
@@ -252,13 +252,13 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
     FORCE_REBUILD, RIGPARTS and ROOT are saved and restored on exit.
 
     Usage:
-        import rig_tail_test as rt_test
+        import rig_tail_build_test as rt_build_test
         # scoped to one fintail, 2 rebuilds, full-cleanup path:
-        rt_test.measure_rebuild_degradation('C_fintail')
+        rt_build_test.measure_rebuild_degradation('C_fintail')
         # fresh-session re-duplication path (re-duplicates FK/IK from BN):
-        rt_test.measure_rebuild_degradation('C_fintail', invalidate_cache=True)
+        rt_build_test.measure_rebuild_degradation('C_fintail', invalidate_cache=True)
         # measure several parts at once:
-        rt_test.measure_rebuild_degradation(['C_fintail', 'L_fintail'])
+        rt_build_test.measure_rebuild_degradation(['C_fintail', 'L_fintail'])
 
         REOPEN the scene between runs. The test degrades the part it measures,
         so a second run starts from the first run's degraded end-state, not the
@@ -391,10 +391,10 @@ def report_bend(rignames):
     degradation runs.
 
     Usage:
-        import rig_tail_test as rt_test
-        rt_test.report_bend('C_fintail')   # before
+        import rig_tail_build_test as rt_build_test
+        rt_build_test.report_bend('C_fintail')   # before
         # ... press Build once (UI), or rig_tail_multiple(...) ...
-        rt_test.report_bend('C_fintail')   # after; compare the BN number
+        rt_build_test.report_bend('C_fintail')   # after; compare the BN number
 
     Arguments:
         rignames (str or list): Part(s) to report.
@@ -428,8 +428,8 @@ def test_build_exclusion(rigname, root=None):
     RIGPARTS_EXCLUDE is restored afterwards whatever happens.
 
     Usage:
-        import rig_tail_test as rt_test
-        rt_test.test_build_exclusion('C_tail')
+        import rig_tail_build_test as rt_build_test
+        rt_build_test.test_build_exclusion('C_tail')
 
     Arguments:
         rigname (str): Part to exclude from the rebuild.
@@ -519,8 +519,8 @@ def test_remove_rig(tolerance=0.001):
          nodes or FX expressions
 
     Usage:
-        import rig_tail_test as rt_test
-        rt_test.test_remove_rig()
+        import rig_tail_build_test as rt_build_test
+        rt_build_test.test_remove_rig()
 
     Arguments:
         tolerance (float): allowed world-position drift per joint, in
@@ -696,10 +696,10 @@ def profile_cmds(top=25, threshold=0.05, callers_for=()):
     one line inside break_connection, not the pattern scans in cleanup. Name
     commands in callers_for to get a per-call-site breakdown for them:
 
-        rt_test.profile_build(callers_for=['ls', 'delete', 'setAttr'])
+        rt_build_test.profile_build(callers_for=['ls', 'delete', 'setAttr'])
 
     Usage:
-        with rt_test.profile_cmds():
+        with rt_build_test.profile_cmds():
             rig_tail.rig_tail_multiple(root='squid')
 
     Arguments:
@@ -818,9 +818,9 @@ def profile_build(root=None, fk=None, ik=None, callers_for=()):
     step lines say where, this says what.
 
     Usage:
-        import rig_tail_test as rt_test
-        rt_test.profile_build()
-        rt_test.profile_build(callers_for=['ls', 'delete'])
+        import rig_tail_build_test as rt_build_test
+        rt_build_test.profile_build()
+        rt_build_test.profile_build(callers_for=['ls', 'delete'])
 
     Arguments:
         root (str): Rig root; defaults to the scene's existing root group.
@@ -1239,7 +1239,7 @@ def test_local_trs(rigname='tail'):
         print('✅ All BN joints have identity local TRS')
     else:
         print('\n❌ Some BN joints have non-zero local TRS')
-        print('   Run: rt_test.fix_bn_local_trs(rigname) to fix')
+        print('   Run: rt_build_test.fix_bn_local_trs(rigname) to fix')
     print()
     return all_good
 

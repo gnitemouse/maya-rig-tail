@@ -1,46 +1,15 @@
 '''
-# uninstall.py -- drag-and-drop uninstaller for Rig Tail
+# uninstall.py
 author: Daisy Jane @gnitemouse
 
-Removes everything install.py added: the three shelf buttons (TailSetup,
-TailRig, TailReload) from every shelf, the rigTail.mod that registers the
-module, and the module folder itself. It also drops the module's scripts/
-and icons/ paths from the running session so nothing lingers until
-restart.
+Drag-and-Drop uninstaller for Rig Tail
 
-Because install.py can put the module in the Maya modules folder, leave
-it in a git clone, or copy it to a folder of the user's choosing, this
-does not assume a location. It finds the install three ways, in order:
+Remove Rig Tail shelf launchers, module registration, and installed files.
 
-    rigTail.install.json    the manifest install.py writes beside the
-                            .mod, naming the module folder and whether
-                            it was copied there
-    rigTail.mod             the module path Maya is registering
-    shelf buttons           the TOOL_DIR baked into their commands
+Drag this file into Maya. The installer manifest determines whether the module
+folder is safe to delete; source folders installed in place are retained.
 
-A module folder is only deleted when the manifest says the installer
-copied it there. A folder the installer merely pointed at -- a git clone
-installed with "Current (this folder)" -- is left untouched: the .mod and
-buttons go, the source stays. Deleting a copy that sits outside the Maya
-modules folder asks first.
-
-Files Windows has locked are reported rather than silently skipped, so a
-partly removed folder is never mistaken for a clean uninstall. Restart
-Maya and delete it by hand if that happens -- the shelf buttons and the
-.mod are already gone, so nothing loads it in the meantime.
-
---------------------------------------------------------------------------
-UNINSTALL (drag-and-drop)
-    Drag uninstall.py from a file browser into the Maya viewport. Works
-    immediately -- no restart.
-
-UNINSTALL (manual)
-    Delete rigTail.mod and rigTail.install.json from
-    ~/Documents/maya/modules/, delete the rigTail folder if it was copied
-    there, and remove the shelf buttons by hand.
---------------------------------------------------------------------------
-
-Compatible with Maya 2020+ (Python 3).
+Requires Maya 2020+ (Python 3).
 '''
 
 import json
@@ -52,27 +21,19 @@ import sys
 import maya.cmds as cmds
 import maya.mel as mel
 
-# Must match install.py.
 MODULE_NAME = 'rigTail'
 MOD_FILE = MODULE_NAME + '.mod'
 MANIFEST_FILE = MODULE_NAME + '.install.json'
-# 'TailManual' is the pre-1.0 label of the TailReload button; still
-# removed so uninstalling over an old install leaves nothing behind.
-SHELF_LABELS = ('TailSetup', 'TailRig', 'TailReload', 'TailManual')
+SHELF_LABELS = ('ChainBuild', 'TailSetup', 'TailBuild', 'TailReload')
 
-# TOOL_DIR as install.py bakes it into every shelf button command.
 TOOL_DIR_RE = re.compile(r'^TOOL_DIR\s*=\s*r?[\'"](.+?)[\'"]\s*$', re.M)
 
-# A module line: "+ [FLAG:value ...] rigTail 1.0 <path>". The path runs to
-# the end of the line rather than being one token -- "C:/Users/Jane Doe/
-# tools" is a perfectly ordinary place to install to.
 MOD_LINE_RE = re.compile(
     r'^\+\s+(?:\S+\s+)*?' + MODULE_NAME + r'\s+\S+\s+(.+?)\s*$')
 
 
 def _same_path(a, b):
-    '''True if two paths point at the same place (case-insensitive on
-    Windows, and blind to trailing slashes or ".." segments).'''
+    '''Compare normalized absolute paths.'''
     return (os.path.normcase(os.path.normpath(os.path.abspath(a))) ==
             os.path.normcase(os.path.normpath(os.path.abspath(b))))
 
@@ -85,18 +46,11 @@ def _is_inside(path, parent):
 
 
 def _release_cwd(path):
-    '''Step out of path if this process is sitting in it.
-
-    Windows refuses to delete a directory that any process has as its
-    current directory -- with WinError 32, "being used by another
-    process", even though the process is Maya itself. Maya's file
-    browsers move the CWD around, so a config saved out of the installed
-    scripts/ folder is enough to make the folder undeletable.
-    '''
+    '''Leave path when it is the current working directory.'''
     try:
         cwd = os.getcwd()
     except OSError:
-        return None                     # CWD already deleted; nothing held
+        return None
     if not (_same_path(cwd, path) or _is_inside(cwd, path)):
         return None
     home = os.path.expanduser('~')
@@ -121,11 +75,7 @@ def _rig_tail_buttons():
 
 
 def _tool_dirs_from_buttons(buttons):
-    '''Read the TOOL_DIR baked into each button's command.
-
-    The buttons are the one record that survives a hand-deleted manifest,
-    and they name the install that was actually being launched.
-    '''
+    '''Read unique TOOL_DIR values from shelf buttons.'''
     tool_dirs = []
     for _, button in buttons:
         command = cmds.shelfButton(button, query=True, command=True) or ''
@@ -145,8 +95,7 @@ def _remove_shelf_buttons(buttons):
 
 
 def _read_manifest(modules_dir):
-    '''The manifest install.py wrote, or None if it is missing or
-    unreadable (a hand-edited or half-deleted install).'''
+    '''Read the install manifest, if available.'''
     path = os.path.join(modules_dir, MANIFEST_FILE)
     if not os.path.isfile(path):
         return None
@@ -159,11 +108,7 @@ def _read_manifest(modules_dir):
 
 
 def _module_dir_from_mod(modules_dir):
-    '''The module folder the .mod registers, or None.
-
-    A .mod line is "+ rigTail 1.0 <path>", where <path> is either
-    absolute or relative to the folder holding the .mod.
-    '''
+    '''Read the module directory from the .mod file.'''
     path = os.path.join(modules_dir, MOD_FILE)
     if not os.path.isfile(path):
         return None
@@ -184,14 +129,7 @@ def _module_dir_from_mod(modules_dir):
 
 
 def _resolve_module_dir(modules_dir, tool_dirs):
-    '''Work out (module_dir, copied) for the install being removed.
-
-    Manifest first -- it is the only source that knows whether the
-    installer copied the tree or just pointed at it. Falling back to the
-    .mod or the buttons means that answer is unknown, and unknown is
-    treated as "do not delete": a wrong guess there deletes someone's
-    working copy.
-    '''
+    '''Resolve the module directory; only the manifest confirms ownership.'''
     manifest = _read_manifest(modules_dir)
     if manifest and manifest.get('module_dir'):
         return os.path.normpath(manifest['module_dir']), \
@@ -199,8 +137,6 @@ def _resolve_module_dir(modules_dir, tool_dirs):
 
     from_mod = _module_dir_from_mod(modules_dir)
     if from_mod:
-        # No manifest, but a tree sitting in the modules folder can only
-        # have been put there by an install.
         return from_mod, _same_path(os.path.dirname(from_mod), modules_dir)
 
     if tool_dirs:
@@ -211,9 +147,7 @@ def _resolve_module_dir(modules_dir, tool_dirs):
 
 
 def _confirm_outside_delete(module_dir):
-    '''Ask before deleting a copy that lives outside the Maya modules
-    folder -- an "Other..." install, where the surrounding folder is the
-    user's, not ours.'''
+    '''Confirm deletion of an installer-owned external copy.'''
     answer = cmds.confirmDialog(
         title='Remove Rig Tail files?',
         message=('Rig Tail was installed to a folder you chose:\n\n{0}\n\n'
@@ -228,11 +162,7 @@ def _confirm_outside_delete(module_dir):
 
 
 def _remove_module(modules_dir, module_dir, copied):
-    '''Delete the .mod, the manifest, and the module tree if it is ours.
-
-    Returns (removed_paths, kept) -- kept is (path, reason) when a module
-    folder was deliberately left on disk, else None.
-    '''
+    '''Remove module registration and, when owned, its module folder.'''
     removed = []
     for name in (MOD_FILE, MANIFEST_FILE):
         path = os.path.join(modules_dir, name)
@@ -242,8 +172,6 @@ def _remove_module(modules_dir, module_dir, copied):
 
     if not module_dir or not os.path.isdir(module_dir):
         return removed, None
-    # Never delete a folder the installer only pointed at: with "Current
-    # (this folder)" that is the user's git clone.
     if not copied:
         return removed, (module_dir, 'not created by the installer')
     if not _is_inside(module_dir, modules_dir) and \
@@ -253,8 +181,6 @@ def _remove_module(modules_dir, module_dir, copied):
     _release_cwd(module_dir)
     shutil.rmtree(module_dir, ignore_errors=True)
     if os.path.isdir(module_dir):
-        # ignore_errors leaves whatever was locked; say so rather than
-        # reporting a clean uninstall over a half-deleted folder.
         return removed, (module_dir, 'some files were in use -- delete it '
                                      'by hand after restarting Maya')
     removed.append(module_dir)
@@ -262,8 +188,7 @@ def _remove_module(modules_dir, module_dir, copied):
 
 
 def _deactivate_session(module_dirs, tool_dirs):
-    '''Drop every discovered scripts/ and icons/ path from the running
-    session so a restart is not needed to fully unhook it.'''
+    '''Remove Rig Tail paths and imports from the current session.'''
     scripts_dirs = list(tool_dirs)
     icons_dirs = []
     for module_dir in module_dirs:
@@ -283,7 +208,6 @@ def _deactivate_session(module_dirs, tool_dirs):
                  if p and not any(_same_path(p, i) for i in icons_dirs)]
         os.environ['XBMLANGPATH'] = os.pathsep.join(parts)
 
-    # Purge imported modules so a later re-install imports cleanly.
     for name in list(sys.modules):
         if name.startswith('rig_tail') or name == 'logger_config':
             del sys.modules[name]
@@ -294,7 +218,6 @@ def onMayaDroppedPythonFile(*args):
     modules_dir = os.path.join(cmds.internalVar(userAppDir=True), 'modules')
 
     try:
-        # Read TOOL_DIR off the buttons before deleting them.
         found = _rig_tail_buttons()
         tool_dirs = _tool_dirs_from_buttons(found)
         module_dir, copied = _resolve_module_dir(modules_dir, tool_dirs)

@@ -5,4 +5,6 @@ __pycache__/
 
 # Text files
 *.txt
-CLAUDE.md
+*.md
+!README.md
+!rig_tail_documentation.md

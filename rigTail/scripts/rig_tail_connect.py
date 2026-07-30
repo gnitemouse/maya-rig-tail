@@ -47,10 +47,8 @@ import rig_tail_ctrlall as rt_ca
 import rig_tail_stretch as rt_str
 import rig_tail_anim as rt_ani
 import rig_tail_fk as rt_fk
-import rig_tail_test as rt_test
 import re
 
-il.reload(rt_test)
 logger = logger_setup(__name__)
 
 
@@ -90,7 +88,6 @@ def connect_rig_tail(fk, ik):
             connect_fk(rigname, fk, ik)
         with rt_mya.timed('connect.ik'):
             connect_ik(rigname, fk, ik)
-        # rt_test.dump_chain()
         with rt_mya.timed('connect.matrix'):
             build_matrix_offset_network(rigname, fk, ik)
         with rt_mya.timed('connect.fx'):
@@ -98,7 +95,6 @@ def connect_rig_tail(fk, ik):
             connect_effects(rigname, fk, ik)
         with rt_mya.timed('connect.bind'):
             rt_mya.bind_geometry(rigname)
-        # rt_test.dump_chain()
 
     # Consolidated warning for parts whose mesh name did not match, so the
     # geometry that never bound is easy to spot and rename.

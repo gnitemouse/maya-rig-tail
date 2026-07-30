@@ -1,8 +1,8 @@
 """
-rig_tail_test_chain.py
+rig_tail_chain_test.py
 author: Daisy Jane @gnitemouse
 
-Tests for the Tail Chain Builder (rig_tail_chain_spacing and
+Tests for Joint Chain Builder (rig_tail_chain_spacing and
 rig_tail_chain_build). Two kinds:
 
   MATH tests - deterministic, no scene needed. Exercise the pure-math
@@ -15,9 +15,9 @@ rig_tail_chain_build). Two kinds:
     run_scene()
 
 Usage:
-    import rig_tail_test_chain as rt_tch
-    rt_tch.run_math()               # safe: pure-math unit tests
-    rt_tch.run_scene()              # MUTATING: every feature on the scene
+    import rig_tail_chain_test as rt_ct
+    rt_ct.run_math()               # safe: pure-math unit tests
+    rt_ct.run_scene()              # MUTATING: every feature on the scene
 
 Containment:
     test_containment greps every core module for rig_tail_chain and
@@ -38,7 +38,9 @@ Functions:
     test_catmullrom_interpolates: curve at knot params == input points
     test_arclength: monotone; total chord sum for a straight chain
     test_keep_idempotent: N->N returns s_hat to < 1e-9
-    test_resample_noop: full pipeline N->N returns positions to < 1e-6
+    test_resample_noop: re-applying a mode to its own result never drifts
+    test_respace_same_count: same-count re-spacing does redistribute
+    test_param_defaults: param=None uses K_DEFAULT/R_DEFAULT; clamping holds
     test_roundtrip_drift: 20->30->20 max deviation < tol
     test_snap_exact: 21->11 uniform snaps to every other original
     test_degenerate: N=2, coincident points, r=1.0, k=1.0, n=2
@@ -99,6 +101,22 @@ def _summary(title, results):
 def _linspace(start, stop, n):
     h = (stop - start) / (n - 1) if n > 1 else 0
     return [start + h * i for i in range(n)]
+
+
+def _smooth_chain(n, bunch=2.0):
+    """A tail-like chain: a smooth curve, unevenly spaced along itself.
+
+    _random_chain is uniform noise in a unit cube — consecutive segments
+    turn through ~90-180 degrees, which no real skeleton does. Shape-
+    stability claims are about chains like this one instead: curved, but
+    with a well-defined path that survives being resampled.
+    """
+    pts = []
+    for i in range(n):
+        t = (i / (n - 1)) ** bunch      # bunched toward the base
+        a = t * 1.6                     # sweep, in radians
+        pts.append([math.cos(a) * 5.0, math.sin(a) * 5.0, t * 3.0])
+    return pts
 
 
 def _random_chain(n, seed=0):
@@ -263,22 +281,126 @@ def test_keep_preserves_distribution():
 
 
 def test_resample_noop():
-    """Full pipeline N->N returns positions to < 1e-6."""
+    """Re-spacing at unchanged count does not drift.
+
+    This is the exactness claim the whole anti-drift argument rests on, and
+    it is NOT 'n == N returns the input': asking for Uniform on a chain that
+    is not uniform must genuinely redistribute it. Three separate promises:
+
+      Keep at n == N is EXACT at any count — PCHIP and Catmull-Rom both
+        interpolate at their knots, and that is the default mode, so the
+        first click on a freshly selected chain never touches it.
+      The analytic modes are idempotent to within a hair of the chain
+        length once the count actually samples the shape. At tiny counts
+        the reconstructed curve IS the loss (plan section 4), so a second
+        pass lands slightly differently; the error falls away with count.
+      Everything contracts (below), so repeated clicks settle.
+    """
     ok = True
-    for n in (3, 5, 10):
-        pts = _random_chain(n, seed=n + 200)
-        for mode in ("uniform", "power", "ratio"):
+    for n in (3, 5, 10, 21):
+        pts = _smooth_chain(n)
+        length = sum(math.sqrt(sum((pts[i + 1][j] - pts[i][j]) ** 2
+                                   for j in range(3))) for i in range(n - 1))
+        for mode in ("uniform", "power", "ratio", "keep"):
             param = 1.7 if mode == "power" else (0.90 if mode == "ratio" else None)
-            positions, snapped = rt_spc.resample(pts, n, mode, param=param)
-            d = max(math.sqrt(sum((positions[i][j] - pts[i][j]) ** 2 for j in range(3)))
+            once, _ = rt_spc.resample(pts, n, mode, param=param)
+            twice, _ = rt_spc.resample(once, n, mode, param=param)
+            d = max(math.sqrt(sum((twice[i][j] - once[i][j]) ** 2 for j in range(3)))
                     for i in range(n))
-            ok &= _verdict(f"n={n} {mode} no-op", d < 1e-6, f"max err={d}")
-    # Straight chain: uniform should be exact
+            if mode == "keep":
+                ok &= _verdict(f"n={n} keep exact at unchanged count",
+                               d < POS_TOL, f"max err={d}")
+            else:
+                # Bound the shape-reconstruction error, not floating point:
+                # N samples of a curve reconstruct it to O(1/N^2), so the
+                # limit tightens with count instead of being one flat number
+                # that is either meaningless at n=21 or unmeetable at n=3.
+                limit = length * 0.5 / n ** 2
+                ok &= _verdict(f"n={n} {mode} idempotent to {limit:.4f}",
+                               d < limit, f"max err={d}")
+
+    # An already-uniform straight chain is a fixed point of uniform, exactly.
     pts = [[float(i), 0.0, 0.0] for i in range(10)]
-    positions, snapped = rt_spc.resample(pts, 10, "uniform")
+    positions, _ = rt_spc.resample(pts, 10, "uniform")
     d = max(math.sqrt(sum((positions[i][j] - pts[i][j]) ** 2 for j in range(3)))
             for i in range(10))
     ok &= _verdict("straight uniform no-op", d < LEN_TOL, f"max err={d}")
+
+    # A chaotic zigzag is NOT a one-step fixed point: redistributing its
+    # points defines a visibly different curve, so the next pass lands
+    # somewhere new. What must hold even there is contraction — successive
+    # passes move less, never more — so a stuck artist clicking Build
+    # repeatedly settles instead of wandering off.
+    pts = _random_chain(10, seed=210)
+    steps = [pts]
+    for _ in range(4):
+        nxt, _ = rt_spc.resample(steps[-1], 10, "uniform")
+        steps.append(nxt)
+    deltas = [max(math.sqrt(sum((b[i][j] - a[i][j]) ** 2 for j in range(3)))
+                  for i in range(10))
+              for a, b in zip(steps[1:], steps[2:])]
+    ok &= _verdict("zigzag chain contracts under re-spacing",
+                   all(deltas[i + 1] < deltas[i] for i in range(len(deltas) - 1)),
+                   f"deltas={[round(v, 5) for v in deltas]}")
+    return ok
+
+
+def test_respace_same_count():
+    """Same-count re-spacing actually moves joints (no n == N short-circuit).
+
+    A bunched chain asked for Uniform at its own count must come out evenly
+    spaced. Returning the input unchanged here would leave three of the four
+    modes doing nothing at the count the UI defaults to.
+    """
+    # 9 joints crowded into the first fifth of a straight 8-unit span.
+    pts = [[float(i) * 0.2, 0.0, 0.0] for i in range(8)] + [[8.0, 0.0, 0.0]]
+    n = len(pts)
+
+    def _spread(chain):
+        segs = [math.sqrt(sum((chain[i + 1][j] - chain[i][j]) ** 2
+                              for j in range(3))) for i in range(len(chain) - 1)]
+        return max(segs) - min(segs)
+
+    positions, _ = rt_spc.resample(pts, n, "uniform")
+    before, after = _spread(pts), _spread(positions)
+    # Bounded by the arclength table's inversion error, O(1/ARC_SAMPLES^2)
+    # ~= 0.4% of the chain, not by floating point: the table samples in
+    # parameter and interpolates linearly between samples.
+    total = 8.0
+    ok = _verdict("uniform at n == N evens the spacing",
+                  after < total / rt_spc.ARC_SAMPLES ** 2,
+                  f"spread {before:.4f} -> {after:.6f}")
+    ok &= _verdict("re-spacing changed the chain", before - after > 1.0,
+                   f"spread {before:.4f} -> {after:.6f}")
+    # Endpoints are fixed by definition, whatever the redistribution.
+    for idx, tag in ((0, "first"), (-1, "last")):
+        d = math.sqrt(sum((positions[idx][j] - pts[idx][j]) ** 2
+                          for j in range(3)))
+        ok &= _verdict(f"{tag} joint pinned", d < LEN_TOL, f"err={d}")
+    return ok
+
+
+def test_param_defaults():
+    """param=None uses the documented defaults, not the range floor."""
+    ok = True
+    for mode, default in (("power", rt_spc.K_DEFAULT),
+                          ("ratio", rt_spc.R_DEFAULT)):
+        implicit = rt_spc.distribute(mode, 8)
+        explicit = rt_spc.distribute(mode, 8, param=default)
+        ok &= _verdict(f"{mode} default == {default}",
+                       all(abs(a - b) < LEN_TOL
+                           for a, b in zip(implicit, explicit)),
+                       f"implicit={[round(v, 4) for v in implicit]}")
+    ok &= _verdict("K_DEFAULT within K_RANGE",
+                   rt_spc.K_RANGE[0] <= rt_spc.K_DEFAULT <= rt_spc.K_RANGE[1])
+    ok &= _verdict("R_DEFAULT within R_RANGE",
+                   rt_spc.R_RANGE[0] <= rt_spc.R_DEFAULT <= rt_spc.R_RANGE[1])
+    # Out-of-range values clamp rather than collapsing a segment to zero.
+    for mode, bad in (("power", 99.0), ("power", -1.0),
+                      ("ratio", 5.0), ("ratio", 0.0)):
+        u = rt_spc.distribute(mode, 12, param=bad)
+        inc = all(u[i] < u[i + 1] for i in range(len(u) - 1))
+        ok &= _verdict(f"{mode} param={bad} clamps and stays increasing", inc)
     return ok
 
 
@@ -350,6 +472,8 @@ def run_math():
         test_keep_idempotent,
         test_keep_preserves_distribution,
         test_resample_noop,
+        test_respace_same_count,
+        test_param_defaults,
         test_roundtrip_drift,
         test_snap_exact,
         test_degenerate,
@@ -389,5 +513,5 @@ def run_all():
     ok = run_math()
     print("Scene tests are MUTATING and not run by run_all().\n"
           "On the sample scene call:\n"
-          "    rig_tail_test_chain.run_scene()\n")
+          "    rig_tail_chain_test.run_scene()\n")
     return ok

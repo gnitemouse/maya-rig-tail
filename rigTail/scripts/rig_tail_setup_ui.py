@@ -36,7 +36,7 @@ is unbound for the build to rebind.
 
 Run Setup calls rig_tail_setup.setup_tails. Values live in
 rig_tail_constants and round-trip through the same JSON config as the
-Builder. The window is modeled on rig_tail_ui.RigTailUI and reuses its
+Builder. The window is modeled on rig_tail_build_ui.RigTailUI and reuses its
 RIGPARTS editor. Compatible with Maya 2024/2025 (Qt5).
 
 Classes and functions:
@@ -54,7 +54,7 @@ from PySide2 import QtWidgets, QtCore
 
 import rig_tail_constants as rt_cst
 import rig_tail_naming as rt_nam
-import rig_tail_ui as rt_ui  # reuse RigPartsEditor + styling conventions
+import rig_tail_build_ui as rt_build_ui  # reuse RigPartsEditor
 
 
 class RigTailSetupUI(QtWidgets.QDialog):
@@ -679,7 +679,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def open_rigparts_editor(self):
         '''Reuse the Builder's RIGPARTS editor.'''
-        dialog = rt_ui.RigPartsEditor(self, phase='Setup')
+        dialog = rt_build_ui.RigPartsEditor(self, phase='Setup')
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             self.update_display()
 

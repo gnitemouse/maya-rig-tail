@@ -1,5 +1,5 @@
 '''
-rig_tail_test_setup.py
+rig_tail_setup_test.py
 author: Daisy Jane @gnitemouse
 
 Tests for the Setup phase (rig_tail_setup): the skeleton-prep step that
@@ -26,20 +26,20 @@ build). Its L/R pairs (fintail, sidetail, tail1..3) and center chains
 rig.
 
 Usage:
-    import rig_tail_test_setup as rt_ts
-    rt_ts.run_math()                 # safe: geometry-helper unit tests
-    rt_ts.check_mirror('fintail')    # mirror math + one real L/R pair
-    rt_ts.run_scene()                # MUTATING: every feature on the scene
-    rt_ts.run_all()                  # run_math() + guidance for run_scene()
+    import rig_tail_setup_test as rt_setup_test
+    rt_setup_test.run_math()                 # safe: geometry-helper unit tests
+    rt_setup_test.check_mirror('fintail')    # mirror math + one real L/R pair
+    rt_setup_test.run_scene()                # MUTATING: every feature on the scene
+    rt_setup_test.run_all()                  # run_math() + guidance for run_scene()
 
     # individual (scene tests mutate; reload after):
-    rt_ts.test_mirror_orient('fintail')
-    rt_ts.test_mirror_joints('fintail')
-    rt_ts.test_orient('C_tail')
-    rt_ts.test_roll('C_tail', 90)
-    rt_ts.test_rigname_from_selection('C_tail')
+    rt_setup_test.test_mirror_orient('fintail')
+    rt_setup_test.test_mirror_joints('fintail')
+    rt_setup_test.test_orient('C_tail')
+    rt_setup_test.test_roll('C_tail', 90)
+    rt_setup_test.test_rigname_from_selection('C_tail')
 
-    rt_ts.check_skin('C_tail')       # safe: what is bound, and drift
+    rt_setup_test.check_skin('C_tail')       # safe: what is bound, and drift
 
 Functions:
   Runners
@@ -955,8 +955,8 @@ def run_all():
     '''
     ok = run_math()
     print('Scene tests are MUTATING and not run by run_all(). On the sample '
-          'scene call:\n    rig_tail_test_setup.run_scene()      # all features'
-          '\n    rig_tail_test_setup.check_mirror()    # mirror only\n')
+          'scene call:\n    rig_tail_setup_test.run_scene()      # all features'
+          '\n    rig_tail_setup_test.check_mirror()    # mirror only\n')
     return ok
 
 
