@@ -47,6 +47,13 @@ TWO_PI = 6.28318530718
 LOOP_FRAME_DEFAULT = 60
 # Time-source expression for wave/noise when the Loop effect is not built.
 UNLOOPED_TIME_SRC = f'(time1.outTime * {TWO_PI / LOOP_FRAME_DEFAULT})'
+# Degrees of TOTAL bend, base to tip, that one unit of a curl attribute adds.
+# The curl attributes run -10..10, so 36 puts a full 360-degree coil at each
+# end of the slider. Curl names the whole chain's wrap, not a per-joint angle
+# (see build_curl), which is what keeps the tip inside the coil instead of
+# folding out of it, and what makes a 12-joint and an 80-joint tail curl by
+# the same amount.
+CURL_DEGREES_PER_UNIT = 36.0
 
 
 def delete_expression(expr):
@@ -283,10 +290,30 @@ def build_curl(rigname, basectrl, joints):
     Uses DG node graph per joint for clean connections.
     Connects to curl_composeMatrix nodes pre-created by build_matrix_offset_network().
 
-    Math:
-    - u = normalized joint position (0 at base, 1 at tip)
-    - weight = u ^ curlFalloff (artist-controllable)
-    - output = curl * weight * multiplier
+    Math, for joint i of n (u = i / (n - 1), 0 at the base, 1 at the tip):
+
+        share_i  = u_i ** curl_falloff / SUM_j(u_j ** curl_falloff)
+        rotate_i = curl * CURL_DEGREES_PER_UNIT * share_i
+
+    The shares SUM TO ONE, so a curl attribute names the total bend of the
+    whole chain and the falloff only decides how that bend is distributed
+    along it - tip-loaded at a high falloff, near-uniform at a low one.
+
+    Normalizing is what keeps the tip in the coil. The per-joint rotations
+    compound down the BN hierarchy, so the chain's total wrap is their sum;
+    an unnormalized u**falloff profile made that sum grow with both the curl
+    value AND the joint count, and gave the last joint the largest single
+    angle. Past a fairly low curl value that angle passed a right angle on
+    its own, folding the final bone (and the '_ee_' riding on it) out of an
+    otherwise tidy spiral, while a denser chain curled further than a sparse
+    one at the same slider value. Dividing by the live sum bounds the total
+    at curl * CURL_DEGREES_PER_UNIT degrees whatever the joint count, and
+    caps the tip joint at its own share of that.
+
+    The profile (u**falloff and its sum) is built once per chain and shared
+    by all three axes: it does not depend on the axis, and one copy means
+    curlX/Y/Z stay consistent by construction. The tip joint always
+    contributes u**falloff = 1, so the divisor can never reach zero.
 
     Arguments:
         rigname (str): Name of rig component
@@ -299,51 +326,67 @@ def build_curl(rigname, basectrl, joints):
         return
 
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]
-    num_joints = len(joints)
+    curl_joints = list(enumerate(joints[1:], 1))
+    span = float(len(joints) - 1)
+
+    # Shared falloff profile: u ** curl_falloff per joint, and their live sum.
+    # Live, because curl_falloff is animatable - a constant divisor baked at
+    # build time would only be right at the falloff it was built for.
+    total = f'{rigname}_curl_falloffSum_plusMinusAverage'
+    if not cmds.objExists(total):
+        cmds.createNode('plusMinusAverage', n=total)
+    cmds.setAttr(f'{total}.operation', 1)  # sum
+
+    weights = {}
+    for slot, (i, jnt) in enumerate(curl_joints):
+        NN = rt_naming.get_index_from_name(jnt)
+
+        falloff_node = f'{rigname}_curl_{NN:02d}_falloff_multiplyDivide'
+        if not cmds.objExists(falloff_node):
+            cmds.createNode('multiplyDivide', n=falloff_node)
+        cmds.setAttr(f'{falloff_node}.operation', 3)  # power
+        cmds.setAttr(f'{falloff_node}.input1X', i / span)
+        # resolved_plug: override condition output when the dashboard is
+        # active, the basectrl attribute otherwise
+        ensure_connect(rt_ctrlall.resolved_plug(rigname, 'curl_falloff'),
+                       f'{falloff_node}.input2X')
+        ensure_connect(f'{falloff_node}.outputX', f'{total}.input1D[{slot}]')
+
+        weight = f'{rigname}_curl_{NN:02d}_weight_multiplyDivide'
+        if not cmds.objExists(weight):
+            cmds.createNode('multiplyDivide', n=weight)
+        cmds.setAttr(f'{weight}.operation', 2)  # divide
+        ensure_connect(f'{falloff_node}.outputX', f'{weight}.input1X')
+        ensure_connect(f'{total}.output1D', f'{weight}.input2X')
+        weights[NN] = weight
 
     for rot_axis, curl_attr in curl_axes:
         remap = f'{rigname}_curl{rot_axis}_remap_multiplyDivide'
         if not cmds.objExists(remap):
             cmds.createNode('multiplyDivide', n=remap)
-            cmds.setAttr(f'{remap}.operation', 1)
-            cmds.setAttr(f'{remap}.input2X', 20.0)
-        # resolved_plug: override condition output when the dashboard is
-        # active, the basectrl attribute otherwise
+        cmds.setAttr(f'{remap}.operation', 1)
+        cmds.setAttr(f'{remap}.input2X', CURL_DEGREES_PER_UNIT)
         ensure_connect(rt_ctrlall.resolved_plug(rigname, curl_attr), f'{remap}.input1X')
 
-        for i, jnt in enumerate(joints[1:], 1):
+        for _, jnt in curl_joints:
             NN = rt_naming.get_index_from_name(jnt)
             compose_node = f'{rigname}_{NN:02d}_curl_composeMatrix'
-
-            u = i / float(num_joints - 1) if num_joints > 1 else 0.0
-
-            falloff_node = f'{rigname}_curl{rot_axis}_{NN:02d}_falloff_multiplyDivide'
-            if not cmds.objExists(falloff_node):
-                cmds.createNode('multiplyDivide', n=falloff_node)
-                cmds.setAttr(f'{falloff_node}.operation', 3)
-                cmds.setAttr(f'{falloff_node}.input1X', u)
-            ensure_connect(rt_ctrlall.resolved_plug(rigname, 'curl_falloff'),
-                           f'{falloff_node}.input2X')
-
-            weight_scale = f'{rigname}_curl{rot_axis}_{NN:02d}_weight_multiplyDivide'
-            if not cmds.objExists(weight_scale):
-                cmds.createNode('multiplyDivide', n=weight_scale)
-                cmds.setAttr(f'{weight_scale}.operation', 1)
-                cmds.connectAttr(f'{falloff_node}.outputX', f'{weight_scale}.input1X', f=1)
-                cmds.setAttr(f'{weight_scale}.input2X', 2.0)
+            if not cmds.objExists(compose_node):
+                continue
 
             curl_mult = f'{rigname}_curl{rot_axis}_{NN:02d}_multiplyDivide'
             if not cmds.objExists(curl_mult):
                 cmds.createNode('multiplyDivide', n=curl_mult)
-                cmds.setAttr(f'{curl_mult}.operation', 1)
-                cmds.connectAttr(f'{remap}.outputX', f'{curl_mult}.input1X', f=1)
-                cmds.connectAttr(f'{weight_scale}.outputX', f'{curl_mult}.input2X', f=1)
+            cmds.setAttr(f'{curl_mult}.operation', 1)
+            ensure_connect(f'{remap}.outputX', f'{curl_mult}.input1X')
+            ensure_connect(f'{weights[NN]}.outputX', f'{curl_mult}.input2X')
+            ensure_connect(f'{curl_mult}.outputX',
+                           f'{compose_node}.inputRotate{rot_axis}')
+            logger.trace(f'Connected curl{rot_axis} to {compose_node}')
 
-            if cmds.objExists(compose_node):
-                ensure_connect(f'{curl_mult}.outputX', f'{compose_node}.inputRotate{rot_axis}')
-                logger.trace(f'Connected curl{rot_axis} to {compose_node}')
-
-    logger.debug(f'{rigname}: Curl effect built')
+    logger.debug(f'{rigname}: Curl effect built '
+                 f'({len(curl_joints)} joints, '
+                 f'{CURL_DEGREES_PER_UNIT:g} deg total per unit)')
 
 
 # NOISE ================================================================

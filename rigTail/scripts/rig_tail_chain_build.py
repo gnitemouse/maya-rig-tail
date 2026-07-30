@@ -660,14 +660,22 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
     aim_axis = getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')
     up_axis = getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')
     frames = rt_setup.aim_frames(positions, aim_axis, up_axis, up_ref)
+    # The _ee_ position MUST be read before the chain is re-oriented. It is a
+    # child excluded from the chain, so nothing re-places it: it simply swings
+    # with its parent, because its local translate is a fixed offset in the
+    # parent's space. Re-aiming the tip therefore moves the _ee_ in world by
+    # the same rotation, and reading its position afterwards bakes that swing
+    # in — which is the _ee_ standing perpendicular to the chain it should
+    # continue. _place_ee has already put it on the final segment; this pins
+    # it there. Same rule as rt_setup._end_joint_position.
+    ee_pos = cmds.xform(ee, q=True, ws=True, t=True) if ee else None
     for joint, frame, pos in zip(joints, frames, positions):
         _write_frame(joint, frame, pos)
     # The _ee_ is excluded from the chain, so it would keep a stale
     # orientation pointing a different way from everything above it. Give it
     # the last real joint's frame, as Setup does.
     if ee:
-        _write_frame(ee, frames[-1],
-                     cmds.xform(ee, q=True, ws=True, t=True))
+        _write_frame(ee, frames[-1], ee_pos)
     mode = 'cascade' if up_ref else 'best-fit'
     logger.info(f'Oriented {len(joints)} joints '
                 f'(aim {aim_axis}, up {up_axis}, {mode}).')

@@ -892,6 +892,7 @@ def cleanup_anim_effects(rigname, fk, ik):
         f'{rigname}_loop_time_expression',
         f'{rigname}_loop_time',
         f'{rigname}_curl*_multiplyDivide',
+        f'{rigname}_curl*_plusMinusAverage',
         f'{typ}_{rigname}_wave_*',
         f'{typ}_{rigname}_curl_*',
         f'{typ}_{rigname}_dynOffset_*',
