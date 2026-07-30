@@ -10,14 +10,26 @@ rig_tail_chain_build). Two kinds:
     run_math()
 
   SCENE tests - run on the loaded skeleton and are MUTATING: they
-    create, rebuild and re-space real joint chains. Like the real tool
-    they affect the scene, so RELOAD THE SCENE afterwards.
+    create, rebuild and re-space real joint chains through the same entry
+    points the UI uses. Like the real tool they affect the scene, so
+    RELOAD THE SCENE afterwards. Each one snapshots the chain's names and
+    positions and puts them back, but a shrink deletes joints and undo
+    does not run for the whole suite - the reload is what makes it clean.
     run_scene()
 
 Usage:
     import rig_tail_chain_test as rt_chain_test
     rt_chain_test.run_math()               # safe: pure-math unit tests
     rt_chain_test.run_scene()              # MUTATING: every feature on the scene
+
+    # individual (scene tests mutate; reload after):
+    rt_chain_test.test_rebuild_count('C_tail')
+    rt_chain_test.test_guards()            # MUTATING, but on its own scratch chain
+
+The scene tests default to DEFAULT_CHAIN on the sample squid scene; pass
+a rig part name (or the name of any joint in the chain) on another rig.
+run_math() needs no Maya at all, so maya.cmds and the Maya I/O layer are
+imported behind a guard rather than at module scope.
 
 Containment:
     test_containment greps every core module for rig_tail_chain and
@@ -47,7 +59,7 @@ Functions:
   Scene tests (MUTATING)
     test_rebuild_count: count, order, parenting, _ee_ position
     test_names_preserved: n==N leaves every name untouched
-    test_guards: skinned/rig-driven/branching chains are refused
+    test_guards: skinned/rig-driven/locked/branching chains are refused
     test_cache_no_compounding: drift same as single pass, not 10x
     test_undo: one Ctrl+Z restores the pre-click state
 """
@@ -57,10 +69,31 @@ import os
 
 import rig_tail_chain_spacing as rt_chain_spacing
 
+# The scene half. Imported behind a guard so run_math() stays runnable
+# under plain Python: rig_tail_chain_build pulls in maya.cmds, and a
+# top-level import would take that away for the sake of five tests that
+# need a scene anyway. _require_maya() turns the absence into a skip.
+try:
+    import maya.cmds as cmds
+    import rig_tail_constants as rt_constants
+    import rig_tail_naming as rt_naming
+    import rig_tail_joint as rt_joint
+    import rig_tail_chain_build as rt_chain_build
+    from logger_config import RigTailBuildError
+except ImportError:
+    cmds = rt_constants = rt_naming = rt_joint = rt_chain_build = None
+    RigTailBuildError = None
+
 
 POS_TOL = 1e-6
 POS_TOL_SCENE = 1e-3
 LEN_TOL = 1e-9
+
+# Sample squid scene: a long center chain with an _ee_ end joint.
+DEFAULT_CHAIN = 'C_tail'
+
+# Prefix for the nodes test_guards builds and deletes.
+SCRATCH = 'tailChainGuard'
 
 
 def _verdict(name, ok, msg=""):
@@ -101,6 +134,31 @@ def _summary(title, results):
 def _linspace(start, stop, n):
     h = (stop - start) / (n - 1) if n > 1 else 0
     return [start + h * i for i in range(n)]
+
+
+def _sub3(a, b):
+    return [a[i] - b[i] for i in range(3)]
+
+
+def _angle(a, b):
+    """Angle in degrees between two vectors (0 if either is degenerate)."""
+    la = math.sqrt(sum(x * x for x in a))
+    lb = math.sqrt(sum(x * x for x in b))
+    if la < 1e-9 or lb < 1e-9:
+        return 0.0
+    d = sum(x * y for x, y in zip(a, b)) / (la * lb)
+    return math.degrees(math.acos(max(-1.0, min(1.0, d))))
+
+
+def _max_move(before, after):
+    """Largest distance between two lists of positions, pairwise."""
+    return max((math.dist(a, b) for a, b in zip(before, after)), default=0.0)
+
+
+def _chain_length(positions):
+    """Total chord length along a list of positions."""
+    return sum(math.dist(positions[i], positions[i + 1])
+               for i in range(len(positions) - 1))
 
 
 def _smooth_chain(n, bunch=2.0):
@@ -456,6 +514,656 @@ def test_degenerate():
     return ok
 
 
+# SCENE HELPERS ========================================================
+
+def _require_maya(test):
+    """False (with a printed skip) when there is no Maya to run against."""
+    if cmds is None:
+        print(f'  {test}: no maya.cmds in this interpreter, skipping. '
+              'Scene tests need a running Maya with a skeleton loaded.')
+        return False
+    return True
+
+
+def _resolve_root(name):
+    """
+    The chain root for a rig part name, or for the name of any joint in it.
+
+    The same cheap lookups the UI's Joint Chain(s) box does: the naming
+    template turns a rig part into its root joint's name outright,
+    otherwise the name is taken literally as a joint and walked up.
+    """
+    try:
+        templated = rt_naming.fstr(name, rt_constants.JOINT,
+                                   rt_constants.TYPE_BN, 0)
+        if cmds.objExists(templated):
+            return rt_chain_build.chain_root(templated)
+        return rt_chain_build.chain_root(name) if cmds.objExists(name) else None
+    except Exception:
+        return None
+
+
+def _chain_bn(root):
+    """The chain's BN joints, root first. get_joint_chain stops before _ee_."""
+    return [j for j in rt_joint.get_joint_chain(root) if '_ee_' not in j]
+
+
+def _positions(joints):
+    """World positions of a list of joints."""
+    return [cmds.xform(j, q=True, ws=True, t=True) for j in joints]
+
+
+def _leaves(joints):
+    """Leaf names, so long DAG paths and short names compare equal."""
+    return [j.split('|')[-1] for j in joints]
+
+
+def _long(node):
+    """A node's long DAG path, for identity comparisons."""
+    return (cmds.ls(node, long=True) or [node])[0]
+
+
+def _name_diff(want, got):
+    """
+    How two name lists differ, in one line.
+
+    A tail is 30-odd joints; printing both lists in full on every verdict
+    buries the run in names nobody reads. The first difference is what
+    tells you what happened.
+    """
+    if want == got:
+        return f'{len(got)} name(s) unchanged'
+    for i, (a, b) in enumerate(zip(want, got)):
+        if a != b:
+            return (f'{len(want)} vs {len(got)} name(s), first difference at '
+                    f'index {i}: {a} -> {b}')
+    return f'{len(want)} -> {len(got)} name(s)'
+
+
+def _parent_joint(joint):
+    """The joint's parent joint, or None."""
+    parent = cmds.listRelatives(joint, parent=True, typ='joint')
+    return parent[0] if parent else None
+
+
+def _broken_parent(chain):
+    """
+    The first joint whose parent is not its predecessor, or None.
+
+    A rebuild can return a plausible-looking list while leaving a joint
+    parented to a node that is no longer above it - a shrink re-parents
+    the _ee_ and any stray children before deleting the surplus, and a
+    grow parents each new joint onto the previous one.
+    """
+    for i in range(1, len(chain)):
+        parent = _parent_joint(chain[i])
+        if not parent or _long(parent) != _long(chain[i - 1]):
+            return chain[i]
+    return None
+
+
+def _snapshot(root):
+    """
+    Everything a scene test has to put back: names, world positions and
+    the _ee_ end joint.
+    """
+    bn = _chain_bn(root)
+    ee = rt_chain_build._end_joint(bn[-1]) if bn else None
+    return {
+        'root': root,
+        'names': _leaves(bn),
+        'positions': _positions(bn),
+        'ee': ee.split('|')[-1] if ee else None,
+        'ee_pos': cmds.xform(ee, q=True, ws=True, t=True) if ee else None,
+    }
+
+
+def _restore(state, root=None):
+    """
+    Put the chain back to its snapshot count and positions and forget the
+    session original cache.
+
+    Best effort, and NOT a substitute for reloading the scene: joints a
+    shrink deleted come back as freshly created nodes, and orientations
+    are not restored. It exists so one failing test does not leave the
+    next one measuring a chain of the wrong length.
+    """
+    root = root or _resolve_root(state['names'][0]) or state['root']
+    try:
+        if not root or not cmds.objExists(root):
+            print('  restore: the chain root is gone, nothing put back')
+            return False
+        n = len(state['positions'])
+        bn = _chain_bn(root)
+        if len(bn) != n:
+            rt_chain_build.clear_cache(root)
+            bn = rt_chain_build.rebuild(root, n, mode='keep', snap=False)
+        for joint, pos in zip(bn, state['positions']):
+            cmds.xform(joint, ws=True, t=pos)
+        ee = rt_chain_build._end_joint(bn[-1]) if bn else None
+        if ee and state['ee_pos']:
+            cmds.xform(ee, ws=True, t=state['ee_pos'])
+        rt_chain_build.clear_cache(bn[0])
+        return True
+    except Exception as exc:
+        print(f'  restore: could not put {state["names"][0]} back: {exc}')
+        return False
+
+
+def _scene_chain(test, rigname, minimum=4):
+    """
+    (root, BN joints) for a scene test, or None with a printed skip.
+
+    Scene tests need a chain long enough to grow AND shrink and still be a
+    chain, so the count is checked once here instead of in each of them.
+    """
+    root = _resolve_root(rigname)
+    if not root:
+        print(f'  {test}: no chain for "{rigname}", skipping')
+        return None
+    bn = _chain_bn(root)
+    if len(bn) < minimum:
+        print(f'  {test}: {rigname} has {len(bn)} joint(s), needs {minimum}, '
+              'skipping')
+        return None
+    return root, bn
+
+
+def _make_scratch_chain(junk, n=6, length=10.0):
+    """
+    Build a throwaway straight chain, returning (root, joints).
+
+    test_guards arms its hazards on a chain the test owns rather than on
+    the loaded skeleton: arming them means binding a skinCluster,
+    connecting a driver and hanging a branch off a joint, and doing that
+    to real joints would leave debris behind the moment something raised.
+
+    Every node is appended to the caller's junk list as it is made, so a
+    raise halfway through still leaves the caller something to delete.
+    """
+    start = cmds.spaceLocator(name=f'{SCRATCH}_start')[0]
+    junk.append(start)
+    end = cmds.spaceLocator(name=f'{SCRATCH}_end')[0]
+    junk.append(end)
+    cmds.xform(start, ws=True, t=[0.0, 0.0, 0.0])
+    cmds.xform(end, ws=True, t=[length, 0.0, 0.0])
+    joints = rt_chain_build.build_new(start, end, n, rigname=SCRATCH,
+                                      mode='uniform')
+    junk.append(joints[0])
+    return joints[0], joints
+
+
+def _delete_junk(nodes):
+    """Delete scratch nodes, tolerating ones already gone."""
+    for node in nodes:
+        try:
+            if cmds.objExists(node):
+                cmds.delete(node)
+        except Exception as exc:
+            print(f'  could not delete {node}: {exc}')
+
+
+# SCENE TESTS (MUTATING) ===============================================
+
+def test_rebuild_count(rigname=DEFAULT_CHAIN):
+    """
+    rebuild at a new count: how many joints, in what order, parented to
+    what, and where the _ee_ ends up.
+
+    Grow, shrink and same-count in one pass, all resampled from the same
+    cached original. What has to hold for every one of them:
+
+      The chain as it stands IN THE SCENE - walked down from the root, not
+        read off the returned list - is exactly n joints in a single
+        parent-to-child line. A rebuild that returned the right names
+        while orphaning a joint or leaving a stale parent passes any check
+        that only looks at the return value.
+      Both ends sit where they always did. Resampling pins the endpoints,
+        so no count change may shorten the tail or move its base.
+      No two joints land on top of each other.
+      The _ee_ still hangs off the NEW tip, at its original distance, on
+        the new final segment. Left behind at the old tip it would hand
+        Setup a bogus final aim direction.
+    """
+    if not _require_maya('test_rebuild_count'):
+        return None
+    found = _scene_chain('test_rebuild_count', rigname)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    start_n = len(bn)
+    ee_distance = (math.dist(state['ee_pos'], state['positions'][-1])
+                   if state['ee_pos'] else None)
+    rt_chain_build.clear_cache(root)
+    ok = True
+    try:
+        for n in (start_n + 3, start_n - 2, start_n):
+            label = f'{rigname} {start_n}->{n}'
+            result = rt_chain_build.rebuild(root, n, mode='uniform', snap=False)
+            root = result[0]
+            ok &= _verdict(f'{label} returns {n} joints', len(result) == n,
+                           f'got {len(result)}')
+
+            chain = _chain_bn(root)
+            ok &= _verdict(f'{label} scene chain is the returned chain',
+                           _leaves(chain) == _leaves(result),
+                           _name_diff(_leaves(result), _leaves(chain)))
+            broken = _broken_parent(chain)
+            ok &= _verdict(f'{label} one parent-to-child line', not broken,
+                           f'{broken} is not parented to its predecessor'
+                           if broken else '')
+
+            positions = _positions(chain)
+            ends = max(math.dist(positions[0], state['positions'][0]),
+                       math.dist(positions[-1], state['positions'][-1]))
+            ok &= _verdict(f'{label} endpoints pinned', ends < POS_TOL_SCENE,
+                           f'max end move={ends:.5f}')
+            segments = [math.dist(positions[i], positions[i + 1])
+                        for i in range(len(positions) - 1)]
+            ok &= _verdict(f'{label} no coincident joints',
+                           min(segments) > rt_chain_spacing.EPS,
+                           f'shortest segment={min(segments):.6f}')
+
+            if ee_distance is None:
+                continue
+            ee = rt_chain_build._end_joint(chain[-1])
+            ok &= _verdict(f'{label} _ee_ still on the tip', bool(ee),
+                           f'{ee.split("|")[-1]} under {chain[-1]}' if ee
+                           else f'nothing under {chain[-1]}')
+            if not ee:
+                continue
+            ee_pos = cmds.xform(ee, q=True, ws=True, t=True)
+            got = math.dist(ee_pos, positions[-1])
+            ok &= _verdict(f'{label} _ee_ keeps its distance',
+                           abs(got - ee_distance) < POS_TOL_SCENE,
+                           f'{ee_distance:.5f} -> {got:.5f}')
+            off = _angle(_sub3(positions[-1], positions[-2]),
+                         _sub3(ee_pos, positions[-1]))
+            ok &= _verdict(f'{label} _ee_ on the new final segment',
+                           off < 1.0, f'{off:.3f} deg off the segment')
+        return ok
+    finally:
+        _restore(state, root)
+
+
+def test_names_preserved(rigname=DEFAULT_CHAIN):
+    """
+    A same-count rebuild leaves every name untouched.
+
+    n == N is what the UI opens on - Select sets Joint Count to the chain's
+    own length - so this is the common case, and in it the joints move and
+    nothing else changes: no renumbering, no new nodes, no renamed _ee_.
+
+    Deliberately Power with a strong exponent rather than Uniform. On a
+    chain that is already evenly spaced, Uniform would move nothing and
+    "the names survived" would be true of doing nothing at all; Power at
+    k=3 redistributes any chain, so the claim has something to survive.
+    """
+    if not _require_maya('test_names_preserved'):
+        return None
+    found = _scene_chain('test_names_preserved', rigname, minimum=3)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    n = len(bn)
+    rt_chain_build.clear_cache(root)
+    ok = True
+    try:
+        result = rt_chain_build.rebuild(root, n, mode='power', param=3.0,
+                                        snap=False)
+        root = result[0]
+        chain = _chain_bn(root)
+        ok &= _verdict(f'{rigname} count unchanged', len(chain) == n,
+                       f'{n} -> {len(chain)}')
+        ok &= _verdict(f'{rigname} every name untouched',
+                       _leaves(chain) == state['names'],
+                       _name_diff(state['names'], _leaves(chain)))
+
+        # Vacuous unless the rebuild actually did something.
+        moved = _max_move(state['positions'], _positions(chain))
+        ok &= _verdict(f'{rigname} joints actually moved',
+                       moved > POS_TOL_SCENE, f'max move={moved:.5f}')
+
+        if state['ee']:
+            ee = rt_chain_build._end_joint(chain[-1]) if chain else None
+            ok &= _verdict(f'{rigname} _ee_ name untouched',
+                           bool(ee) and ee.split('|')[-1] == state['ee'],
+                           f'{state["ee"]} -> {ee}')
+        return ok
+    finally:
+        _restore(state, root)
+
+
+def test_guards():
+    """
+    A chain that is skinned, rig-driven, locked or branching is REFUSED,
+    and refused without moving anything.
+
+    Runs on a scratch chain the test builds and deletes, so nothing here
+    touches the loaded skeleton. Every hazard is armed and then disarmed
+    with a clean rebuild either side: a refusal only means something if
+    the same chain rebuilds once the hazard is gone.
+
+    Two details do the real work.
+
+    The guard must raise RigTailBuildError SPECIFICALLY. "It raised
+    something" is not a pass: the bug this test exists for had
+    _find_influence_skin calling cmds.listHistory(joint, type='skinCluster')
+    - listHistory has no -type flag - so every rebuild died with a
+    TypeError and the Chain Builder silently did nothing. A test that
+    accepted any exception would have called a completely broken tool
+    well guarded. The clean-chain controls catch the same bug from the
+    other side, by insisting an unguarded chain rebuilds at all.
+
+    And the chain must be untouched afterwards. The guards run before the
+    write, so a refusal is a no-op, not a half-finished rebuild.
+    """
+    if not _require_maya('test_guards'):
+        return None
+    ok = True
+    root = None
+    junk = []
+    try:
+        root, joints = _make_scratch_chain(junk)
+        n = len(joints)
+        mid = joints[n // 2]
+        tip = joints[-1]
+
+        def rebuilds(label):
+            """The control: the scratch chain rebuilds cleanly."""
+            nonlocal root
+            try:
+                result = rt_chain_build.rebuild(root, n, mode='uniform',
+                                                snap=False)
+            except Exception as exc:
+                return _verdict(label, False, f'{type(exc).__name__}: {exc}')
+            root = result[0]
+            return _verdict(label, True)
+
+        def refuses(label):
+            """rebuild must abort with RigTailBuildError and move nothing."""
+            before = _positions(_chain_bn(root))
+            try:
+                rt_chain_build.rebuild(root, n + 2, mode='uniform', snap=False)
+            except Exception as exc:
+                good = _verdict(f'{label} refused',
+                                isinstance(exc, RigTailBuildError),
+                                f'{type(exc).__name__}: {exc}')
+                after = _positions(_chain_bn(root))
+                untouched = (len(after) == len(before) and
+                             _max_move(before, after) < POS_TOL_SCENE)
+                return good & _verdict(f'{label} left the chain untouched',
+                                       untouched,
+                                       f'{len(before)} -> {len(after)} joints, '
+                                       f'max move='
+                                       f'{_max_move(before, after):.5f}')
+            return _verdict(f'{label} refused', False,
+                            'the rebuild completed - the guard never fired')
+
+        def influence_skin(joint):
+            """
+            _find_influence_skin, reporting a raise instead of propagating.
+
+            The lookup itself is what broke last time, so a version that
+            throws must come back as a failed verdict here and leave the
+            other hazards to be checked - not take the whole test with it.
+            """
+            try:
+                return rt_chain_build._find_influence_skin(joint)
+            except Exception as exc:
+                return f'<raised {type(exc).__name__}: {exc}>'
+
+        ok &= rebuilds('clean scratch chain rebuilds')
+
+        # 1. skinCluster influence. The regression: a skinCluster sits
+        # DOWNSTREAM of its influences (joint.worldMatrix feeds
+        # skinCluster.matrix), so the lookup has to follow the joint's
+        # future, and is checked directly here as well as through rebuild.
+        geo = cmds.polyCube(name=f'{SCRATCH}_geo')[0]
+        junk.append(geo)
+        skin = cmds.skinCluster(joints, geo, toSelectedBones=True)[0]
+        junk.append(skin)
+        found = influence_skin(mid)
+        ok &= _verdict('_find_influence_skin finds the bound cluster',
+                       found == skin, f'got {found!r}, expected {skin!r}')
+        ok &= refuses('skinned chain')
+        cmds.skinCluster(geo, edit=True, unbind=True)
+        unbound = influence_skin(mid)
+        ok &= _verdict('_find_influence_skin empty once unbound',
+                       unbound is None, f'got {unbound!r}')
+        ok &= rebuilds('unbound chain rebuilds again')
+
+        # 2. Driven by a built rig, on translate and on offsetParentMatrix.
+        driver = cmds.spaceLocator(name=f'{SCRATCH}_driver')[0]
+        junk.append(driver)
+        cmds.connectAttr(f'{driver}.translate', f'{mid}.translate')
+        ok &= refuses('rig-driven translate')
+        cmds.disconnectAttr(f'{driver}.translate', f'{mid}.translate')
+        cmds.connectAttr(f'{driver}.matrix', f'{mid}.offsetParentMatrix')
+        ok &= refuses('rig-driven offsetParentMatrix')
+        cmds.disconnectAttr(f'{driver}.matrix', f'{mid}.offsetParentMatrix')
+        ok &= rebuilds('undriven chain rebuilds again')
+
+        # 3. Locked translate: writable in the API sense, not the artist's.
+        cmds.setAttr(f'{mid}.translateX', lock=True)
+        ok &= refuses('locked translateX')
+        cmds.setAttr(f'{mid}.translateX', lock=False)
+        ok &= rebuilds('unlocked chain rebuilds again')
+
+        # 4. A branch child would be orphaned by a shrink - and the branch
+        # can be anywhere, not just at the tip.
+        branch = cmds.createNode('joint', name=f'{SCRATCH}_branch')
+        cmds.parent(branch, mid)
+        ok &= refuses('branch child')
+        cmds.delete(branch)
+        ok &= rebuilds('unbranched chain rebuilds again')
+
+        # 5. The exemption: an _ee_ is the one child that is not a branch.
+        # Setup needs it and the rebuild re-places it, so the guard has to
+        # let it through instead of refusing every finished chain.
+        ee = cmds.createNode('joint', name=f'{SCRATCH}_ee_jnt')
+        cmds.parent(ee, tip)
+        ok &= rebuilds('_ee_ child is not treated as a branch')
+
+        # 6. A lone joint is not a chain (_guard_min_length).
+        lone = cmds.createNode('joint', name=f'{SCRATCH}_lone')
+        junk.append(lone)
+        try:
+            rt_chain_build.rebuild(lone, 5, mode='uniform', snap=False)
+            ok &= _verdict('single joint refused', False,
+                           'the rebuild completed')
+        except Exception as exc:
+            ok &= _verdict('single joint refused',
+                           isinstance(exc, RigTailBuildError),
+                           f'{type(exc).__name__}: {exc}')
+        return ok
+    finally:
+        if root:
+            junk.append(root)
+            try:
+                rt_chain_build.clear_cache(root)
+            except Exception:
+                pass
+        _delete_junk(junk)
+
+
+def test_cache_no_compounding(rigname=DEFAULT_CHAIN):
+    """
+    Ten count changes and back to N land exactly where one N->n->N pass
+    does. The empirical proof of the session original cache.
+
+    Every rebuild resamples the chain's FIRST-SEEN shape, not the shape
+    the last rebuild left behind, so distortion cannot accumulate however
+    many times the artist drags the count spinner. The claim is not the
+    weak "less than ten times the drift" - it is that the two paths agree
+    to within float noise, because both are the same one resampling of the
+    same source. Without the cache the ten-pass result would be ten
+    lossy passes stacked on each other.
+
+    Uses Power at k=3 rather than Uniform so the redistribution is
+    substantial on any chain: comparing two paths that both moved nothing
+    would prove nothing.
+
+    Also checks the escape hatch. A chain edited by hand between clicks
+    re-baselines - past JOINT_POS_TOLERANCE the cache is discarded and the
+    chain as it now stands becomes the new original - so the cache is a
+    convenience, not a cage.
+    """
+    if not _require_maya('test_cache_no_compounding'):
+        return None
+    found = _scene_chain('test_cache_no_compounding', rigname)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    n = len(bn)
+    original = state['positions']
+    ok = True
+    try:
+        # One pass out and back.
+        rt_chain_build.clear_cache(root)
+        root = rt_chain_build.rebuild(root, n + 5, mode='power', param=3.0,
+                                      snap=False)[0]
+        root = rt_chain_build.rebuild(root, n, mode='power', param=3.0,
+                                      snap=False)[0]
+        once = _positions(_chain_bn(root))
+        drift_once = _max_move(original, once)
+
+        # Back to the start, cache and all, then ten passes out and back.
+        for joint, pos in zip(_chain_bn(root), original):
+            cmds.xform(joint, ws=True, t=pos)
+        rt_chain_build.clear_cache(root)
+        counts = [n + 5, n - 2, n + 9, n - 3, n + 12, n + 1,
+                  n - 1, n + 7, n - 4, n + 3]
+        for count in counts:
+            root = rt_chain_build.rebuild(root, max(2, count), mode='power',
+                                          param=3.0, snap=False)[0]
+        root = rt_chain_build.rebuild(root, n, mode='power', param=3.0,
+                                      snap=False)[0]
+        many = _positions(_chain_bn(root))
+        drift_many = _max_move(original, many)
+
+        ok &= _verdict('re-spacing moved the chain at all',
+                       drift_once > POS_TOL_SCENE,
+                       f'one pass moved it {drift_once:.5f}')
+        ok &= _verdict(f'{len(counts)} passes land where one pass does',
+                       _max_move(once, many) < POS_TOL_SCENE,
+                       f'max difference={_max_move(once, many):.6f}')
+        ok &= _verdict('drift did not compound',
+                       drift_many < drift_once * 1.5 + POS_TOL_SCENE,
+                       f'one pass={drift_once:.5f}, '
+                       f'{len(counts)} passes={drift_many:.5f}')
+
+        # White box: the cached original is still the chain as it was
+        # found. Every one of those rebuilds read it and none rewrote it.
+        entry = rt_chain_build._ORIGINALS.get(_long(root), {})
+        cached = entry.get('positions') or []
+        ok &= _verdict('cached original is the chain as it was found',
+                       len(cached) == n and
+                       _max_move(cached, original) < POS_TOL_SCENE,
+                       f'{len(cached)} cached position(s), max difference='
+                       f'{_max_move(cached, original):.6f}')
+
+        # Hand-edited chains re-baseline instead of snapping back.
+        chain = _chain_bn(root)
+        before_edit = _positions(chain)
+        step = max(10.0 * rt_constants.JOINT_POS_TOLERANCE,
+                   0.05 * _chain_length(before_edit))
+        target = list(before_edit[1])
+        target[1] += step
+        cmds.xform(chain[1], ws=True, t=target)
+        # Dragging one joint drags everything under it, so the hand-edited
+        # shape is the chain as it now stands - not one moved point.
+        edited = _positions(chain)
+        ok &= _verdict('the hand edit is past JOINT_POS_TOLERANCE',
+                       _max_move(before_edit, edited) >
+                       rt_constants.JOINT_POS_TOLERANCE,
+                       f'nudged by {step:.5f}, tolerance is '
+                       f'{rt_constants.JOINT_POS_TOLERANCE}')
+        root = rt_chain_build.rebuild(root, n, mode='keep', snap=False)[0]
+        kept = _max_move(edited, _positions(_chain_bn(root)))
+        ok &= _verdict('a hand edit re-baselines the cache',
+                       kept < POS_TOL_SCENE,
+                       f'moved {kept:.5f} from the hand-edited shape')
+        return ok
+    finally:
+        _restore(state, root)
+
+
+def test_undo(rigname=DEFAULT_CHAIN):
+    """
+    One undo restores the pre-click state, for a grow and for a shrink.
+
+    The rebuild runs inside build_performance_scope, which opens a single
+    undo chunk, so everything one click does - new nodes, deleted nodes,
+    renumbering, the _ee_ re-parented and re-placed - has to come back in
+    ONE step. Anything less leaves the artist hammering Ctrl+Z through a
+    half-rebuilt chain with no way to tell when they have arrived.
+
+    The shrink is the harder half: undoing it has to bring deleted joints
+    back, under their old names, in their old places.
+
+    The session original cache is a module global and is NOT undone. After
+    an undo it still holds what the tool last wrote, so the next rebuild
+    sees the difference and re-baselines - intended, and checked in
+    test_cache_no_compounding rather than here.
+    """
+    if not _require_maya('test_undo'):
+        return None
+    if not cmds.undoInfo(q=True, state=True):
+        print('  test_undo: the undo queue is off, skipping')
+        return None
+    found = _scene_chain('test_undo', rigname)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    n = len(bn)
+    ok = True
+    try:
+        for label, target in (('grow', n + 4), ('shrink', max(2, n - 2))):
+            rt_chain_build.clear_cache(root)
+            rt_chain_build.rebuild(root, target, mode='uniform', snap=False)
+            cmds.undo()
+
+            root = _resolve_root(state['names'][0])
+            ok &= _verdict(f'undo after {label} restores the root joint',
+                           bool(root), root or
+                           f'{state["names"][0]} is not in the scene')
+            if not root:
+                break
+            chain = _chain_bn(root)
+            ok &= _verdict(f'undo after {label} restores the joint count',
+                           len(chain) == n, f'{len(chain)} joints, wanted {n}')
+            ok &= _verdict(f'undo after {label} restores every name',
+                           _leaves(chain) == state['names'],
+                           _name_diff(state['names'], _leaves(chain)))
+            if len(chain) == n:
+                moved = _max_move(state['positions'], _positions(chain))
+                ok &= _verdict(f'undo after {label} restores the positions',
+                               moved < POS_TOL_SCENE, f'max move={moved:.5f}')
+            if not state['ee']:
+                continue
+            ee = rt_chain_build._end_joint(chain[-1]) if chain else None
+            ok &= _verdict(f'undo after {label} restores the _ee_',
+                           bool(ee) and ee.split('|')[-1] == state['ee'],
+                           f'{state["ee"]} -> {ee}')
+            if ee:
+                d = math.dist(cmds.xform(ee, q=True, ws=True, t=True),
+                              state['ee_pos'])
+                ok &= _verdict(f'undo after {label} restores the _ee_ position',
+                               d < POS_TOL_SCENE, f'moved {d:.5f}')
+        return ok
+    finally:
+        _restore(state, root)
+
+
 # RUNNERS ===============================================================
 
 def run_math():
@@ -488,15 +1196,26 @@ def run_math():
     return _summary("CHAIN MATH TESTS", results)
 
 
-def run_scene():
-    """Run every MUTATING scene test. RELOAD THE SCENE afterwards."""
+def run_scene(chain=DEFAULT_CHAIN):
+    """
+    Run every MUTATING scene test on the loaded skeleton and print a
+    summary. RELOAD THE SCENE afterwards.
+
+    Each test puts the chain's count, names and positions back before the
+    next one runs, but joints a shrink deleted return as new nodes and
+    orientations are not restored - reload before building for real.
+
+    Arguments:
+        chain (str): rig part name, or the name of any joint in the chain.
+    """
     print("\n*** run_scene MUTATES the skeleton. Reload before building. ***")
     tests = [
-        ("test_rebuild_count", lambda: None),
-        ("test_names_preserved", lambda: None),
-        ("test_guards", lambda: None),
-        ("test_cache_no_compounding", lambda: None),
-        ("test_undo", lambda: None),
+        (f"test_rebuild_count({chain})", lambda: test_rebuild_count(chain)),
+        (f"test_names_preserved({chain})", lambda: test_names_preserved(chain)),
+        ("test_guards", test_guards),
+        (f"test_cache_no_compounding({chain})",
+         lambda: test_cache_no_compounding(chain)),
+        (f"test_undo({chain})", lambda: test_undo(chain)),
     ]
     results = []
     for name, fn in tests:

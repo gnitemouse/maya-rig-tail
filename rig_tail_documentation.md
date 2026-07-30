@@ -823,15 +823,21 @@ interpolants reproduce their knots, re-applying a profile to its own result
 does not drift, a clean count change snaps to every other original exactly,
 and `test_containment` greps every core module to enforce the one-way import
 rule. **Scene tests** are MUTATING — they create, rebuild and re-space real
-chains, so reload the scene afterwards.
+chains through the same entry points the UI uses, so reload the scene
+afterwards. Each one snapshots the chain's names and positions and puts
+them back before the next runs, but a shrink deletes joints and they come
+back as new nodes, so the reload is what makes it clean. `test_guards` is
+the exception: it builds and deletes its own scratch chain and never
+touches the loaded skeleton.
 
 ### Functions
 
 #### `run_math()`
 Every math test, with a PASS/FAIL summary. Safe, and runnable outside Maya.
 
-#### `run_scene()`
-Every scene test, with a PASS/FAIL summary. **Mutating.**
+#### `run_scene(chain='C_tail')`
+Every scene test, with a PASS/FAIL summary. **Mutating.** Takes a rig part
+name or the name of any joint in the chain.
 
 #### `run_all()`
 `run_math()` plus a pointer to the mutating scene tests.
@@ -843,8 +849,35 @@ Individual tests: `test_containment`, `test_distribution_endpoints`,
 `test_resample_noop`, `test_respace_same_count`, `test_param_defaults`,
 `test_roundtrip_drift`, `test_snap_exact`, `test_degenerate` (math);
 `test_rebuild_count`, `test_names_preserved`, `test_guards`,
-`test_cache_no_compounding`, `test_undo` (scene — currently placeholders
-that report `RAN`, not `PASS`).
+`test_cache_no_compounding`, `test_undo` (scene).
+
+What the scene tests pin down:
+
+- `test_rebuild_count(chain)` — grow, shrink and same-count in one pass.
+  The chain **as it stands in the scene**, walked from the root rather
+  than read off the return value, is n joints in one parent-to-child
+  line; both endpoints stay where they were; no two joints coincide; and
+  the `_ee_` hangs off the new tip at its original distance, along the new
+  final segment.
+- `test_names_preserved(chain)` — at `n == N` (what the UI opens on) the
+  joints move and nothing else changes: no renumbering, no new nodes, no
+  renamed `_ee_`. Uses Power at k=3 so the claim is not vacuous on a chain
+  that is already evenly spaced.
+- `test_guards()` — skinned, rig-driven (translate and
+  offsetParentMatrix), locked and branching chains are refused, and
+  refused without moving anything; a lone joint is refused too, and an
+  `_ee_` child is *not* mistaken for a branch. Every hazard is armed and
+  disarmed with a clean rebuild either side, on a scratch chain the test
+  builds and deletes. The refusal must be `RigTailBuildError`
+  specifically — "it raised something" would have passed the bug that
+  made `_find_influence_skin` throw `TypeError` on every rebuild.
+- `test_cache_no_compounding(chain)` — ten count changes and back to N
+  land where a single N→n→N pass does, to float noise, because every
+  rebuild resamples the chain's first-seen shape. Also checks the escape
+  hatch: an edit past `JOINT_POS_TOLERANCE` re-baselines the cache.
+- `test_undo(chain)` — one undo restores count, names, positions and the
+  `_ee_`, for a grow and for a shrink. The session cache is a module
+  global and is deliberately *not* undone.
 
 ---
 
