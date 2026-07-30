@@ -336,16 +336,12 @@ class JointChainBuilderUI(QtWidgets.QDialog):
 
         spc_group.setLayout(spc_layout)
         main_layout.addWidget(spc_group)
+        main_layout.addSpacing(8)
 
         # Status ---------------------------------------------------------
-        # One line saying what the last click actually did and with which
-        # options. Read-only, and styled like Build's 'File:' line so the two
-        # windows read as one tool. The Script Editor still gets the detail;
-        # this is so the artist does not have to open it to know a click
-        # landed.
         status_layout = QtWidgets.QHBoxLayout()
         lbl_status = QtWidgets.QLabel('Status:')
-        lbl_status.setMinimumWidth(40)
+        lbl_status.setMinimumWidth(24)
         self.txt_status = QtWidgets.QLineEdit()
         self.txt_status.setReadOnly(True)
         self.txt_status.setPlaceholderText('Ready')
@@ -359,13 +355,10 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                 padding: 2px 14px;
             }
         ''')
-        self.txt_status.setToolTip(
-            'What the last click did: which button ran, over how many '
-            'chains, and the options it ran with.')
+        self.txt_status.setToolTip('Report last action')
         status_layout.addWidget(lbl_status)
         status_layout.addWidget(self.txt_status)
         main_layout.addLayout(status_layout)
-        main_layout.addSpacing(8)
 
         # Buttons --------------------------------------------------------
         button_layout = QtWidgets.QHBoxLayout()
