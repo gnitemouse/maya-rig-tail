@@ -9,8 +9,10 @@ Own copies of create_group_box / style_button — never modifies shared
 widgets in rig_tail_ui.py (see §2.2 of the Joint Chain Builder plan).
 
 Deliberately stateless: every option is a widget read at click time, with
-no config file and no preferences. The tool has six controls and one undo
-step per click, so there is nothing worth persisting.
+no config file and no preferences. The tool is a handful of controls and
+one undo step per click, so there is nothing worth persisting. What little
+the window does remember is scene state, not settings: which chains Select
+found and which joint of each was picked.
 
 Classes and functions:
     JointChainBuilderUI: the Joint Chain Builder window
@@ -33,7 +35,7 @@ import rig_tail_chain_spacing as rt_chain_spacing
 class JointChainBuilderUI(QtWidgets.QDialog):
     '''Joint Chain Builder window: create and re-space joint chains.'''
 
-    FIELD_W = 150       # dropdown / spin box width
+    FIELD_W = 180       # dropdown / spin box width
     FIELD_H = 28        # height of every input widget
     LABEL_W = 150       # shared field start
     ROW_GAP = 6         # label -> field gap, identical on every row
@@ -87,6 +89,14 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         # Rig name -> chain root, filled by Select. The box shows rig names
         # because that is what reads well in a list; the tool works on roots.
         self._roots = {}
+        # Rig name -> the joint actually picked in the viewport, for
+        # 'Build from selected joint'. Only Select can fill this in: a typed
+        # name says which chain, never which joint of it.
+        self._starts = {}
+        # Last count Select or a Build-from switch put in the spin box, so
+        # the field can follow the detected count until the artist overrides
+        # it and then stop touching it.
+        self._detected_first = None
         self.setup_ui()
         self._sync_source_mode()    # also syncs the mode-dependent fields
         self.resize(520, self.sizeHint().height())
@@ -168,13 +178,47 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             'them; rename them in Maya afterwards if you want something '
             'else.')
         self.rad_rebuild.toggled.connect(self._sync_source_mode)
+        # Explicit groups, because all four radio buttons end up children of
+        # the Source group box and Qt would otherwise make one exclusive set
+        # of the lot: picking 'from selected joint' would clear 'Rebuild
+        # selected chain'.
+        self._source_group = QtWidgets.QButtonGroup(self)
         for rad in (self.rad_rebuild, self.rad_new):
             rad.setStyleSheet('color: #cccccc; spacing: 4px;')
+            self._source_group.addButton(rad)
+
+        # Build from -----------------------------------------------------
+        # Which end of a rebuild's chain the joint count and spacing apply
+        # from. Last in Source because it qualifies what the pair above
+        # already chose rather than being a third choice alongside them.
+        self.rad_from_base = QtWidgets.QRadioButton('Build from base joint')
+        self.rad_from_selected = QtWidgets.QRadioButton('Build from selected joint')
+        self.rad_from_base.setChecked(True)
+        self.rad_from_base.setToolTip(
+            'Re-space the whole chain, base joint to tip, whichever joint of '
+            'it was selected. Joint Count is the count of the entire chain.')
+        self.rad_from_selected.setToolTip(
+            'Re-space only the run from the selected joint down to the tip. '
+            'Everything above it is left exactly as it is, and the selected '
+            'joint itself does not move - it is the fixed end of the span. '
+            'Joint Count is the count of that span, the selected joint '
+            'included.\n\n'
+            'Needs Select to have been used: a typed rig part name says '
+            'which chain, never which joint of it, so a typed entry falls '
+            'back to the base joint.')
+        self._from_group = QtWidgets.QButtonGroup(self)
+        for rad in (self.rad_from_base, self.rad_from_selected):
+            rad.setStyleSheet('color: #cccccc; spacing: 4px;')
+            self._from_group.addButton(rad)
+        self.rad_from_base.toggled.connect(self._sync_detected)
 
         src_layout.addLayout(chain_row)
         src_layout.addSpacing(6)
         src_layout.addWidget(self.rad_rebuild)
         src_layout.addWidget(self.rad_new)
+        src_layout.addSpacing(6)
+        src_layout.addWidget(self.rad_from_base)
+        src_layout.addWidget(self.rad_from_selected)
         src_group.setLayout(src_layout)
         main_layout.addWidget(src_group)
 
@@ -220,8 +264,12 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             'How joints are distributed along the chain:\n'
             '  Keep     - hold the current spacing pattern at the new count\n'
             '  Uniform  - even segments\n'
-            '  Power    - u = t^k, packs joints toward the BASE as k rises\n'
-            '  Ratio    - each segment r times the last, packs toward the TIP\n'
+            '  Power    - u = t^(1/k), long segments at the base tapering\n'
+            '             to short ones at the tip as k rises\n'
+            '  Ratio    - each segment r times the last, so segments shrink\n'
+            '             from base to tip as r drops below 1\n'
+            'Power and Ratio taper the same way; Invert swaps the direction '
+            'of any of the four.\n'
             'Keep and Uniform take no Spacing Value.')
         self.cmb_mode.setStyleSheet(self.FIELD_STYLE)
         self.cmb_mode.setFixedSize(self.FIELD_W, self.FIELD_H)
@@ -288,11 +336,40 @@ class JointChainBuilderUI(QtWidgets.QDialog):
 
         spc_group.setLayout(spc_layout)
         main_layout.addWidget(spc_group)
-        main_layout.setSpacing(20)
+
+        # Status ---------------------------------------------------------
+        # One line saying what the last click actually did and with which
+        # options. Read-only, and styled like Build's 'File:' line so the two
+        # windows read as one tool. The Script Editor still gets the detail;
+        # this is so the artist does not have to open it to know a click
+        # landed.
+        status_layout = QtWidgets.QHBoxLayout()
+        lbl_status = QtWidgets.QLabel('Status:')
+        lbl_status.setMinimumWidth(40)
+        self.txt_status = QtWidgets.QLineEdit()
+        self.txt_status.setReadOnly(True)
+        self.txt_status.setPlaceholderText('Ready')
+        self.txt_status.setStyleSheet('''
+            QLineEdit {
+                background-color: #2b2b2b;
+                color: #4A90E2;
+                font-size: 10px;
+                border: 1px solid #555555;
+                border-radius: 10px;
+                padding: 2px 14px;
+            }
+        ''')
+        self.txt_status.setToolTip(
+            'What the last click did: which button ran, over how many '
+            'chains, and the options it ran with.')
+        status_layout.addWidget(lbl_status)
+        status_layout.addWidget(self.txt_status)
+        main_layout.addLayout(status_layout)
+        main_layout.addSpacing(8)
 
         # Buttons --------------------------------------------------------
         button_layout = QtWidgets.QHBoxLayout()
-        button_layout.setSpacing(10)
+        button_layout.setSpacing(20)
 
         self.btn_reset = QtWidgets.QPushButton('Bake Joint Chain')
         self.btn_reset.setToolTip('Bake joints to preserve the current shape,'
@@ -383,6 +460,10 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.btn_select.setEnabled(not is_new)
         # Nothing is cached for a chain that does not exist yet.
         self.btn_reset.setEnabled(not is_new)
+        # A new chain has no base and no selected joint to build from — both
+        # of its ends are the objects that were picked.
+        self.rad_from_base.setEnabled(not is_new)
+        self.rad_from_selected.setEnabled(not is_new)
         if is_new and self.cmb_mode.currentText().lower() == 'keep':
             self.cmb_mode.setCurrentIndex(self.MODES.index('Uniform'))
         self._sync_mode()
@@ -411,12 +492,14 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             self._param_mode = mode
             self.lbl_param_hint.setText(f'({low:g} to {high:g})')
             self.spn_param.setToolTip(
-                'Exponent k: 1.0 is uniform, above packs joints toward the '
-                f'base, below toward the tip. {low:g} to {high:g}.'
+                'Exponent k: 1.0 is uniform, above 1 makes the base segments '
+                'longer and the tip ones shorter, below 1 reverses that '
+                f'(same as Invert). {low:g} to {high:g}.'
                 if mode == 'power' else
-                'Ratio r: each segment is r times the one before, so joints '
-                f'pack toward the tip. 1.0 is uniform. {low:g} to {high:g} - '
-                'smaller would collapse the far segments to nothing.')
+                'Ratio r: each segment is r times the one before, so the '
+                'segments start long at the base and shorten toward the tip. '
+                f'1.0 is uniform. {low:g} to {high:g} - smaller would '
+                'collapse the far segments to nothing.')
         else:
             self._param_mode = None
             self.spn_param.setEnabled(False)
@@ -430,19 +513,47 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             self._param_values[self._param_mode] = value
 
     def _sync_detected(self, *args):
-        '''Show the joint count of the listed chain(s).'''
-        counts = []
+        '''Show the joint count of the listed chain(s), and follow it.
+
+        The count reported is the count of what Build Joints would actually
+        re-space, so it drops to the span length under 'Build from selected
+        joint'. *args soaks up the bool QRadioButton.toggled sends.
+        '''
+        counts, labels = [], []
         for name in self._chain_names():
-            root = self._resolve_root(name)
-            if not root:
-                counts.append('?')
-                continue
+            start = self._resolve_start(name)
             try:
-                counts.append(str(len(rt_joint.get_joint_chain(root))))
+                count = len(rt_joint.get_joint_chain(start)) if start else None
             except Exception:
-                counts.append('?')
+                count = None
+            counts.append(count)
+            labels.append(str(count) if count else '?')
+
+        # The spin box follows the detected count while it still holds what
+        # was last detected: Select and a Build-from switch then land on a
+        # count that re-spaces what is there, and a count the artist typed is
+        # left alone.
+        first = counts[0] if counts else None
+        if first and (self._detected_first is None or
+                      self.spn_count.value() == self._detected_first):
+            self.spn_count.setValue(first)
+        self._detected_first = first
+
         self.lbl_detected.setText(
-            f'(detected: {", ".join(counts)})' if counts else '(detected: —)')
+            f'(detected: {", ".join(labels)})' if labels else '(detected: —)')
+
+    def _resolve_start(self, name):
+        '''The joint a rebuild of this entry starts from.
+
+        The chain's base joint, or the joint Select recorded when 'Build from
+        selected joint' is on. A typed name has no recorded joint — it names
+        a chain, not a joint of it — so it falls back to the base.
+        '''
+        root = self._resolve_root(name)
+        if not root or not self.rad_from_selected.isChecked():
+            return root
+        selected = self._starts.get(name)
+        return selected if selected and cmds.objExists(selected) else root
 
     def _resolve_root(self, name):
         '''
@@ -465,6 +576,33 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         except Exception:
             return None
 
+    # STATUS ============================================================
+
+    def _set_status(self, text):
+        '''Put one line in the status bar, and its full form in its tooltip
+        for when the line is longer than the field.'''
+        self.txt_status.setText(text)
+        self.txt_status.setToolTip(text)
+        self.txt_status.setCursorPosition(0)
+
+    def _options_summary(self):
+        '''The spacing options a Build Joints click is about to use, as one
+        comma-separated phrase.'''
+        mode = self.cmb_mode.currentText()
+        parts = [f'{mode} {self.spn_param.value():g}'
+                 if self.spn_param.isEnabled() else mode]
+        if self.chk_invert.isChecked():
+            parts.append('invert')
+        if self.chk_snap.isChecked() and self.chk_snap.isEnabled():
+            parts.append('snap')
+        if self.chk_orient.isChecked():
+            parts.append('orient')
+        if self.rad_rebuild.isChecked():
+            parts.append('from selected joint'
+                         if self.rad_from_selected.isChecked() else
+                         'from base joint')
+        return ', '.join(parts)
+
     # ACTIONS ===========================================================
 
     def select_from_viewport(self):
@@ -473,9 +611,11 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             specs = rt_chain.resolve_selection()
         except Exception as exc:
             cmds.warning(f'Could not resolve selection: {exc}')
+            self._set_status(f'Select - could not resolve selection: {exc}')
             return
         if not specs:
             cmds.warning('No chain resolved from the selection.')
+            self._set_status('Select - no chain resolved from the selection.')
             return
 
         new_specs = [s for s in specs if s.is_new]
@@ -486,31 +626,35 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             self.txt_chain.clear()
             cmds.warning(f'New chain mode: {spec.start} to {spec.end}. '
                          'Click Build Joints.')
+            self._set_status(f'Select - new chain mode, {spec.start} to '
+                             f'{spec.end}. Click Build Joints.')
             return
 
         # Show rig names, remember the roots they came from. A rig name reads
         # far better in a list than a root joint name, and it is what the
         # rest of the pipeline calls a chain.
-        self._roots = {}
-        names = []
+        self._roots, self._starts = {}, {}
+        names, skipped = [], 0
         for spec in specs:
             name = spec.rigname or spec.root.split('|')[-1]
             if name in self._roots:
                 cmds.warning(f'Two chains both resolve to "{name}"; listing '
                              'the first. Rebuild them one at a time.')
+                skipped += 1
                 continue
             self._roots[name] = spec.root
+            self._starts[name] = spec.selected
             names.append(name)
 
         self.rad_rebuild.setChecked(True)
+        # Let the count follow whatever this selection detects, overriding
+        # any earlier one: a fresh Select is a fresh chain to re-space.
+        self._detected_first = None
         self.txt_chain.setText(', '.join(names))
-        # Default the count to the first chain's own length, so the first
-        # click re-spaces rather than resizing by surprise.
-        try:
-            self.spn_count.setValue(len(rt_joint.get_joint_chain(specs[0].root)))
-        except Exception:
-            pass
         self._sync_detected()
+        self._set_status(
+            f'Select - listed {len(names)} chain(s): {", ".join(names)}' +
+            (f' ({skipped} skipped, duplicate name)' if skipped else '') + '.')
 
     def reset_original(self):
         '''Re-baseline the session original cache for the listed chain(s).
@@ -522,6 +666,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         if not names:
             cmds.warning('No chain listed. Select a joint of each chain and '
                          'click Select first.')
+            self._set_status('Bake Joint Chain - nothing baked: no chain '
+                             'listed.')
             return
         cleared, missing = 0, []
         for name in names:
@@ -534,6 +680,12 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             cmds.warning(f'No chain found for: {", ".join(missing)}.')
         cmds.warning(f'Re-baselined {cleared} chain(s): their shape as it '
                      'stands now is what the next Build measures from.')
+        self._set_status(
+            f'Bake Joint Chain - re-baselined {cleared} chain(s); their shape '
+            'and joint size as they stand now are what the next Build '
+            'measures from' +
+            (f'. No chain found for: {", ".join(missing)}' if missing else '') +
+            '.')
 
     def run_build(self):
         '''Build or re-space with the current settings. One undo step.'''
@@ -552,11 +704,15 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         if not names:
             cmds.warning('No chain listed. Select a joint of each chain and '
                          'click Select, or type the rig part names.')
+            self._set_status('Build Joints - nothing built: no chain listed.')
             return
+
+        from_selected = self.rad_from_selected.isChecked()
+        options = self._options_summary()
 
         # One chain per name, each on its own: a typo or a guarded chain in a
         # list of four still leaves the other three rebuilt.
-        done, failed = [], []
+        done, failed, fellback = [], [], []
         for name in names:
             root = self._resolve_root(name)
             if not root:
@@ -564,8 +720,17 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                              'or joint name in this scene.')
                 failed.append(name)
                 continue
+            # None means the whole chain. A from-selected rebuild with no
+            # recorded pick is a typed entry: say so rather than quietly
+            # doing something other than the option shown.
+            start = self._starts.get(name) if from_selected else None
+            if start and not cmds.objExists(start):
+                start = None
+            if from_selected and not start:
+                fellback.append(name)
             try:
-                rt_chain.rebuild(root, n, mode, param, invert, snap, orient)
+                rt_chain.rebuild(root, n, mode, param, invert, snap, orient,
+                                 start)
                 done.append(name)
             except Exception as exc:
                 cmds.warning(f'Rebuild failed on {name}: {exc}')
@@ -576,6 +741,21 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         if failed:
             cmds.warning(f'No rebuild for: {", ".join(failed)}. See the '
                          'Script Editor for why.')
+        if fellback:
+            cmds.warning(f'No selected joint recorded for: '
+                         f'{", ".join(fellback)}. Rebuilt from the base '
+                         'joint. Click Select to record one.')
+
+        status = []
+        if done:
+            status.append(f're-spaced {len(done)} chain(s) to {n} joints '
+                          f'[{options}]: {", ".join(done)}')
+        if fellback:
+            status.append(f'no selected joint recorded for '
+                          f'{", ".join(fellback)}, built from base')
+        if failed:
+            status.append(f'failed on {", ".join(failed)} (see Script Editor)')
+        self._set_status('Build Joints - ' + '; '.join(status) + '.')
         self._sync_detected()
 
     def _build_new_chain(self, n, mode, param, invert, orient):
@@ -588,15 +768,22 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         if len(sel) < 2:
             cmds.warning('Select two objects to mark the ends of the new '
                          'chain.')
+            self._set_status('Build Joints - nothing built: select two '
+                             'objects to mark the ends of the new chain.')
             return
+        options = self._options_summary()
         try:
             joints = rt_chain.build_new(sel[0], sel[1], n, None, mode, param,
                                       invert, orient)
         except Exception as exc:
             cmds.warning(f'Chain build failed: {exc}')
+            self._set_status(f'Build Joints - new chain failed: {exc}')
             return
         cmds.warning(f'Built {n} joints ({mode}) from {sel[0]} to {sel[1]}: '
                      f'{joints[0]} onward.')
+        self._set_status(f'Build Joints - built a new chain of {n} joints '
+                         f'[{options}] from {sel[0]} to {sel[1]}: '
+                         f'{joints[0]} onward.')
 
 
 def get_maya_window():

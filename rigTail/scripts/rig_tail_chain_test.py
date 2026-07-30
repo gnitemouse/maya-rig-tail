@@ -45,6 +45,8 @@ Functions:
     test_distribution_endpoints: every mode/param: f(0)=0, f(1)=1
     test_uniform_equivalence: power k=1 == ratio r=1 == uniform
     test_invert_symmetry: invert(invert(f)) == f
+    test_taper_direction: Power and Ratio taper base -> tip; Invert flips
+        every mode, Keep included
     test_pchip_monotone: random monotone data resamples monotonically
     test_pchip_knot_exact: evaluation at knots returns knot values
     test_catmullrom_interpolates: curve at knot params == input points
@@ -59,6 +61,8 @@ Functions:
   Scene tests (MUTATING)
     test_rebuild_count: count, order, parenting, _ee_ position
     test_names_preserved: n==N leaves every name untouched
+    test_partial_rebuild: 'from selected joint' leaves the run above alone
+    test_radius_consistent: one joint radius per chain, fitted to the spacing
     test_guards: skinned/rig-driven/locked/branching chains are refused
     test_cache_no_compounding: drift same as single pass, not 10x
     test_undo: one Ctrl+Z restores the pre-click state
@@ -256,6 +260,48 @@ def test_invert_symmetry():
             u_back = [1.0 - v for v in reversed(u_inv)]
             ok &= _verdict(f"{mode} n={n} double-invert recovers",
                            all(abs(a - b) < LEN_TOL for a, b in zip(u, u_back)))
+    return ok
+
+
+def test_taper_direction():
+    """Power and Ratio both taper base -> tip; Invert reverses every mode.
+
+    The direction is a promise the UI makes in words ('spacing starts wide
+    at the base and closes toward the tip'), and it is one sign flip away
+    from being silently wrong: u = t**k tapers the opposite way to
+    u = t**(1/k) and both look plausible in a screenshot.
+    """
+    ok = True
+    for n in (5, 9, 20):
+        for mode, param in (("power", 1.7), ("power", 3.0),
+                            ("ratio", 0.90), ("ratio", 0.60)):
+            u = rt_chain_spacing.distribute(mode, n, param=param)
+            seg = [u[i + 1] - u[i] for i in range(n - 1)]
+            ok &= _verdict(
+                f"{mode} {param} n={n} segments shrink base -> tip",
+                all(seg[i] > seg[i + 1] for i in range(len(seg) - 1)),
+                f"first={seg[0]:.4f} last={seg[-1]:.4f}")
+            u_inv = rt_chain_spacing.distribute(mode, n, param=param,
+                                                invert=True)
+            seg_inv = [u_inv[i + 1] - u_inv[i] for i in range(n - 1)]
+            ok &= _verdict(
+                f"{mode} {param} n={n} invert grows base -> tip",
+                all(seg_inv[i] < seg_inv[i + 1] for i in range(len(seg_inv) - 1)),
+                f"first={seg_inv[0]:.4f} last={seg_inv[-1]:.4f}")
+
+    # Keep is the mode most likely to be left out of an 'all four modes'
+    # claim, because inverting it means mirroring a sampled profile rather
+    # than flipping a formula.
+    source = [0.0, 0.05, 0.12, 0.30, 0.62, 1.0]
+    u = rt_chain_spacing.distribute("keep", len(source), source=source)
+    u_inv = rt_chain_spacing.distribute("keep", len(source), source=source,
+                                        invert=True)
+    ok &= _verdict("keep honours invert",
+                   any(abs(a - b) > LEN_TOL for a, b in zip(u, u_inv)),
+                   f"inverted={[round(v, 4) for v in u_inv]}")
+    mirrored = [1.0 - v for v in reversed(u)]
+    ok &= _verdict("keep invert is the mirrored profile",
+                   all(abs(a - b) < LEN_TOL for a, b in zip(mirrored, u_inv)))
     return ok
 
 
@@ -558,6 +604,24 @@ def _leaves(joints):
     return [j.split('|')[-1] for j in joints]
 
 
+def _dist(a, b):
+    """Distance between two [x, y, z] positions."""
+    return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+
+def _radii(joints):
+    """Display radius of each joint."""
+    return [cmds.getAttr(f'{j}.radius') for j in joints]
+
+
+def _mean_segment(positions):
+    """Mean distance between consecutive positions."""
+    if len(positions) < 2:
+        return 0.0
+    return sum(_dist(positions[i], positions[i + 1])
+               for i in range(len(positions) - 1)) / (len(positions) - 1)
+
+
 def _long(node):
     """A node's long DAG path, for identity comparisons."""
     return (cmds.ls(node, long=True) or [node])[0]
@@ -613,6 +677,7 @@ def _snapshot(root):
         'root': root,
         'names': _leaves(bn),
         'positions': _positions(bn),
+        'radii': _radii(bn),
         'ee': ee.split('|')[-1] if ee else None,
         'ee_pos': cmds.xform(ee, q=True, ws=True, t=True) if ee else None,
     }
@@ -640,6 +705,14 @@ def _restore(state, root=None):
             bn = rt_chain_build.rebuild(root, n, mode='keep', snap=False)
         for joint, pos in zip(bn, state['positions']):
             cmds.xform(joint, ws=True, t=pos)
+        # A rebuild fits the display radius to the spacing, so putting the
+        # positions back without the radii would leave the chain the right
+        # shape and visibly the wrong size for the next test.
+        for joint, radius in zip(bn, state.get('radii') or []):
+            try:
+                cmds.setAttr(f'{joint}.radius', radius)
+            except (RuntimeError, ValueError):
+                pass
         ee = rt_chain_build._end_joint(bn[-1]) if bn else None
         if ee and state['ee_pos']:
             cmds.xform(ee, ws=True, t=state['ee_pos'])
@@ -833,6 +906,130 @@ def test_names_preserved(rigname=DEFAULT_CHAIN):
             ok &= _verdict(f'{rigname} _ee_ name untouched',
                            bool(ee) and ee.split('|')[-1] == state['ee'],
                            f'{state["ee"]} -> {ee}')
+        return ok
+    finally:
+        _restore(state, root)
+
+
+def test_partial_rebuild(rigname=DEFAULT_CHAIN):
+    """
+    'Build from selected joint' re-spaces the span and NOTHING above it.
+
+    The whole value of the option is what it leaves alone, so that is what
+    is measured: the run above the picked joint keeps its names, its
+    positions and its numbering, and the picked joint itself does not move
+    - it is an endpoint of the resample, which is what lets the joint above
+    it go on aiming exactly where it was.
+
+    Grows the span rather than matching its count, so the renumbering path
+    runs: a partial rebuild has to continue the numbers above it
+    (joint 8 onward), not restart the span at 0 and collide with the root.
+    """
+    if not _require_maya('test_partial_rebuild'):
+        return None
+    found = _scene_chain('test_partial_rebuild', rigname, minimum=6)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    n = len(bn)
+    mid = n // 2
+    start = bn[mid]
+    above_names = _leaves(bn[:mid])
+    above_pos = _positions(bn[:mid])
+    start_pos = cmds.xform(start, q=True, ws=True, t=True)
+    target = (n - mid) + 3
+    rt_chain_build.clear_cache(root)
+    ok = True
+    try:
+        span = rt_chain_build.rebuild(root, target, mode='uniform',
+                                      snap=False, start_joint=start)
+        ok &= _verdict(f'{rigname} span rebuilt to the asked count',
+                       len(span) == target, f'got {len(span)}')
+
+        chain = _chain_bn(_resolve_root(state['names'][0]) or root)
+        ok &= _verdict(f'{rigname} full chain is the span plus the run above',
+                       len(chain) == mid + target,
+                       f'{mid} + {target} expected, got {len(chain)}')
+        ok &= _verdict(f'{rigname} joints above the start keep their names',
+                       _leaves(chain[:mid]) == above_names,
+                       _name_diff(above_names, _leaves(chain[:mid])))
+        moved = _max_move(above_pos, _positions(chain[:mid])) if mid else 0.0
+        ok &= _verdict(f'{rigname} joints above the start do not move',
+                       moved < POS_TOL_SCENE, f'max move={moved:.5f}')
+
+        d = _dist(start_pos, cmds.xform(span[0], q=True, ws=True, t=True))
+        ok &= _verdict(f'{rigname} the picked joint itself does not move',
+                       d < POS_TOL_SCENE, f'moved {d:.5f}')
+        ok &= _verdict(f'{rigname} the span starts at the picked joint',
+                       _long(span[0]) == _long(chain[mid]),
+                       f'{_leaves([span[0]])[0]} vs {_leaves([chain[mid]])[0]}')
+        ok &= _verdict(f'{rigname} names are unique after renumbering',
+                       len(set(_leaves(chain))) == len(chain),
+                       _name_diff(above_names, _leaves(chain)))
+        broken = _broken_parent(chain)
+        ok &= _verdict(f'{rigname} parenting intact', broken is None,
+                       f'{broken} is not parented to its predecessor')
+
+        # Vacuous unless the span was actually redistributed.
+        tail_moved = _max_move(state['positions'][mid:],
+                               _positions(chain[mid:mid + (n - mid)]))
+        ok &= _verdict(f'{rigname} the span actually moved',
+                       tail_moved > POS_TOL_SCENE, f'max move={tail_moved:.5f}')
+        return ok
+    finally:
+        rt_chain_build.clear_cache(root)
+        _restore(state, root)
+
+
+def test_radius_consistent(rigname=DEFAULT_CHAIN):
+    """
+    Every joint in a rebuilt chain draws at ONE radius, sized to the spacing.
+
+    A grown chain used to mix the artist's radius with Maya's default 1.0 on
+    the joints that were just created, which on a tail is the difference
+    between a chain and a string of beads. Two claims, and the second is the
+    one that stops a dense chain reading as a single blob: the radius is
+    capped at half the new mean segment, so joints that end up closer
+    together get smaller with the spacing rather than swallowing it.
+
+    The lower count is rebuilt afterwards on purpose. The cap comes from the
+    session original cache, not from the chain as it stands, so it has to
+    lift again when the joints spread back out instead of ratcheting the
+    chain permanently small.
+    """
+    if not _require_maya('test_radius_consistent'):
+        return None
+    found = _scene_chain('test_radius_consistent', rigname, minimum=4)
+    if not found:
+        return None
+    root, bn = found
+
+    state = _snapshot(root)
+    n = len(bn)
+    rt_chain_build.clear_cache(root)
+    ok = True
+    try:
+        for label, target in (('grown', n + 8), ('shrunk', max(2, n // 2))):
+            result = rt_chain_build.rebuild(root, target, mode='uniform',
+                                            snap=False)
+            root = result[0]
+            chain = _chain_bn(root)
+            ee = rt_chain_build._end_joint(chain[-1]) if chain else None
+            radii = _radii(chain + ([ee] if ee else []))
+            spread = max(radii) - min(radii)
+            ok &= _verdict(f'{rigname} {label}: one radius across the chain',
+                           spread < POS_TOL,
+                           f'{min(radii):.5f} to {max(radii):.5f}')
+            cap = _mean_segment(_positions(chain)) * \
+                rt_chain_build.RADIUS_SEGMENT_FRACTION
+            ok &= _verdict(f'{rigname} {label}: radius fits the spacing',
+                           radii[0] <= cap + POS_TOL,
+                           f'radius {radii[0]:.5f} > cap {cap:.5f}')
+            ok &= _verdict(f'{rigname} {label}: radius is never enlarged',
+                           radii[0] <= max(state['radii']) + POS_TOL,
+                           f'radius {radii[0]:.5f} was {state["radii"][0]:.5f}')
         return ok
     finally:
         _restore(state, root)
@@ -1173,6 +1370,7 @@ def run_math():
         test_distribution_endpoints,
         test_uniform_equivalence,
         test_invert_symmetry,
+        test_taper_direction,
         test_pchip_monotone,
         test_pchip_knot_exact,
         test_catmullrom_interpolates,
@@ -1212,6 +1410,9 @@ def run_scene(chain=DEFAULT_CHAIN):
     tests = [
         (f"test_rebuild_count({chain})", lambda: test_rebuild_count(chain)),
         (f"test_names_preserved({chain})", lambda: test_names_preserved(chain)),
+        (f"test_partial_rebuild({chain})", lambda: test_partial_rebuild(chain)),
+        (f"test_radius_consistent({chain})",
+         lambda: test_radius_consistent(chain)),
         ("test_guards", test_guards),
         (f"test_cache_no_compounding({chain})",
          lambda: test_cache_no_compounding(chain)),

@@ -106,7 +106,7 @@ import rig_tail as rt
 # --- Chain Builder (optional; before Setup, on the raw BN skeleton) ---
 import rig_tail_chain_build as rt_chain
 rt_chain.rebuild_selected(21, 'keep')               # re-space, same profile
-rt_chain.rebuild_selected(30, 'power', param=1.7)   # pack toward the base
+rt_chain.rebuild_selected(30, 'power', param=1.7)   # taper base -> tip
 
 import rig_tail_chain_build_ui as rt_chain_ui
 rt_chain_ui.show_ui()   # or launch the Chain Builder UI
@@ -173,8 +173,11 @@ before any rig exists.
 Pick the chains (**Select** reads them from the viewport, one entry per
 chain however many of their joints are picked), set **Joint Count**, choose
 a **Spacing** profile — *Keep* holds the current pattern, *Uniform* evens the
-segments, *Power* packs joints toward the base, *Ratio* toward the tip — and
-click **Build Joints**. One click, one undo step, every listed chain.
+segments, and *Power* and *Ratio* both taper the segments from long at the
+base to short at the tip — and click **Build Joints**. One click, one undo
+step, every listed chain. A rebuild covers the whole chain by default;
+**Build from selected joint** narrows it to the run below the joint that was
+picked.
 
 ### Highlights
 

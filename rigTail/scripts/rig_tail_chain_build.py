@@ -19,8 +19,8 @@ Functions:
     clear_cache: forget session original cache for one or all chains
 
 Settings deliberately live nowhere: every option is a UI widget read at
-click time. No config file, no preferences — the tool has six controls and
-each click is a single undo.
+click time. No config file, no preferences — the tool is a handful of
+controls and each click is a single undo.
 """
 
 import math
@@ -45,6 +45,13 @@ logger = logger_setup(__name__)
 
 _ORIGINALS = {}
 
+# Display radius given to a chain that has none worth keeping, and the ceiling
+# every rebuild applies: half the mean segment, so the spheres of adjacent
+# joints just touch however dense the chain gets.  Without it a chain taken
+# from 21 joints to 80 keeps a radius set for the old spacing and draws as one
+# solid blob.
+RADIUS_SEGMENT_FRACTION = 0.5
+
 
 # SELECTION RESOLUTION ==================================================
 
@@ -52,12 +59,16 @@ class ChainSpec:
     '''Describes one chain operation from a selection.'''
 
     def __init__(self, root=None, start=None, end=None, rigname=None,
-                 is_new=False):
+                 is_new=False, selected=None):
         self.root = root          # root joint (rebuild) or None (new)
         self.start = start        # start transform
         self.end = end            # end transform
         self.rigname = rigname    # rig part name
         self.is_new = is_new      # True = build new, False = rebuild
+        # The joint actually picked in the viewport, which is what
+        # 'Build from selected joint' rebuilds down from.  Equal to root
+        # whenever the root itself was the pick.
+        self.selected = selected
 
 
 def resolve_selection():
@@ -92,8 +103,15 @@ def resolve_selection():
         for j in joints:
             root = _walk_to_root(j)
             key = (cmds.ls(root, long=True) or [root])[0]
-            if key not in roots:
-                roots[key] = ChainSpec(root=root, rigname=_guess_rigname(root))
+            spec = roots.get(key)
+            if spec is None:
+                roots[key] = ChainSpec(root=root, rigname=_guess_rigname(root),
+                                       selected=j)
+            elif _depth(j) < _depth(spec.selected):
+                # Several joints of one chain picked: the highest one is what
+                # 'from selected joint' rebuilds down from, so the whole
+                # picked run is covered rather than its tail end.
+                spec.selected = j
         return list(roots.values())
 
     # No joints at all: two plain transforms mark the ends of a new chain.
@@ -121,8 +139,15 @@ def chain_root(joint):
 
 
 def _walk_to_root(joint):
-    '''Walk up from joint until the parent is not a joint or is a branch
-    point (has more than one joint child).'''
+    '''Walk up from joint until the parent is not a joint, is a branch
+    point (has more than one joint child), or belongs to a different rig
+    part.
+
+    The rig-part test is what stops a tail parented under a spine from
+    reporting a spine joint as its base: the spine has one child, is a
+    joint, and would otherwise be walked straight through, putting spine
+    joints inside the chain a rebuild re-spaces.
+    '''
     j = joint
     while True:
         parent = cmds.listRelatives(j, parent=True, typ='joint')
@@ -131,7 +156,18 @@ def _walk_to_root(joint):
         siblings = cmds.listRelatives(parent[0], children=True, typ='joint') or []
         if len(siblings) > 1:
             return j
+        here, above = _guess_rigname(j), _guess_rigname(parent[0])
+        if here and above and here != above:
+            return j
         j = parent[0]
+
+
+def _depth(joint):
+    '''How far down the DAG a joint sits, for picking the highest of
+    several selected joints in one chain.'''
+    if not joint:
+        return -1
+    return (cmds.ls(joint, long=True) or [joint])[0].count('|')
 
 
 def _guess_rigname(joint):
@@ -224,9 +260,77 @@ def _guard_min_length(joints):
                            '(total length < EPS).')
 
 
+# JOINT DISPLAY RADIUS ==================================================
+
+def _joint_radius(joint):
+    '''A joint's display radius, or None if it cannot be read.'''
+    if not joint:
+        return None
+    try:
+        return cmds.getAttr(f'{joint}.radius')
+    except (RuntimeError, ValueError) as exc:
+        logger.debug(f'Could not read radius of {joint}: {exc}')
+        return None
+
+
+def _mean_segment(positions):
+    '''Mean distance between consecutive positions.'''
+    if len(positions) < 2:
+        return 0.0
+    total = sum(_length_vec(_sub(positions[i + 1], positions[i]))
+                for i in range(len(positions) - 1))
+    return total / (len(positions) - 1)
+
+
+def _fit_radius(baseline, positions):
+    '''
+    The one radius the whole chain should draw at.
+
+    The artist's own radius, never larger than half the new mean segment.
+    The cap is what stops a chain looking like a single blob once the count
+    goes up: the joints get closer together, so the spheres have to get
+    smaller with them.  `baseline` comes from the session original cache,
+    not from the chain as it stands, so lowering the count again restores
+    the radius rather than ratcheting it down for good.
+
+    Arguments:
+        baseline (float): the chain's own radius, or None if unreadable
+        positions (list of [x, y, z]): the positions about to be written
+
+    Return:
+        float: radius for every joint in the chain
+    '''
+    step = _mean_segment(positions) * RADIUS_SEGMENT_FRACTION
+    if baseline is None or baseline <= rt_chain_spacing.EPS:
+        return step
+    return min(baseline, step) if step > rt_chain_spacing.EPS else baseline
+
+
+def _apply_radius(joints, radius):
+    '''Give every joint in the list the same display radius.
+
+    Skips locked or driven radii rather than aborting: the radius is a
+    display attribute, and losing it on one joint is not worth failing a
+    rebuild over.
+    '''
+    if radius is None or radius <= rt_chain_spacing.EPS:
+        return
+    for joint in joints:
+        if not joint:
+            continue
+        try:
+            if (cmds.getAttr(f'{joint}.radius', lock=True) or
+                    cmds.listConnections(f'{joint}.radius', source=True,
+                                         destination=False)):
+                continue
+            cmds.setAttr(f'{joint}.radius', radius)
+        except (RuntimeError, ValueError) as exc:
+            logger.debug(f'Could not set radius on {joint}: {exc}')
+
+
 # WRITING THE RESULT ====================================================
 
-def _write_chain(joints, positions, rigname):
+def _write_chain(joints, positions, rigname, index_offset=0):
     '''
     Move existing joints to new positions. Handles count changes by
     creating or deleting joints as needed, preserving the _ee_ end joint.
@@ -235,6 +339,9 @@ def _write_chain(joints, positions, rigname):
         joints (list): current chain joints (including _ee_ if present)
         positions (list of [x, y, z]): target positions for BN joints
         rigname (str): rig part name for naming new joints
+        index_offset (int): index the first joint of this span carries in the
+            full chain. Non-zero for a rebuild that starts partway down, so
+            renumbering continues the run above instead of restarting at 0.
 
     Return:
         list: new chain joints (BN only, no _ee_)
@@ -258,18 +365,20 @@ def _write_chain(joints, positions, rigname):
     # Renumber only conventional chains.  Arbitrary artist names are kept
     # positionally; a count change must never silently replace them.
     if n != old_n and _can_renumber(joints, rigname):
-        joints = _renumber_chain(joints, rigname)
+        joints = _renumber_chain(joints, rigname, index_offset)
 
     if n < old_n:
         return _shrink_chain(joints, positions, rigname, ee_distance)
     else:
-        return _grow_chain(joints, positions, rigname, ee_distance)
+        return _grow_chain(joints, positions, rigname, ee_distance,
+                           index_offset)
 
 
-def _renumber_chain(joints, rigname):
+def _renumber_chain(joints, rigname, index_offset=0):
     '''Renumber the chain's BN joints sequentially from the naming template.'''
     bn_joints = [j for j in joints if '_ee_' not in j]
-    targets = [rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i)
+    targets = [rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
+                              index_offset + i)
                for i in range(len(bn_joints))]
     # Maya cannot swap names in-place.  Move every changing name through a
     # unique temporary name first, then assign the final sequence.
@@ -326,7 +435,7 @@ def _shrink_chain(joints, positions, rigname, ee_distance):
     return cmds.ls(keep, type='joint') or keep
 
 
-def _grow_chain(joints, positions, rigname, ee_distance):
+def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0):
     '''Create new joints to reach target count, reposition all.'''
     bn = [j for j in joints if '_ee_' not in j]
     old_n = len(bn)
@@ -339,7 +448,8 @@ def _grow_chain(joints, positions, rigname, ee_distance):
     result = list(bn)
     for i in range(old_n, len(positions)):
         parent = result[-1]
-        new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i)
+        new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
+                                  index_offset + i)
         j = cmds.createNode('joint', name=new_name)
         cmds.parent(j, parent)
         cmds.xform(j, ws=True, t=positions[i])
@@ -356,13 +466,19 @@ def _grow_chain(joints, positions, rigname, ee_distance):
 
 
 def _copy_joint_attrs(src, dst):
-    '''Carry rotateOrder and preferredAngle from the nearest surviving
-    neighbour onto a newly created joint, so a grown chain stays uniform in
-    the channels the rest of the pipeline reads.'''
+    '''Carry rotateOrder, preferredAngle and the display radius from the
+    nearest surviving neighbour onto a newly created joint, so a grown chain
+    stays uniform in the channels the rest of the pipeline reads.
+
+    radius matters visually rather than mechanically: a fresh joint draws at
+    Maya's default 1.0, which is why growing a chain used to fill it with
+    joints far larger than the ones already there.  The chain-wide pass in
+    rebuild settles the final value; this keeps the joint sane in between.
+    '''
     if not src:
         return
     for attr in ('rotateOrder', 'preferredAngleX', 'preferredAngleY',
-                 'preferredAngleZ'):
+                 'preferredAngleZ', 'radius'):
         try:
             cmds.setAttr(f'{dst}.{attr}', cmds.getAttr(f'{src}.{attr}'))
         except (RuntimeError, ValueError) as exc:
@@ -488,6 +604,11 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
             cmds.xform(j, ws=True, t=pos)
             joints.append(j)
 
+        # Every joint is brand new, so there is no artist radius to keep and
+        # Maya's default 1.0 has nothing to do with the chain's scale. Fit it
+        # to the spacing instead.
+        _apply_radius(joints, _fit_radius(_joint_radius(start), positions))
+
         if orient:
             _orient_chain(joints, positions)
 
@@ -569,7 +690,7 @@ def _write_frame(joint, frame, pos):
 
 
 def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
-            orient=False):
+            orient=False, start_joint=None):
     """
     Re-space an existing BN chain at a different joint count.
 
@@ -586,20 +707,45 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             — Setup owns orientation, and the surviving joints otherwise keep
             the aim they had toward their old neighbours. Uses Setup's
             'cascade' up so the chain's existing roll survives.
+        start_joint (str): rebuild only the span from this joint down to the
+            tip, leaving everything above it untouched. None (the default)
+            rebuilds the whole chain, base to tip. The start joint itself
+            never moves — it is an endpoint of the resample — so the joint
+            above it keeps aiming at exactly where it was.
 
     Return:
-        list: BN joints after rebuild
+        list: BN joints after rebuild, the span's own joints only
     """
     if n < 2:
         abort_build(logger, 'Joint count must be at least 2.')
 
-    # Resolve the full chain
-    chain = rt_joint.get_joint_chain(root_joint)
+    # Resolve the chain, then narrow it to the span actually being rebuilt.
+    # Guards and the min-length check run on the span: joints above it are
+    # never read or written, so a skinned joint up there is not this
+    # rebuild's problem.
+    full_chain = rt_joint.get_joint_chain(root_joint)
+    index_offset = 0
+    if start_joint:
+        resolved = (cmds.ls(start_joint, long=True) or [start_joint])[0]
+        long_chain = [(cmds.ls(j, long=True) or [j])[0] for j in full_chain]
+        if resolved in long_chain:
+            index_offset = long_chain.index(resolved)
+        else:
+            logger.warning(f'{start_joint} is not in the chain under '
+                           f'{root_joint}; rebuilding from the base instead.')
+    chain = full_chain[index_offset:]
+    if len(chain) < 2:
+        abort_build(logger,
+            f'Nothing to rebuild from {start_joint}: it is the last joint of '
+            'the chain. Pick a joint further up, or build from the base.')
     _guard_chain(chain)
     _guard_min_length(chain)
 
     with rt_maya.build_performance_scope(name='Joint Chain Builder'):
-        key = (cmds.ls(root_joint, long=True) or [root_joint])[0]
+        # Keyed on the span's own first joint, so a from-the-base rebuild and
+        # a from-partway one keep separate baselines instead of resampling
+        # each other's positions.
+        key = (cmds.ls(chain[0], long=True) or [chain[0]])[0]
         current_positions = [cmds.xform(j, q=True, ws=True, t=True)
                              for j in chain if '_ee_' not in j]
         rigname = _guess_rigname(root_joint)
@@ -622,11 +768,17 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             if drift > rt_constants.JOINT_POS_TOLERANCE:
                 # Hand-edited — re-baseline
                 _ORIGINALS[key]['positions'] = [list(p) for p in current_positions]
+                _ORIGINALS[key]['radius'] = _joint_radius(chain[0])
             source = _ORIGINALS[key]['positions']
         else:
             _ORIGINALS[key] = {
                 'positions': [list(p) for p in current_positions],
                 'written': None,
+                # The radius as the artist left it, cached for the same
+                # reason the positions are: every later rebuild fits its
+                # radius to this, so raising the count and lowering it again
+                # comes back to the size it started at.
+                'radius': _joint_radius(chain[0]),
             }
             source = current_positions
 
@@ -641,12 +793,20 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         ee = _end_joint(chain[-1])
         if ee:
             all_joints.append(ee)
-        result = _write_chain(all_joints, positions, rigname)
+        result = _write_chain(all_joints, positions, rigname, index_offset)
+
+        # One radius for the whole span, sized to the spacing it ended up
+        # with. Without this a grown chain mixes the artist's radius with
+        # Maya's default 1.0 on the joints that were just created, which is
+        # what makes a denser chain look like it grew fat rather than long.
+        ee = _end_joint(result[-1])
+        _apply_radius(result + ([ee] if ee else []),
+                      _fit_radius(_ORIGINALS[key].get('radius'), positions))
 
         if orient:
-            # Re-read the _ee_: a count change re-parents it, and a shrink
-            # gave it a new parent entirely.
-            _orient_chain(result, positions, _end_joint(result[-1]), up_ref)
+            # The _ee_ was re-read above: a count change re-parents it, and a
+            # shrink gave it a new parent entirely.
+            _orient_chain(result, positions, ee, up_ref)
 
         # Update cache
         # A count change can rename the root.  Move the cache to its new
@@ -656,13 +816,14 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         entry['written'] = [list(p) for p in positions]
         _ORIGINALS[result_key] = entry
 
-        logger.info(f'Rebuilt chain {rigname}: {len(chain)} -> {n} joints'
-                    f'{", oriented" if orient else ""}.')
+        span = 'base' if not index_offset else f'joint {index_offset}'
+        logger.info(f'Rebuilt chain {rigname} from {span}: {len(chain)} -> '
+                    f'{n} joints{", oriented" if orient else ""}.')
         return result
 
 
 def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
-                     orient=False):
+                     orient=False, from_selected=False):
     """
     Re-space the chain(s) in the current selection.
 
@@ -673,6 +834,8 @@ def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
         invert (bool): invert distribution
         snap (bool): enable snap-to-existing
         orient (bool): aim-orient the result, new chains and rebuilds alike
+        from_selected (bool): rebuild each chain from the joint that was
+            picked rather than from its base joint
 
     Return:
         list of list: BN joints per rebuilt chain
@@ -685,7 +848,8 @@ def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
                                      mode, param, invert, orient))
         else:
             results.append(rebuild(spec.root, n, mode, param, invert, snap,
-                                   orient))
+                                   orient,
+                                   spec.selected if from_selected else None))
     return results
 
 

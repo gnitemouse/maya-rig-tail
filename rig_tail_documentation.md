@@ -172,7 +172,17 @@ no preferences.
   guarded on its own, so one bad chain in four still leaves three rebuilt.
 - **Positions only.** Orientation belongs to Setup; **Orient joints** is an
   opt-in convenience that calls `rig_tail_setup.aim_frames` read-only, so
-  the two tools agree instead of fighting.
+  the two tools agree instead of fighting. The one other channel a rebuild
+  writes is the display `radius`, and only because leaving it alone is what
+  made a grown chain look wrong: new joints arrived at Maya's default 1.0
+  beside the artist's own, and a chain that got denser kept a radius sized
+  for the spacing it used to have.
+- **Both parametric profiles taper the same way.** Power and Ratio start
+  with long segments at the base and shorten toward the tip, so a bigger
+  number is a stronger taper in either mode and Invert is the single control
+  that swaps direction. Power evaluates `t**(1/k)` rather than `t**k` to get
+  there; the earlier arrangement had the two defaults tapering opposite ways
+  and made Invert mean different things depending on the mode.
 - **Removable by construction.** One-way imports, no scene state, no config
   file. Deleting `rig_tail_chain_*.py` and the marked blocks in
   `install.py` / `uninstall.py` returns the repo to its previous state.
@@ -724,8 +734,16 @@ The whole pipeline: knots → arclength table → source arclengths → distribu
 
 #### `distribute(mode, n, param=None, invert=False, source=None)`
 `n` normalised positions along [0, 1]. `uniform` is `u = t`; `power` is
-`u = t**k`; `ratio` is a geometric series of ratio `r`; `keep` is a monotone
-PCHIP resample of `source`. `invert` mirrors the profile end for end.
+`u = t**(1/k)`; `ratio` is a geometric series of ratio `r`; `keep` is a
+monotone PCHIP resample of `source`. `invert` mirrors the profile end for
+end, for all four modes including `keep`.
+
+Power and Ratio taper the same way — segments start long at the base and
+shorten toward the tip, so the joints bunch at the tip — and raising `k`
+above 1 or dropping `r` below 1 strengthens that taper. Power is `1/k`
+rather than `k` precisely so the two agree: with `t**k` the same dial would
+taper the opposite way from Ratio, and Invert would be needed to line them
+up. `k < 1` reverses it, which is the same result as Invert.
 
 #### `snap_to_source(u_list, s_hat, tol=SNAP_TOL)`
 Source index per target that lands within `tol` of an existing joint, else
@@ -761,32 +779,58 @@ wholly coincident.
 **Writing.** Joints are reused in place: at an unchanged count only
 positions move and names are left alone; shrinking keeps the first `n` and
 deletes the surplus; growing moves the existing ones and creates the rest,
-copying `rotateOrder` and `preferredAngle` from the nearest surviving
-neighbour. On a count change a chain whose names all parse against the
+copying `rotateOrder`, `preferredAngle` and the display `radius` from the
+nearest surviving neighbour. On a count change a chain whose names all parse against the
 configured template is renumbered sequentially (logged at INFO); one with
 arbitrary names keeps them positionally. The `_ee_` end joint is excluded
 from the chain by `get_joint_chain`, so it is looked up from the tip,
 re-parented and placed along the new final segment at its original distance —
 Setup's end-joint handling depends on it.
 
-#### `rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True, orient=False)`
+**Display radius.** Every joint of a rebuilt chain, `_ee_` included, ends
+up at one radius: the chain's own, capped at `RADIUS_SEGMENT_FRACTION` (0.5)
+of the new mean segment so adjacent spheres at most touch. Without the
+single pass a grown chain mixes the artist's radius with Maya's default 1.0
+on the joints just created; without the cap a chain taken from 21 joints to
+80 keeps a radius set for the old spacing and draws as one blob. The
+uncapped value comes from the session original cache, not from the chain as
+it stands, so lowering the count again restores the radius instead of
+ratcheting it permanently small. A locked or driven `radius` is skipped, not
+an abort — it is a display attribute. A brand-new chain has no artist radius
+to keep, so it is sized from its spacing outright.
+
+#### `rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True, orient=False, start_joint=None)`
 Re-space an existing chain at a new joint count, resampling from the session
 original rather than the previous result. Returns the BN joints.
+
+`start_joint` rebuilds only the span from that joint down to the tip and
+leaves everything above it untouched — its names, its positions and its
+numbering. The start joint is an endpoint of the resample, so it does not
+move and the joint above it goes on aiming exactly where it was; new joints
+in the span continue the numbering above rather than restarting at 0.
+Guards, the min-length check and the session original cache all key on the
+span, so a from-the-base rebuild and a from-partway one keep separate
+baselines. `None` (the default) rebuilds the whole chain, base to tip.
 
 #### `build_new(start, end, n, rigname=None, mode='uniform', param=None, invert=False, orient=False)`
 Create a new BN chain between two transforms. The two objects mark the ends
 and are left untouched; the new root is parented under `start`'s parent.
 
-#### `rebuild_selected(n, mode='keep', param=None, invert=False, snap=True, orient=False)`
+#### `rebuild_selected(n, mode='keep', param=None, invert=False, snap=True, orient=False, from_selected=False)`
 `resolve_selection`, then build or rebuild each resolved chain.
+`from_selected` rebuilds each chain from the joint that was picked rather
+than from its base joint.
 
 #### `resolve_selection()`
 Interpret the viewport selection as `ChainSpec`s. Any joint in the selection
 means rebuild: each is walked up to its chain root — stopping at a non-joint
-parent *or* a branch point, so clicking one tentacle joint cannot climb into
-the spine — and the roots are de-duplicated, giving one spec per chain
-however many of its joints are selected. Two plain transforms with no joint
-among them mean build a new chain between them.
+parent, a branch point, *or* a parent belonging to a different rig part, so
+clicking one tentacle joint cannot climb into the spine — and the roots are
+de-duplicated, giving one spec per chain however many of its joints are
+selected. Each spec also carries the joint that was picked (the highest one,
+where several of a chain are selected), which is what 'Build from selected
+joint' rebuilds down from. Two plain transforms with no joint among them
+mean build a new chain between them.
 
 #### `chain_root(joint)`
 The root of the chain a joint belongs to, or None if it is not a joint.
@@ -800,10 +844,19 @@ all of them. Returns the number of entries removed.
 Stateless window: every option is a widget read at click time, with no
 config file and no preferences. **Select** fills the chain list from the
 viewport and sets Joint Count to the first chain's own length, so the first
-click re-spaces rather than resizing by surprise. **Build Joints** runs each
-listed chain on its own, so one guarded chain in four still leaves three
-rebuilt. **Bake Joint Chain** clears the session original for the listed
-chains only, making their current shape the new baseline; it moves nothing.
+click re-spaces rather than resizing by surprise; the count goes on
+following the detected one until it is typed over. **Build from base joint**
+/ **Build from selected joint**, at the foot of Source, choose whether a
+rebuild covers the whole chain or only the run from the picked joint down to
+the tip — the latter needs Select to have been used, since a typed rig part
+name says which chain but never which joint of it, and falls back to the
+base joint if it was not. **Build Joints** runs each listed chain on its
+own, so one guarded chain in four still leaves three rebuilt. **Bake Joint
+Chain** clears the session original for the listed chains only, making their
+current shape and joint size the new baseline; it moves nothing. A one-line
+**Status** bar under Spacing says which button last ran, over how many
+chains, and with which options — the same role `File:` plays in the Build
+window.
 
 #### `show_ui()`
 Build and show the Joint Chain Builder window, closing any previous
@@ -818,14 +871,15 @@ Tests for the Chain Builder, split by whether they need a scene.
 **Math tests** are deterministic and need no Maya at all — the spacing layer
 imports nothing from it, so `run_math()` runs under plain Python as well as
 in the Script Editor. They pin the properties the tool's promises rest on:
-endpoints land on 0 and 1 for every mode, invert is its own inverse, both
+endpoints land on 0 and 1 for every mode, invert is its own inverse, Power
+and Ratio taper base to tip while Invert flips all four modes, both
 interpolants reproduce their knots, re-applying a profile to its own result
 does not drift, a clean count change snaps to every other original exactly,
 and `test_containment` greps every core module to enforce the one-way import
 rule. **Scene tests** are MUTATING — they create, rebuild and re-space real
 chains through the same entry points the UI uses, so reload the scene
-afterwards. Each one snapshots the chain's names and positions and puts
-them back before the next runs, but a shrink deletes joints and they come
+afterwards. Each one snapshots the chain's names, positions and joint radii
+and puts them back before the next runs, but a shrink deletes joints and they come
 back as new nodes, so the reload is what makes it clean. `test_guards` is
 the exception: it builds and deletes its own scratch chain and never
 touches the loaded skeleton.

@@ -34,6 +34,11 @@ EPS = 1e-9
 ALPHA = 0.5           # centripetal Catmull–Rom
 K_RANGE = (0.2, 5.0)  # power exponent clamping
 K_DEFAULT = 1.7       # power exponent when none is given
+# Power evaluates u = t ** (1/k), NOT t ** k.  Both Power and Ratio taper the
+# same way -- long segments at the base, short ones toward the tip -- so
+# raising either number strengthens the same taper and Invert is the one
+# control that swaps the direction.  k < 1 reverses it, which is what makes
+# K_RANGE symmetric about 1.0 in the 1/k sense.
 # Ratio is capped at 1.0: r < 1 packs joints toward the tip and r == 1 is
 # uniform, so the whole useful range is (0, 1] and the other direction is
 # reached with invert.  The floor is NOT 0 — small r collapses the far end
@@ -241,9 +246,14 @@ def distribute(mode, n, param=None, invert=False, source=None):
 
     Modes:
         uniform  — u = t
-        power    — u = t ** k         (k K_DEFAULT, clamped to K_RANGE)
+        power    — u = t ** (1 / k)   (k K_DEFAULT, clamped to K_RANGE)
         ratio    — geometric ratio r  (r R_DEFAULT, clamped to R_RANGE)
         keep     — PCHIP resample of source distribution (source required)
+
+    Power and Ratio both taper base -> tip: the segments start long at the
+    base and get shorter toward the tip, so joints bunch at the tip. k above
+    1 and r below 1 strengthen that taper; Invert swaps the direction for
+    every mode, Keep included.
 
     Arguments:
         mode (str): 'uniform', 'power', 'ratio', or 'keep'
@@ -269,7 +279,11 @@ def distribute(mode, n, param=None, invert=False, source=None):
         if abs(k - 1.0) < EPS:
             u_vals = list(t_vals)
         else:
-            u_vals = [t ** k for t in t_vals]
+            # 1/k, so k > 1 pushes u ABOVE t: the chain covers more of its
+            # length in the first few joints, which is a long base segment
+            # tapering to short ones at the tip -- the same direction Ratio
+            # tapers.  t ** k would taper the other way.
+            u_vals = [t ** (1.0 / k) for t in t_vals]
 
     elif mode == 'ratio':
         r = R_DEFAULT if param is None else param
