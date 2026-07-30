@@ -37,9 +37,9 @@ import time
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_anim as rt_ani
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_anim as rt_anim
 
 
 # STAGE PROBE ================================================
@@ -101,11 +101,11 @@ def probe(stage='', rigname=None, count=4):
         count (int): How many joints to detail per chain (0 for none)
     '''
     try:
-        parts = [rigname] if rigname else list(rt_cst.RIGPARTS)
+        parts = [rigname] if rigname else list(rt_constants.RIGPARTS)
         for part in parts:
-            chains = [('BN', rt_cst.JOINTS_BN.get(part, [])),
-                      ('FK', rt_cst.JOINTS_FK.get(part, [])),
-                      ('IK', rt_cst.JOINTS_IK.get(part, []))]
+            chains = [('BN', rt_constants.JOINTS_BN.get(part, [])),
+                      ('FK', rt_constants.JOINTS_FK.get(part, [])),
+                      ('IK', rt_constants.JOINTS_IK.get(part, []))]
             summary = []
             for label, joints in chains:
                 if not joints:
@@ -173,26 +173,26 @@ def _chain_from_scene(rigname, typ):
     Locate a rig part's joint chain in the scene by naming convention, base to
     tip, excluding the _ee_ tip.
 
-    Reads the scene directly (cmds.ls) instead of the rt_cst.JOINTS_* session
+    Reads the scene directly (cmds.ls) instead of the rt_constants.JOINTS_* session
     cache, so it works on a freshly loaded build: the cache is empty until a
     build runs in the current Python session, which is why the first version of
     this test reported "nothing measured" on a just-opened scene.
 
     Arguments:
         rigname (str): Rig part name
-        typ (str): Joint type prefix (rt_cst.TYPE_BN / _FK / _IK)
+        typ (str): Joint type prefix (rt_constants.TYPE_BN / _FK / _IK)
 
     Return:
         list: Joint names, base to tip, ee excluded (empty if none found)
     '''
-    pattern = f'{typ}_{rigname}_*_{rt_cst.JNT}'
+    pattern = f'{typ}_{rigname}_*_{rt_constants.JNT}'
     indexed = []
     for j in cmds.ls(pattern, type='joint') or []:
         leaf = j.split('|')[-1]
         # Exact rigname match so 'C_fintail' never grabs 'C_fintail2' joints
-        if rt_nam.get_rigname(leaf, rt_cst.JOINT) != rigname:
+        if rt_naming.get_rigname(leaf, rt_constants.JOINT) != rigname:
             continue
-        NN = rt_nam.get_index_from_name(leaf)
+        NN = rt_naming.get_index_from_name(leaf)
         if NN == 'ee' or NN is None:
             continue
         indexed.append((NN, j))
@@ -207,7 +207,7 @@ def _bend_snapshot(parts):
     session cache. A chain with fewer than two joints records None so it is
     skipped rather than counted as 0.
     '''
-    types = {'BN': rt_cst.TYPE_BN, 'FK': rt_cst.TYPE_FK, 'IK': rt_cst.TYPE_IK}
+    types = {'BN': rt_constants.TYPE_BN, 'FK': rt_constants.TYPE_FK, 'IK': rt_constants.TYPE_IK}
     snap = {}
     for part in parts:
         snap[part] = {}
@@ -282,7 +282,7 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
             rebuilds; False if any drifted past tol. None if nothing measured.
     '''
     import rig_tail            # lazy import: both modules are loaded by call time
-    import rig_tail_cleanup as rt_cln
+    import rig_tail_cleanup as rt_cleanup
 
     parts = [rignames] if isinstance(rignames, str) else list(rignames or [])
     if not parts:
@@ -294,31 +294,31 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
     # Reuse the scene's existing root group so a scoped rebuild does not rename
     # the hierarchy (set_root would otherwise rename whatever root it finds to
     # the ROOT template name).
-    existing_root = rt_cln.find_existing_root_grp()
-    root_arg = existing_root if existing_root else rt_cst.ROOT
+    existing_root = rt_cleanup.find_existing_root_grp()
+    root_arg = existing_root if existing_root else rt_constants.ROOT
 
-    saved_force = rt_cst.FORCE_REBUILD
-    saved_rigparts = list(rt_cst.RIGPARTS)
-    saved_root = rt_cst.ROOT
+    saved_force = rt_constants.FORCE_REBUILD
+    saved_rigparts = list(rt_constants.RIGPARTS)
+    saved_root = rt_constants.ROOT
     try:
         if force_full:
-            rt_cst.FORCE_REBUILD = True
+            rt_constants.FORCE_REBUILD = True
         if scope:
-            rt_cst.RIGPARTS = list(parts)
+            rt_constants.RIGPARTS = list(parts)
         for _ in range(rebuilds):
             if invalidate_cache:
-                for jdict in (rt_cst.JOINTS_BN, rt_cst.JOINTS_FK,
-                              rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+                for jdict in (rt_constants.JOINTS_BN, rt_constants.JOINTS_FK,
+                              rt_constants.JOINTS_IK, rt_constants.JOINTS_FX):
                     for part in parts:
                         jdict.pop(part, None)
             rig_tail.rig_tail_multiple(root=root_arg,
-                                       fk=rt_cst.BUILD_FK,
-                                       ik=rt_cst.BUILD_IK)
+                                       fk=rt_constants.BUILD_FK,
+                                       ik=rt_constants.BUILD_IK)
             history.append(_bend_snapshot(parts))
     finally:
-        rt_cst.FORCE_REBUILD = saved_force
-        rt_cst.RIGPARTS = saved_rigparts
-        rt_cst.ROOT = saved_root
+        rt_constants.FORCE_REBUILD = saved_force
+        rt_constants.RIGPARTS = saved_rigparts
+        rt_constants.ROOT = saved_root
 
     # Report
     print('\n' + '=' * 72)
@@ -439,10 +439,10 @@ def test_build_exclusion(rigname, root=None):
         bool: True if the part came through the rebuild intact.
     '''
     import rig_tail as rig_tail
-    import rig_tail_cleanup as rt_cln
+    import rig_tail_cleanup as rt_cleanup
     import rig_tail_cache as rt_cache
 
-    if rigname not in rt_cst.RIGPARTS:
+    if rigname not in rt_constants.RIGPARTS:
         print(f"[EXCLUDE] '{rigname}' is not in RIGPARTS")
         return False
 
@@ -455,13 +455,13 @@ def test_build_exclusion(rigname, root=None):
     def _owned_curves():
         curves = cmds.ls(type=['animCurveUU', 'animCurveUL',
                                'animCurveUA', 'animCurveTT']) or []
-        return set(rt_cln.excluded_sdk_curves(curves))
+        return set(rt_cleanup.excluded_sdk_curves(curves))
 
-    saved_exclude = list(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
-    existing_root = rt_cln.find_existing_root_grp()
-    root_arg = root or existing_root or rt_cst.ROOT
+    saved_exclude = list(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])
+    existing_root = rt_cleanup.find_existing_root_grp()
+    root_arg = root or existing_root or rt_constants.ROOT
     try:
-        rt_cst.RIGPARTS_EXCLUDE = sorted(set(saved_exclude) | {rigname})
+        rt_constants.RIGPARTS_EXCLUDE = sorted(set(saved_exclude) | {rigname})
         before_nodes = _owned_nodes()
         before_curves = _owned_curves()
         built = rt_cache.active_parts()
@@ -472,14 +472,14 @@ def test_build_exclusion(rigname, root=None):
             print('  FAIL: active_parts() still lists the excluded part')
             return False
 
-        rig_tail.rig_tail_multiple(root=root_arg, fk=rt_cst.BUILD_FK,
-                                   ik=rt_cst.BUILD_IK)
+        rig_tail.rig_tail_multiple(root=root_arg, fk=rt_constants.BUILD_FK,
+                                   ik=rt_constants.BUILD_IK)
 
         lost_nodes = sorted(before_nodes - _owned_nodes())
         survived = set(cmds.ls(list(before_curves))) if before_curves else set()
         lost_curves = sorted(before_curves - survived)
     finally:
-        rt_cst.RIGPARTS_EXCLUDE = saved_exclude
+        rt_constants.RIGPARTS_EXCLUDE = saved_exclude
 
     ok = not lost_nodes and not lost_curves
     if lost_curves:
@@ -530,14 +530,14 @@ def test_remove_rig(tolerance=0.001):
         bool: True when every check passed.
     '''
     import rig_tail_cache as rt_cache
-    import rig_tail_cleanup as rt_cln
-    import rig_tail_maya as rt_mya
+    import rig_tail_cleanup as rt_cleanup
+    import rig_tail_maya as rt_maya
 
     # The included roster only: an excluded part is left built on purpose,
-    # so it must NOT be checked for removal (see rt_cln.remove_rig)
+    # so it must NOT be checked for removal (see rt_cleanup.remove_rig)
     parts = rt_cache.active_parts()
-    kept = [p for p in rt_cst.RIGPARTS if p not in parts]
-    root_grp = rt_cln.find_existing_root_grp()
+    kept = [p for p in rt_constants.RIGPARTS if p not in parts]
+    root_grp = rt_cleanup.find_existing_root_grp()
     print('\n--- REMOVE RIG ---')
     if not root_grp:
         print('  SKIP: no rig root group in this scene, nothing to remove')
@@ -549,16 +549,16 @@ def test_remove_rig(tolerance=0.001):
     # BEFORE: skeleton pose, and the skin on every mesh the parts own
     before_jnts = {}
     for part in parts:
-        for jnt in rt_cst.JOINTS_BN.get(part, []):
-            path = rt_cln.unique_path(jnt)
+        for jnt in rt_constants.JOINTS_BN.get(part, []):
+            path = rt_cleanup.unique_path(jnt)
             if path:
                 before_jnts[path.split('|')[-1]] = (
                     cmds.xform(path, q=1, ws=1, t=1),
                     cmds.xform(path, q=1, ws=1, ro=1))
     before_skin = {}
     for part in parts:
-        for geo in rt_mya.find_geometry_for_rigname(part):
-            skin = rt_mya.find_skincluster(geo)
+        for geo in rt_maya.find_geometry_for_rigname(part):
+            skin = rt_maya.find_skincluster(geo)
             if skin:
                 influences = cmds.skinCluster(skin, q=True, inf=True) or []
                 before_skin[geo.split('|')[-1]] = len(influences)
@@ -568,7 +568,7 @@ def test_remove_rig(tolerance=0.001):
           + (f'; {len(kept)} excluded part(s) must survive: '
              f'{", ".join(kept)}' if kept else ''))
 
-    removed = rt_cln.remove_rig()
+    removed = rt_cleanup.remove_rig()
 
     fails = []
     if not removed:
@@ -582,7 +582,7 @@ def test_remove_rig(tolerance=0.001):
                          f"{len(kept)} excluded part(s) are still built in "
                          f"it: {', '.join(kept)}")
         for part in kept:
-            if not cmds.ls(f'*{part}*{rt_cst.CTRL}') :
+            if not cmds.ls(f'*{part}*{rt_constants.CTRL}') :
                 fails.append(f"excluded part '{part}' lost its controls")
     elif cmds.objExists(root_grp):
         fails.append(f"rig root group '{root_grp}' still exists")
@@ -590,7 +590,7 @@ def test_remove_rig(tolerance=0.001):
     # 2 + 3. Skeleton kept, in place, and plain again
     moved, lost, driven = [], [], []
     for leaf, (pos, rot) in before_jnts.items():
-        path = rt_cln.unique_path(leaf)
+        path = rt_cleanup.unique_path(leaf)
         if not path:
             lost.append(leaf)
             continue
@@ -624,11 +624,11 @@ def test_remove_rig(tolerance=0.001):
     # of the deleted rig hierarchy, so they are found by leaf name now.
     unskinned = []
     for leaf, influences in before_skin.items():
-        path = rt_cln.unique_path(leaf)
+        path = rt_cleanup.unique_path(leaf)
         if not path:
             unskinned.append(f'{leaf} (deleted)')
             continue
-        skin = rt_mya.find_skincluster(path)
+        skin = rt_maya.find_skincluster(path)
         if not skin:
             unskinned.append(f'{leaf} (skin gone)')
         else:
@@ -640,7 +640,7 @@ def test_remove_rig(tolerance=0.001):
                      f'{", ".join(unskinned[:5])}')
 
     # 5. No strays
-    leftovers = rt_cln.rig_leftovers(parts)
+    leftovers = rt_cleanup.rig_leftovers(parts)
     for label, nodes in leftovers.items():
         if nodes:
             fails.append(f'{len(nodes)} {label} node(s) left behind: '
@@ -660,7 +660,7 @@ def test_remove_rig(tolerance=0.001):
 #
 # Where the build's time actually goes, by Maya command.
 #
-# The phase timer (rt_mya.build_timer) says which phase is slow and the
+# The phase timer (rt_maya.build_timer) says which phase is slow and the
 # step timings say which step, but neither settles the question the numbers
 # raise: is the build slow because it issues too many commands, or because
 # a handful of commands are individually expensive? Those have opposite
@@ -833,11 +833,11 @@ def profile_build(root=None, fk=None, ik=None, callers_for=()):
         dict: name -> [calls, seconds] for every command the build used.
     '''
     import rig_tail as rig_tail
-    import rig_tail_cleanup as rt_cln
+    import rig_tail_cleanup as rt_cleanup
 
-    root = root or rt_cln.find_existing_root_grp() or rt_cst.ROOT
-    fk = rt_cst.BUILD_FK if fk is None else fk
-    ik = rt_cst.BUILD_IK if ik is None else ik
+    root = root or rt_cleanup.find_existing_root_grp() or rt_constants.ROOT
+    fk = rt_constants.BUILD_FK if fk is None else fk
+    ik = rt_constants.BUILD_IK if ik is None else ik
     with profile_cmds(callers_for=callers_for) as stats:
         rig_tail.rig_tail_multiple(root=root, fk=fk, ik=ik)
     return stats
@@ -919,19 +919,19 @@ def test_matrix(rigname='tail'):
 '''
     print(header)
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'x No BN joints defined for {rigname}')
         return
 
-    joints = rt_cst.JOINTS_BN[rigname]
+    joints = rt_constants.JOINTS_BN[rigname]
     print(f'Found {len(joints)} BN joints\n')
 
     fx_list = []
-    if rt_cst.EFFECTS.get('curl'):
+    if rt_constants.EFFECTS.get('curl'):
         fx_list.append('curl')
-    if rt_cst.EFFECTS.get('wave'):
+    if rt_constants.EFFECTS.get('wave'):
         fx_list.append('wave')
-    if rt_cst.EFFECTS.get('noise'):
+    if rt_constants.EFFECTS.get('noise'):
         fx_list.append('noise')
 
     issues = []
@@ -945,13 +945,13 @@ def test_matrix(rigname='tail'):
     print(section)
 
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         if not cmds.attributeQuery('jointOrient', node=jnt, exists=True):
             continue
         jo = cmds.getAttr(f'{jnt}.jointOrient')[0]
         if i == 0:
             # Root joint - check IK JO matches BN JO (they should be identical)
-            ik_joints = rt_cst.JOINTS_IK.get(rigname, [])
+            ik_joints = rt_constants.JOINTS_IK.get(rigname, [])
             if ik_joints:
                 ik_jo = cmds.getAttr(f'{ik_joints[0]}.jointOrient')[0]
                 jo_match = all(abs(jo[k] - ik_jo[k]) < 0.001 for k in range(3))
@@ -964,7 +964,7 @@ def test_matrix(rigname='tail'):
                     print(f'  Jnt 00: JO = {[round(v,3) for v in jo]} (matches IK) OK')
             # Warn if JO was zeroed on root - this is the primary spiral cause
             if all(abs(jo[k]) < 0.001 for k in range(3)):
-                ik_joints = rt_cst.JOINTS_IK.get(rigname, [])
+                ik_joints = rt_constants.JOINTS_IK.get(rigname, [])
                 if ik_joints:
                     ik_jo = cmds.getAttr(f'{ik_joints[0]}.jointOrient')[0]
                     if any(abs(ik_jo[k]) > 0.1 for k in range(3)):
@@ -981,7 +981,7 @@ def test_matrix(rigname='tail'):
     print(section)
 
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
 
         # --- blendMatrix ---
         blend_mtx = f'{rigname}_{NN:02d}_ikfk_blendMatrix'
@@ -1105,7 +1105,7 @@ def test_matrix(rigname='tail'):
     print(section)
 
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         trans = cmds.getAttr(f'{jnt}.translate')[0]
         rot = cmds.getAttr(f'{jnt}.rotate')[0]
         scale = cmds.getAttr(f'{jnt}.scale')[0]
@@ -1130,7 +1130,7 @@ def test_matrix(rigname='tail'):
 
     opm_drift_warned = False
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         opm = cmds.getAttr(f'{jnt}.offsetParentMatrix')
         if opm:
             diag_x = opm[0]   # should be ~1.0
@@ -1152,7 +1152,7 @@ def test_matrix(rigname='tail'):
     print()
 
     # === ALIGNMENT CHECK ===
-    if rigname in rt_cst.JOINTS_IK:
+    if rigname in rt_constants.JOINTS_IK:
         section = '''POSITION ALIGNMENT CHECK (BN vs IK world positions):
 --------------------------------------------------------------------------------'''
         print(section)
@@ -1160,7 +1160,7 @@ def test_matrix(rigname='tail'):
         worst_joint = 0
 
         for i, (bn_jnt, ik_jnt) in enumerate(
-            zip(joints, rt_cst.JOINTS_IK[rigname])
+            zip(joints, rt_constants.JOINTS_IK[rigname])
         ):
             bn_pos = cmds.xform(bn_jnt, q=1, ws=1, t=1)
             ik_pos = cmds.xform(ik_jnt, q=1, ws=1, t=1)
@@ -1208,15 +1208,15 @@ def test_local_trs(rigname='tail'):
     '''
     print('\n=== LOCAL TRS CHECK ===\n')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'× No BN joints for {rigname}')
         return None
 
-    joints = rt_cst.JOINTS_BN[rigname]
+    joints = rt_constants.JOINTS_BN[rigname]
     all_good = True
 
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         trans = cmds.getAttr(f'{jnt}.translate')[0]
         rot = cmds.getAttr(f'{jnt}.rotate')[0]
         scale = cmds.getAttr(f'{jnt}.scale')[0]
@@ -1252,11 +1252,11 @@ def fix_bn_local_trs(rigname='tail'):
     '''
     print('\n=== FIXING BN LOCAL TRS ===\n')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'× No BN joints for {rigname}')
         return
 
-    joints = rt_cst.JOINTS_BN[rigname]
+    joints = rt_constants.JOINTS_BN[rigname]
 
     for jnt in joints:
         for attr in ['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ']:
@@ -1284,27 +1284,27 @@ def test_fx_order(rigname='tail'):
     '''
     print('\n=== FX MULTIPLY ORDER CHECK ===\n')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'x No BN joints for {rigname}')
         return None
 
     fx_list = []
-    if rt_cst.EFFECTS.get('curl'):
+    if rt_constants.EFFECTS.get('curl'):
         fx_list.append('curl')
-    if rt_cst.EFFECTS.get('wave'):
+    if rt_constants.EFFECTS.get('wave'):
         fx_list.append('wave')
-    if rt_cst.EFFECTS.get('noise'):
+    if rt_constants.EFFECTS.get('noise'):
         fx_list.append('noise')
 
     if not fx_list:
         print('  No FX enabled, nothing to check')
         return None
 
-    joints = rt_cst.JOINTS_BN[rigname]
+    joints = rt_constants.JOINTS_BN[rigname]
     bad = 0
 
     for jnt in joints:
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         final_mult = f'{rigname}_{NN:02d}_final_multMatrix'
         if not cmds.objExists(final_mult):
             continue
@@ -1350,17 +1350,17 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     '''
     print(f'\n=== IK/FK DRIVE CHECK (joint {joint_index:02d}) ===\n')
 
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    ikfk_attr = rt_nam.fstr(rigname, rt_cst.IKFK)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
 
-    ik_jnt = rt_cst.JOINTS_IK[rigname][joint_index]
-    fk_jnt = rt_cst.JOINTS_FK[rigname][joint_index]
-    bn_jnt = rt_cst.JOINTS_BN[rigname][joint_index]
-    NN = rt_nam.get_index_from_name(bn_jnt)
+    ik_jnt = rt_constants.JOINTS_IK[rigname][joint_index]
+    fk_jnt = rt_constants.JOINTS_FK[rigname][joint_index]
+    bn_jnt = rt_constants.JOINTS_BN[rigname][joint_index]
+    NN = rt_naming.get_index_from_name(bn_jnt)
 
     # 1. What drives the FK joint's rotation?
     print('FK JOINT DRIVE:')
-    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
     fk_rot_conn = cmds.listConnections(f'{sdk_grp}.rotate', s=1, d=0, p=1) or []
     fk_rx_conn = cmds.listConnections(f'{sdk_grp}.rotateX', s=1, d=0, p=1) or []
     if fk_rot_conn or fk_rx_conn:
@@ -1394,7 +1394,7 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     blend_mtx = f'{rigname}_{NN:02d}_ikfk_blendMatrix'
     saved = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}')
 
-    fk_ctrl0 = rt_nam.fstr(rigname, rt_cst.CONTROL, rt_cst.TYPE_FK, 0)
+    fk_ctrl0 = rt_naming.fstr(rigname, rt_constants.CONTROL, rt_constants.TYPE_FK, 0)
     saved_rot = cmds.getAttr(f'{fk_ctrl0}.rotate')[0]
     cmds.setAttr(f'{fk_ctrl0}.rotate', 0, 0, 30)
 
@@ -1456,7 +1456,7 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
               on a rig that was working.
       ALL     the cog's all_* attribute, tested with the flag Off. This is
               the route that really did break once, when a consumer read
-              the basectrl directly instead of rt_ca.resolved_plug.
+              the basectrl directly instead of rt_ctrlall.resolved_plug.
 
     Arguments
         rigname (str): Rig part to test
@@ -1469,20 +1469,20 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
     '''
     print(f'\n=== TWIST / ROLL / OFFSET CHECK: {rigname} ===\n')
 
-    import rig_tail_ctrlall as rt_ca
+    import rig_tail_ctrlall as rt_ctrlall
 
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
     if not cmds.objExists(basectrl):
         print(f'  x basectrl {basectrl} not found - build the rig first')
         return False
-    bn = rt_cst.JOINTS_BN.get(rigname) or []
+    bn = rt_constants.JOINTS_BN.get(rigname) or []
     if len(bn) < 3:
         print(f'  x need at least 3 BN joints, found {len(bn)}')
         return False
 
     ai = {'x': 0, 'y': 1, 'z': 2}.get(
-        getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'), 0)
+        getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x'), 0)
 
     def _state():
         '''Every BN joint's full world matrix.'''
@@ -1530,7 +1530,7 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
         cmds.currentTime(t, e=1)
 
     # Which modes exist on this rig
-    ikfk_attr = rt_nam.fstr(rigname, rt_cst.IKFK)
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
     has_switch = (cmds.objExists(cog_ctrl)
                   and cmds.attributeQuery(ikfk_attr, n=cog_ctrl, ex=1))
     modes = []
@@ -1566,17 +1566,17 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
     # tested with the flag set the way that path requires: On for the
     # tail's own basectrl values, Off for the cog's ALL values. Driving a
     # basectrl attribute with the flag Off is SUPPOSED to do nothing.
-    dash = rt_ca.active()
-    override = f'{cog_ctrl}.{rt_nam.fstr(rigname, rt_cst.OVERRIDE)}'
+    dash = rt_ctrlall.active()
+    override = f'{cog_ctrl}.{rt_naming.fstr(rigname, rt_constants.OVERRIDE)}'
     has_override = dash and cmds.objExists(cog_ctrl) \
-        and cmds.attributeQuery(rt_nam.fstr(rigname, rt_cst.OVERRIDE),
+        and cmds.attributeQuery(rt_naming.fstr(rigname, rt_constants.OVERRIDE),
                                 n=cog_ctrl, ex=1)
     saved_ovr = cmds.getAttr(override) if has_override else None
 
     # (label, plug builder, override value the path needs)
     paths = [('local', lambda a: f'{basectrl}.{a}', 1)]
     if dash:
-        paths.append(('ALL', lambda a: f'{cog_ctrl}.{rt_ca.all_attr(a)}', 0))
+        paths.append(('ALL', lambda a: f'{cog_ctrl}.{rt_ctrlall.all_attr(a)}', 0))
 
     ok = True
     failures = []
@@ -1690,13 +1690,13 @@ def test_alignment(rigname='tail', count=0):
     '''
     print(f'\n=== ALIGNMENT CHECK (COUNT: {count}) ===\n')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'× No BN joints for {rigname}')
         return None
 
-    bn_joints = rt_cst.JOINTS_BN[rigname]
-    ik_joints = rt_cst.JOINTS_IK[rigname]
-    fk_joints = rt_cst.JOINTS_FK[rigname]
+    bn_joints = rt_constants.JOINTS_BN[rigname]
+    ik_joints = rt_constants.JOINTS_IK[rigname]
+    fk_joints = rt_constants.JOINTS_FK[rigname]
     opm_conn = list()
 
     if not ik_joints and not fk_joints:
@@ -1751,13 +1751,13 @@ def show_data_flow(rigname='tail', joint_idx=0):
 
     NN = joint_idx
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         print(f'❌ No BN joints for {rigname}')
         return
 
-    bn_jnt = rt_cst.JOINTS_BN[rigname][joint_idx]
-    ik_jnt = rt_cst.JOINTS_IK[rigname][joint_idx] if rigname in rt_cst.JOINTS_IK else None
-    fk_jnt = rt_cst.JOINTS_FK[rigname][joint_idx] if rigname in rt_cst.JOINTS_FK else None
+    bn_jnt = rt_constants.JOINTS_BN[rigname][joint_idx]
+    ik_jnt = rt_constants.JOINTS_IK[rigname][joint_idx] if rigname in rt_constants.JOINTS_IK else None
+    fk_jnt = rt_constants.JOINTS_FK[rigname][joint_idx] if rigname in rt_constants.JOINTS_FK else None
 
     section_header = '''NODE GRAPH:
 --------------------------------------------------------------------------------
@@ -1860,7 +1860,7 @@ def test_wave(rigname='tail'):
     '''
     Quick test: Set wave attributes and check if values propagate.
     '''
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
 
     header = '''
 === QUICK WAVE TEST ==='''
@@ -1918,7 +1918,7 @@ def test_curl(rigname='tail'):
     '''
     Quick test: Set curl attributes and check if values propagate.
     '''
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
 
     print('\n=== QUICK CURL TEST ===\n')
 
@@ -2013,8 +2013,8 @@ def print_chain(rigname='tail', joint_idx=6, count=0):
 
     Use dump_chain or print_chain_ends for quick checks.
     '''
-    bn_joints = rt_cst.JOINTS_BN[rigname]
-    ik_joints = rt_cst.JOINTS_IK[rigname] if rigname in rt_cst.JOINTS_IK else []
+    bn_joints = rt_constants.JOINTS_BN[rigname]
+    ik_joints = rt_constants.JOINTS_IK[rigname] if rigname in rt_constants.JOINTS_IK else []
     N = min(joint_idx, len(bn_joints) - 1, len(ik_joints) - 1)
 
     print(f'--- PRINT CHAIN (CONDENSED) for first {N+1} joints (COUNT: {count}) ---')
@@ -2106,8 +2106,8 @@ def print_chain_ends(rigname='tail', count=0):
     This is a focused alternative to print_chain,
     not a replacement for full-chain inspection.
     '''
-    bn_joints = rt_cst.JOINTS_BN[rigname]
-    ik_joints = rt_cst.JOINTS_IK[rigname] if rigname in rt_cst.JOINTS_IK else []
+    bn_joints = rt_constants.JOINTS_BN[rigname]
+    ik_joints = rt_constants.JOINTS_IK[rigname] if rigname in rt_constants.JOINTS_IK else []
 
     total = len(bn_joints)
 
@@ -2207,8 +2207,8 @@ def dump_chain(rigname='tail'):
 
     Use print_chain when matrix math or OPM wiring is suspect.
     '''
-    bn_joints = rt_cst.JOINTS_BN[rigname]
-    ik_joints = rt_cst.JOINTS_IK[rigname]
+    bn_joints = rt_constants.JOINTS_BN[rigname]
+    ik_joints = rt_constants.JOINTS_IK[rigname]
     for i, bn in enumerate(bn_joints):
         ik = ik_joints[i]
         bjo = cmds.getAttr(f'{bn}.jointOrient')[0] if cmds.attributeQuery('jointOrient', node=bn, exists=True) else (0,0,0)
@@ -2230,12 +2230,12 @@ def test_time_evaluation(rigname='tail'):
 '''
     print(header)
 
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     if not cmds.objExists(basectrl):
         print(f'✗ Base control missing: {basectrl}')
         return
 
-    joints = rt_cst.JOINTS_BN.get(rigname, [])
+    joints = rt_constants.JOINTS_BN.get(rigname, [])
     if len(joints) < 3:
         print('✗ Not enough joints for time test')
         return
@@ -2249,7 +2249,7 @@ def test_time_evaluation(rigname='tail'):
     print(section_header)
 
     test_joint = 2
-    NN = rt_nam.get_index_from_name(joints[test_joint])
+    NN = rt_naming.get_index_from_name(joints[test_joint])
 
     wave_expressions = []
     noise_expressions = []
@@ -2486,7 +2486,7 @@ def fix_expression_time_dependency(rigname='tail'):
     '''
     print('\n=== FIXING EXPRESSION TIME DEPENDENCIES ===\n')
 
-    joints = rt_cst.JOINTS_BN.get(rigname, [])
+    joints = rt_constants.JOINTS_BN.get(rigname, [])
     if len(joints) < 2:
         print('✗ No joints found')
         return
@@ -2497,35 +2497,35 @@ def fix_expression_time_dependency(rigname='tail'):
     # Use delete_expression(): raw cmds.delete on a connected expression
     # cascades through its whole connection web
     for jnt in joints[1:]:
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         for axis in ['X', 'Y', 'Z']:
             expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
             if cmds.objExists(expr):
-                rt_ani.delete_expression(expr)
+                rt_anim.delete_expression(expr)
                 deleted_count += 1
                 print(f'  Deleted: {expr}')
 
     # Delete all noise expressions
     for jnt in joints[1:]:
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         for axis in ['X', 'Y', 'Z']:
             expr = f'{rigname}_{NN:02d}_noise_{axis}_expression'
             if cmds.objExists(expr):
-                rt_ani.delete_expression(expr)
+                rt_anim.delete_expression(expr)
                 deleted_count += 1
                 print(f'  Deleted: {expr}')
 
     # Delete loop expression
     loop_expr = f'{rigname}_loop_time_expression'
     if cmds.objExists(loop_expr):
-        rt_ani.delete_expression(loop_expr)
+        rt_anim.delete_expression(loop_expr)
         deleted_count += 1
         print(f'  Deleted: {loop_expr}')
 
     print(f'\n✓ Deleted {deleted_count} expression nodes')
     print('\nNow rebuild animation effects:')
-    print('  import rig_tail_anim as rt_ani')
-    print(f'  rt_ani.build_anim_effects("{rigname}", fk=True, ik=True)')
+    print('  import rig_tail_anim as rt_anim')
+    print(f'  rt_anim.build_anim_effects("{rigname}", fk=True, ik=True)')
     print()
 
 
@@ -2535,7 +2535,7 @@ def check_expression_flags(rigname='tail'):
     '''
     print('\n=== EXPRESSION FLAGS CHECK ===\n')
 
-    joints = rt_cst.JOINTS_BN.get(rigname, [])
+    joints = rt_constants.JOINTS_BN.get(rigname, [])
     if len(joints) < 3:
         print('✗ Not enough joints')
         return
@@ -2549,7 +2549,7 @@ def check_expression_flags(rigname='tail'):
     print()
 
     test_joint = 2
-    NN = rt_nam.get_index_from_name(joints[test_joint])
+    NN = rt_naming.get_index_from_name(joints[test_joint])
 
     expressions = []
 
@@ -2601,9 +2601,9 @@ def check_expression_flags(rigname='tail'):
 
 def test_joint_orient(rigname='tail', joints_bn=None, joints_ik=None, count=10):
     if joints_bn is None:
-        joints_bn = rt_cst.JOINTS_BN.get(rigname, [])
+        joints_bn = rt_constants.JOINTS_BN.get(rigname, [])
     if joints_ik is None:
-        joints_ik = rt_cst.JOINTS_IK.get(rigname, [])
+        joints_ik = rt_constants.JOINTS_IK.get(rigname, [])
 
     print('--- Joint Orient Diagnostic for', rigname, '---')
     for i, bn in enumerate(joints_bn[:count]):

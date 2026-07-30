@@ -47,14 +47,14 @@ import fnmatch
 import re
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_maya as rt_mya
-import rig_tail_joint as rt_jnt
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
+import rig_tail_joint as rt_joint
 import rig_tail_cache as rt_cache
-import rig_tail_control as rt_ctl
-import rig_tail_connect as rt_con
-import rig_tail_ctrlall as rt_ca
+import rig_tail_control as rt_control
+import rig_tail_connect as rt_connect
+import rig_tail_ctrlall as rt_ctrlall
 
 logger = logger_setup(__name__)
 
@@ -107,7 +107,7 @@ def cleanup_rig(fk, ik):
     logger.info(f"Cleanup Rig")
 
     # Clear control cache
-    rt_con.clear_control_cache()
+    rt_connect.clear_control_cache()
     # Validate cache
     rt_cache.validate_cache()
     # Control count and build-mode changes invalidate the node layout for
@@ -120,7 +120,7 @@ def cleanup_rig(fk, ik):
     # so a sweep that took their curves would strip their variable-FK
     # falloff and mode switching for good.
     logger.trace(f"Cleaning up SDK curves")
-    with rt_mya.timed('cleanup.sdk_curves'):
+    with rt_maya.timed('cleanup.sdk_curves'):
         anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
         keep = excluded_sdk_curves(anim_curves)
         anim_curves = [c for c in anim_curves if c not in keep]
@@ -136,15 +136,15 @@ def cleanup_rig(fk, ik):
         # One typed scan of the scene's utility nodes for the whole
         # teardown, shared by every part (see cleanup_rigname). Nodes
         # deleted for an earlier part are filtered out downstream by
-        # rt_mya.remove_nodes, and nothing new is created during cleanup.
+        # rt_maya.remove_nodes, and nothing new is created during cleanup.
         utility_nodes = cmds.ls(type=UTILITY_NODE_TYPES) or []
 
         for rigname in rt_cache.active_parts():
             # Validate cache
             joints_changed = rt_cache.validate_cache_joints(rigname)
             # Unbind geometry before rebuild
-            with rt_mya.timed('cleanup.unbind'):
-                rt_mya.unbind_geometry(rigname)
+            with rt_maya.timed('cleanup.unbind'):
+                rt_maya.unbind_geometry(rigname)
 
             # Rebuild check. A full teardown always strips BOTH modes,
             # not just the ones being rebuilt: the previous build may
@@ -152,17 +152,17 @@ def cleanup_rig(fk, ik):
             # handles, and leaving those behind is what broke rebuilds
             # that switched between FK-only and FK+IK. The build then
             # recreates only what was asked for.
-            if rt_cst.FORCE_REBUILD or joints_changed or structure_changed:
-                with rt_mya.timed('cleanup.teardown_full'):
+            if rt_constants.FORCE_REBUILD or joints_changed or structure_changed:
+                with rt_maya.timed('cleanup.teardown_full'):
                     cleanup_rigname(rigname, fk=True, ik=True,
                                     utility_nodes=utility_nodes)
             else:
-                with rt_mya.timed('cleanup.teardown_light'):
+                with rt_maya.timed('cleanup.teardown_light'):
                     cleanup_connections(rigname, fk, ik)
     finally:
         _DEFER_CONVERSION_SWEEP = False
     if _CONVERSION_SWEEP_PENDING:
-        with rt_mya.timed('cleanup.conversions'):
+        with rt_maya.timed('cleanup.conversions'):
             cleanup_dangling_unit_conversions()
             # Same sweep, for the curveInfo nodes cmds.ikHandle leaves on
             # the temporary curve it makes for every spline build
@@ -172,8 +172,8 @@ def cleanup_rig(fk, ik):
     # when the dashboard is off, every dashboard attribute. Runs after
     # the per-part loop so expressions referencing the conditions are
     # already gone on a full teardown.
-    with rt_mya.timed('cleanup.ctrlall'):
-        rt_ca.cleanup_ctrlall(fk, ik)
+    with rt_maya.timed('cleanup.ctrlall'):
+        rt_ctrlall.cleanup_ctrlall(fk, ik)
 
 def remove_rig():
     '''
@@ -234,16 +234,16 @@ def remove_rig():
     logger.debug('-----------------------------------------------------')
     logger.info('Remove Rig')
 
-    rt_con.clear_control_cache()
+    rt_connect.clear_control_cache()
     root_grp = unique_path(find_existing_root_grp()
-                           or rt_nam.fstr('', rt_cst.ROOT_GRP))
+                           or rt_naming.fstr('', rt_constants.ROOT_GRP))
     # Only the INCLUDED parts, the same roster the build works on
     # (rig_tail_cache.active_parts): an excluded part is one the builder
     # leaves alone, and removing what it never built is not this action's
     # job. With anything excluded this becomes a PARTIAL removal - see
     # step 4, which then has to leave the hierarchy standing.
     parts = rt_cache.active_parts()
-    kept = [p for p in rt_cst.RIGPARTS if p not in parts]
+    kept = [p for p in rt_constants.RIGPARTS if p not in parts]
     if kept:
         logger.info(f'Removing {len(parts)} included part(s); leaving '
                     f'{len(kept)} excluded part(s) built: {", ".join(kept)}')
@@ -258,7 +258,7 @@ def remove_rig():
     for rigname in parts:
         bn_paths[rigname] = [p for p in
                              (unique_path(j)
-                              for j in rt_cst.JOINTS_BN.get(rigname, []))
+                              for j in rt_constants.JOINTS_BN.get(rigname, []))
                              if p]
         for path in bn_paths[rigname]:
             poses[path] = cmds.xform(path, q=True, ws=True, matrix=True)
@@ -274,13 +274,13 @@ def remove_rig():
             # network is already gone by the time it returns
             cleanup_rigname(rigname, fk=True, ik=True)
         for rigname in parts:
-            for typ in (rt_cst.TYPE_FK, rt_cst.TYPE_IK):
-                chain_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
+            for typ in (rt_constants.TYPE_FK, rt_constants.TYPE_IK):
+                chain_root = rt_naming.fstr(rigname, rt_constants.JOINT, typ, 0)
                 if cmds.objExists(chain_root):
-                    rt_mya.remove(chain_root)
-                jnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
+                    rt_maya.remove(chain_root)
+                jnt_grp = rt_naming.fstr(rigname, rt_constants.GROUP, typ)
                 if cmds.objExists(jnt_grp):
-                    rt_mya.remove(jnt_grp)
+                    rt_maya.remove(jnt_grp)
     finally:
         _DEFER_CONVERSION_SWEEP = False
 
@@ -289,8 +289,8 @@ def remove_rig():
         for jnt in bn_paths[rigname]:
             if not cmds.objExists(jnt):
                 continue
-            rt_mya.disconnect_all(jnt, source=True, destination=False)
-            rt_mya.reset_opm(jnt)
+            rt_maya.disconnect_all(jnt, source=True, destination=False)
+            rt_maya.reset_opm(jnt)
             cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
             cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
             cmds.setAttr(f'{jnt}.scale', 1, 1, 1)
@@ -303,10 +303,10 @@ def remove_rig():
     # calling it per part re-did the same work once per rig part. Scoped to
     # the parts being removed - an excluded part's joints are still driven
     # by its rig and must stay non-keyable.
-    rt_mya.finalize_joint_channels(
+    rt_maya.finalize_joint_channels(
         True, visibility=1,
-        joint_dicts=[{p: rt_cst.JOINTS_BN[p] for p in parts
-                      if p in rt_cst.JOINTS_BN}])
+        joint_dicts=[{p: rt_constants.JOINTS_BN[p] for p in parts
+                      if p in rt_constants.JOINTS_BN}])
 
     # 4. Rescue skeleton and geometry, then drop the hierarchy - but only
     # when the WHOLE roster went. With parts excluded, their rig is still
@@ -327,7 +327,7 @@ def remove_rig():
                         f"group would delete them too: "
                         f"{', '.join(stuck[:5])}. Reparent them by hand, "
                         f"then run Remove Rig again.")
-        rt_mya.remove(root_grp)
+        rt_maya.remove(root_grp)
         removed = True
     else:
         logger.warning('No rig root group found; nothing to remove')
@@ -344,18 +344,18 @@ def remove_rig():
     # directly, so replacing it with an empty dict would KeyError on the
     # next build.
     for rigname in parts:
-        for jdict in (rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+        for jdict in (rt_constants.JOINTS_FK, rt_constants.JOINTS_IK, rt_constants.JOINTS_FX):
             jdict.pop(rigname, None)
-        (rt_cst.LAST_BUILD.get('joints_pos') or {}).pop(rigname, None)
+        (rt_constants.LAST_BUILD.get('joints_pos') or {}).pop(rigname, None)
     if kept:
         # A partial removal: the excluded parts are still built, so their
         # build record has to survive or the next build would treat them as
         # new and rebuild what it was told to leave alone
-        rt_cst.LAST_BUILD['rigparts'] = [
-            p for p in rt_cst.LAST_BUILD.get('rigparts') or []
+        rt_constants.LAST_BUILD['rigparts'] = [
+            p for p in rt_constants.LAST_BUILD.get('rigparts') or []
             if p not in parts]
     else:
-        rt_cst.LAST_BUILD.update({
+        rt_constants.LAST_BUILD.update({
             'rigparts': [],
             'root': '',
             'joints_pos': {},
@@ -423,8 +423,8 @@ def _rescue_from_root(root_grp):
     '''
     moved = 0
     stuck = []
-    for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP):
-        grp = unique_path(rt_nam.fstr('', template))
+    for template in (rt_constants.GEOMETRY_GRP, rt_constants.SKELETON_GRP):
+        grp = unique_path(rt_naming.fstr('', template))
         if not grp:
             continue
         for child in cmds.listRelatives(grp, c=True, typ='transform',
@@ -523,8 +523,8 @@ def _sweep_rig_leftovers(parts, delete=True):
     # Expressions first, then everything else, in two batched passes (see
     # cleanup_anim_effects)
     expressions = [n for n in found if cmds.nodeType(n) == 'expression']
-    count = rt_mya.remove_nodes(expressions)
-    count += rt_mya.remove_nodes([n for n in found
+    count = rt_maya.remove_nodes(expressions)
+    count += rt_maya.remove_nodes([n for n in found
                                   if n not in set(expressions)])
     return count
 
@@ -543,9 +543,9 @@ def rig_leftovers(parts=None):
     Return
         dict: {'root': [...], 'prefixed': [...], 'utility': [...]}
     '''
-    parts = list(parts if parts is not None else rt_cst.RIGPARTS)
-    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    prefixes = (rt_cst.TYPE_FK, rt_cst.TYPE_IK, rt_cst.TYPE_FX)
+    parts = list(parts if parts is not None else rt_constants.RIGPARTS)
+    root_grp = rt_naming.fstr('', rt_constants.ROOT_GRP)
+    prefixes = (rt_constants.TYPE_FK, rt_constants.TYPE_IK, rt_constants.TYPE_FX)
     prefixed = []
     for typ in prefixes:
         for part in parts:
@@ -572,11 +572,11 @@ def restore_fk_joint_chain(rigname):
     Arguments
         rigname (str): Name of rig component
     '''
-    if rigname not in rt_cst.JOINTS_FK:
+    if rigname not in rt_constants.JOINTS_FK:
         return
     logger.trace(f'{rigname}: Restoring flat FK joint chain')
-    joints = rt_cst.JOINTS_FK[rigname]
-    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, rt_cst.TYPE_FK)
+    joints = rt_constants.JOINTS_FK[rigname]
+    fkjnt_grp = rt_naming.fstr(rigname, rt_constants.GROUP, rt_constants.TYPE_FK)
 
     # Unparent all FK joints to world temporarily. One cmds.parent for the
     # whole chain: a reparent is among the most expensive commands there is
@@ -594,13 +594,13 @@ def restore_fk_joint_chain(rigname):
     # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end with the
     # SDK label. Pattern matching (not exact counts) also removes groups left
     # over from a previous NUM_CTRL_FK value.
-    # Disconnected one at a time (rt_mya.remove's reason: a delete must not
+    # Disconnected one at a time (rt_maya.remove's reason: a delete must not
     # cascade through an expression web), then deleted in ONE call - there
     # are NUM_CTRL_FK+1 of these per joint, so the per-node delete was the
     # single biggest source of commands in the teardown.
-    sdk_pattern = f'{rt_cst.TYPE_FK}_{rigname}_*_{rt_cst.SDK}'
+    sdk_pattern = f'{rt_constants.TYPE_FK}_{rigname}_*_{rt_constants.SDK}'
     sdk_groups = cmds.ls(sdk_pattern, type='transform') or []
-    rt_mya.disconnect_nodes(sdk_groups)
+    rt_maya.disconnect_nodes(sdk_groups)
     sdk_groups = [g for g in sdk_groups if cmds.objExists(g)]
     if sdk_groups:
         cmds.delete(sdk_groups)
@@ -608,7 +608,7 @@ def restore_fk_joint_chain(rigname):
     # Re-parent FK joints in proper hierarchy
     for i in range(len(joints)-1, 0, -1):  # Reverse order
         if cmds.objExists(joints[i]) and cmds.objExists(joints[i-1]):
-            rt_mya.parent_to(joints[i], joints[i-1])
+            rt_maya.parent_to(joints[i], joints[i-1])
 
 
 def fk_sdk_structure_is_current(rigname):
@@ -625,13 +625,13 @@ def fk_sdk_structure_is_current(rigname):
     Return
         bool: True if the existing SDK structure can be safely reused as-is
     '''
-    if rigname not in rt_cst.JOINTS_FK:
+    if rigname not in rt_constants.JOINTS_FK:
         return True
-    for jnt in rt_cst.JOINTS_FK[rigname]:
+    for jnt in rt_constants.JOINTS_FK[rigname]:
         if not cmds.objExists(jnt):
             return False
-        NN = rt_nam.get_index_from_name(jnt)
-        sdk_jnt = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+        NN = rt_naming.get_index_from_name(jnt)
+        sdk_jnt = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
         jnt_parent = cmds.listRelatives(jnt, p=True, typ='transform') or []
         if not jnt_parent or jnt_parent[0] != sdk_jnt:
             return False
@@ -652,16 +652,16 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
             whole teardown). Listed here when not given.
     '''
     logger.debug(f"{rigname}: Cleanup rig part")
-    types = ['', rt_cst.TYPE_BN, rt_cst.TYPE_IK, rt_cst.TYPE_FK, rt_cst.TYPE_FX]
-    basectrl_grp = rt_nam.fstr(rigname, rt_cst.BASECTRL_GRP)
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    types = ['', rt_constants.TYPE_BN, rt_constants.TYPE_IK, rt_constants.TYPE_FK, rt_constants.TYPE_FX]
+    basectrl_grp = rt_naming.fstr(rigname, rt_constants.BASECTRL_GRP)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
 
     # 1. Disconnect skeleton, delete joint constraints. Per CHAIN, not per
     # joint: listRelatives and listConnections both take a node list and
     # answer for all of them in one command, and this used to cost five
     # commands per joint per chain per rig part.
     logger.trace(f"{rigname}: Cleaning up skeleton constraints")
-    for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK, rt_cst.JOINTS_FX]:
+    for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK, rt_constants.JOINTS_FX]:
         if rigname in joints:
             chain = [j for j in joints[rigname] if cmds.objExists(j)]
             if not chain:
@@ -677,8 +677,8 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
             # replaced by the rig, so keep their outgoing connections or the
             # skin goes with them and the mesh stops deforming. FK/IK/FX
             # joints hold no skin, so clear both directions as before.
-            keep_skin = joints is rt_cst.JOINTS_BN
-            rt_mya.disconnect_nodes(chain, source=True,
+            keep_skin = joints is rt_constants.JOINTS_BN
+            rt_maya.disconnect_nodes(chain, source=True,
                                     destination=not keep_skin)
 
     # 2. Delete control constraints. One query for the whole control
@@ -696,25 +696,25 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     # 3. Delete skinClusters from curves
     logger.trace(f"{rigname}: Cleaning up skinClusters")
     if fk:
-        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
-        rt_mya.unbind_skincluster(curve_fk)
+        curve_fk = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_FK)
+        rt_maya.unbind_skincluster(curve_fk)
     if ik:
-        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
-        rt_mya.unbind_skincluster(curve_ik)
-        rt_mya.unbind_skincluster(curve_ik_spline)
+        curve_ik = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_IK)
+        curve_ik_spline = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_IK, TAG='_spline')
+        rt_maya.unbind_skincluster(curve_ik)
+        rt_maya.unbind_skincluster(curve_ik_spline)
 
     # 4. Delete existing controls and control groups
     logger.trace(f"{rigname} Cleaning up controls and groups")
-    rt_mya.remove(basectrl_grp)
-    rt_mya.remove(basectrl)
+    rt_maya.remove(basectrl_grp)
+    rt_maya.remove(basectrl)
 
     if fk:
-        fkroot_grp = rt_nam.fstr(rigname, rt_cst.CTRLROOT_GRP, rt_cst.TYPE_FK)
-        rt_mya.remove(fkroot_grp)
+        fkroot_grp = rt_naming.fstr(rigname, rt_constants.CTRLROOT_GRP, rt_constants.TYPE_FK)
+        rt_maya.remove(fkroot_grp)
 
     # Remove SDK groups for FK, restoring the flat FK joint chain
-    if fk and rigname in rt_cst.JOINTS_FK:
+    if fk and rigname in rt_constants.JOINTS_FK:
         restore_fk_joint_chain(rigname)
 
     # 5. Delete utility nodes (conditions, multiply, math nodes)
@@ -743,45 +743,45 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     found = [n for n in utility_nodes
              if n.split('|')[-1].startswith(prefixes)
              and n.endswith(suffixes)]
-    # One disconnect pass and one delete for the lot (rt_mya.remove_nodes):
+    # One disconnect pass and one delete for the lot (rt_maya.remove_nodes):
     # the FK falloff and curve-info networks are hundreds of nodes per rig
     # part, and per-node remove() spent ~8 commands on each
-    rt_mya.remove_nodes(found)
+    rt_maya.remove_nodes(found)
 
     # 7. Delete curves, clusters, ikHandles
     logger.trace(f"{rigname}: Cleaning up curves and clusters")
     if fk:
-        curve_fk = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)
-        spline_grp_fk = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_FK)
-        cluster_grp_fk = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_FK)
-        rt_mya.remove(curve_fk)
-        rt_mya.remove(spline_grp_fk)
-        rt_mya.remove(cluster_grp_fk)
+        curve_fk = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_FK)
+        spline_grp_fk = rt_naming.fstr(rigname, rt_constants.SPLINE_GRP, rt_constants.TYPE_FK)
+        cluster_grp_fk = rt_naming.fstr(rigname, rt_constants.CLUSTER_GRP, rt_constants.TYPE_FK)
+        rt_maya.remove(curve_fk)
+        rt_maya.remove(spline_grp_fk)
+        rt_maya.remove(cluster_grp_fk)
 
     if ik:
-        curve_ik = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK)
-        curve_ik_spline = rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline')
-        spline_grp_ik = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, rt_cst.TYPE_IK)
-        cluster_grp_ik = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, rt_cst.TYPE_IK)
-        spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
-        spline_effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, rt_cst.TYPE_IK)
-        rt_mya.remove(spline_handle)
-        rt_mya.remove(spline_effector)
-        rt_mya.remove(curve_ik)
-        rt_mya.remove(curve_ik_spline)
-        rt_mya.remove(spline_grp_ik)
-        rt_mya.remove(cluster_grp_ik)
+        curve_ik = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_IK)
+        curve_ik_spline = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_IK, TAG='_spline')
+        spline_grp_ik = rt_naming.fstr(rigname, rt_constants.SPLINE_GRP, rt_constants.TYPE_IK)
+        cluster_grp_ik = rt_naming.fstr(rigname, rt_constants.CLUSTER_GRP, rt_constants.TYPE_IK)
+        spline_handle = rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, rt_constants.TYPE_IK)
+        spline_effector = rt_naming.fstr(rigname, rt_constants.SPLINE_EFFECTOR, rt_constants.TYPE_IK)
+        rt_maya.remove(spline_handle)
+        rt_maya.remove(spline_effector)
+        rt_maya.remove(curve_ik)
+        rt_maya.remove(curve_ik_spline)
+        rt_maya.remove(spline_grp_ik)
+        rt_maya.remove(cluster_grp_ik)
 
     # Clean up animation effects
     cleanup_anim_effects(rigname, fk, ik)
 
     # Delete scale group
-    scale_grp = rt_nam.fstr(rigname, rt_cst.SCALE_GRP)
-    rt_mya.remove(scale_grp)
+    scale_grp = rt_naming.fstr(rigname, rt_constants.SCALE_GRP)
+    rt_maya.remove(scale_grp)
 
     # Clean up old visibility conditions
-    basectrl_name = basectrl.rsplit(rt_cst.CTRL, 1)[0]
-    rt_mya.remove(f'{basectrl_name}{rt_cst.VIS}{rt_cst.COND}')
+    basectrl_name = basectrl.rsplit(rt_constants.CTRL, 1)[0]
+    rt_maya.remove(f'{basectrl_name}{rt_constants.VIS}{rt_constants.COND}')
 
     # Clean up old items. Only exact names go to cmds.ls - a name it can
     # look up costs nothing, a wildcard makes it walk the scene - so the
@@ -790,11 +790,11 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     patterns = list()
     for typ in types:
         patterns.extend([
-            f'{typ}_{rigname}_revik_{rt_cst.NUM_CTRL_IK:02d}{rt_cst.CTRL}{rt_cst.GRP}',
-            f'{typ}_{rigname}_measure_scale{rt_cst.GRP}'
+            f'{typ}_{rigname}_revik_{rt_constants.NUM_CTRL_IK:02d}{rt_constants.CTRL}{rt_constants.GRP}',
+            f'{typ}_{rigname}_measure_scale{rt_constants.GRP}'
         ])
     switch_cond = tuple(f'{typ}_{rigname}_switch_' for typ in types if typ)
-    switch_end = f'{rt_cst.VIS}{rt_cst.COND}'
+    switch_end = f'{rt_constants.VIS}{rt_constants.COND}'
     patterns.extend(n for n in utility_nodes
                     if n.split('|')[-1].startswith(switch_cond)
                     and n.endswith(switch_end))
@@ -821,15 +821,15 @@ def cleanup_connections(rigname, fk, ik):
         restore_fk_joint_chain(rigname)
 
     # Per chain, not per joint (see cleanup_rigname step 1)
-    for joints in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
+    for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
         if rigname in joints:
             chain = [j for j in joints[rigname] if cmds.objExists(j)]
             if not chain:
                 continue
             # Keep BN joints' outgoing worldMatrix -> skinCluster (the
             # geometry bind); only their incoming drivers are rebuilt.
-            keep_skin = joints is rt_cst.JOINTS_BN
-            rt_mya.disconnect_nodes(chain, source=True,
+            keep_skin = joints is rt_constants.JOINTS_BN
+            rt_maya.disconnect_nodes(chain, source=True,
                                     destination=not keep_skin)
             # Remove constraints
             constraints = cmds.listRelatives(chain, type='constraint') or []
@@ -838,27 +838,27 @@ def cleanup_connections(rigname, fk, ik):
 
     # Disconnect FK SDK groups, the whole stack of every joint in two
     # commands (there are NUM_CTRL_FK + 1 of them per joint)
-    if fk and rigname in rt_cst.JOINTS_FK:
+    if fk and rigname in rt_constants.JOINTS_FK:
         sdk_groups = []
-        for jnt in rt_cst.JOINTS_FK[rigname]:
-            NN = rt_nam.get_index_from_name(jnt)
-            for idx in range(rt_cst.NUM_CTRL_FK + 1):
-                if idx < rt_cst.NUM_CTRL_FK:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, NN, nn=idx+1)
+        for jnt in rt_constants.JOINTS_FK[rigname]:
+            NN = rt_naming.get_index_from_name(jnt)
+            for idx in range(rt_constants.NUM_CTRL_FK + 1):
+                if idx < rt_constants.NUM_CTRL_FK:
+                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, NN, nn=idx+1)
                 else:
-                    sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
                 sdk_groups.append(sdk_grp)
-        rt_mya.disconnect_nodes(sdk_groups, source=True, destination=False)
+        rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
 
     # Delete FK utility node networks: the FK build (set_curveinfo_fk,
     # falloff_rotation) recreates them from scratch every run, so
     # keeping the old nodes would accumulate name-suffixed duplicates
     if fk:
-        typ = rt_cst.TYPE_FK
+        typ = rt_constants.TYPE_FK
         # Underscore anchored after rigname so 'tail' cannot delete
         # 'tail2' nodes (see cleanup_rigname)
         fk_patterns = [
-            f'{typ}_{rigname}_*{rt_cst.COND}',
+            f'{typ}_{rigname}_*{rt_constants.COND}',
             f'{typ}_{rigname}_*multiplyDivide',
             f'{typ}_{rigname}_*plusMinusAverage',
             f'{typ}_{rigname}_*multDoubleLinear',
@@ -868,12 +868,12 @@ def cleanup_connections(rigname, fk, ik):
         ]
         # One scene scan for all seven patterns, one disconnect pass and one
         # delete for everything it finds (see cleanup_rigname)
-        rt_mya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
+        rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
     Clean up animation effect nodes.
-    Expressions are removed first via rt_mya.remove(), which disconnects
+    Expressions are removed first via rt_maya.remove(), which disconnects
     before deleting: cmds.delete on a connected expression cascades through
     its whole connection web (loop network node, sibling FX expressions,
     composeMatrix nodes).
@@ -885,7 +885,7 @@ def cleanup_anim_effects(rigname, fk, ik):
     '''
     logger.trace(f'{rigname}: Cleanup animation effects')
     # Delete animation node patterns (expressions first)
-    typ = rt_cst.TYPE_FX
+    typ = rt_constants.TYPE_FX
     node_patterns = [
         f'{rigname}_*_wave*_expression',
         f'{rigname}_*_noise_*_expression',
@@ -919,8 +919,8 @@ def cleanup_anim_effects(rigname, fk, ik):
     # batch everything is disconnected before anything is deleted, so the
     # cascade the ordering guards against cannot happen either way
     expressions = [n for n in nodes if cmds.nodeType(n) == 'expression']
-    rt_mya.remove_nodes(expressions)
-    rt_mya.remove_nodes([n for n in nodes if n not in set(expressions)])
+    rt_maya.remove_nodes(expressions)
+    rt_maya.remove_nodes([n for n in nodes if n not in set(expressions)])
 
     cleanup_dangling_unit_conversions()
 
@@ -954,7 +954,7 @@ def excluded_sdk_curves(anim_curves):
 
     # Longest first: the first pattern that hits is the owning part
     tokens = [(p, re.compile(rf'(?<![A-Za-z0-9]){re.escape(p)}(?![A-Za-z0-9])'))
-              for p in sorted(rt_cst.RIGPARTS, key=len, reverse=True)]
+              for p in sorted(rt_constants.RIGPARTS, key=len, reverse=True)]
     keep = set()
     for crv in anim_curves:
         driven = cmds.listConnections(crv, s=False, d=True, scn=True) or []
@@ -1023,8 +1023,8 @@ def cleanup_dangling_curveinfo():
     makes for a spline solver - one per spline build, and the temporary
     curve is thrown away immediately afterwards.
 
-    rt_mya.remove/remove_nodes now take a curve's curveInfo down with it
-    (rt_mya.curveinfo_consumers), so new ones are not created. This clears
+    rt_maya.remove/remove_nodes now take a curve's curveInfo down with it
+    (rt_maya.curveinfo_consumers), so new ones are not created. This clears
     the ones a previous build already left in the scene.
 
     A curveInfo with no input curve is dead by construction, whoever made
@@ -1066,7 +1066,7 @@ def setup_rig(fk, ik):
     logger.info('Setup rig components')
 
     # The matrix OPM network needs matrixNodes; load it up front
-    rt_mya.ensure_plugins()
+    rt_maya.ensure_plugins()
 
     # NOTE: joint orientation and L/R mirroring are NOT done here. They are
     # a separate Setup phase (rig_tail_setup, run from the Tail Rig Setup UI
@@ -1076,33 +1076,33 @@ def setup_rig(fk, ik):
 
     # Sync IKFK_MODES with the build options before the switch attribute
     # is created (connect_cog): IK-only builds must not offer 'FK'
-    if rt_cst.update_ikfk_modes(fk, ik):
-        logger.debug(f'IKFK_MODES updated for build options: {rt_cst.IKFK_MODES}')
+    if rt_constants.update_ikfk_modes(fk, ik):
+        logger.debug(f'IKFK_MODES updated for build options: {rt_constants.IKFK_MODES}')
 
-    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    root_ctrl = rt_nam.fstr('', rt_cst.ROOT_CTRL)
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    geometry_grp = rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
-    control_grp = rt_nam.fstr('', rt_cst.CONTROL_GRP)
-    skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP)
-    rig_systems_grp = rt_nam.fstr('', rt_cst.RIG_SYSTEMS_GRP)
-    clusters_grp = rt_nam.fstr('', rt_cst.CLUSTERS_GRP)
+    root_grp = rt_naming.fstr('', rt_constants.ROOT_GRP)
+    root_ctrl = rt_naming.fstr('', rt_constants.ROOT_CTRL)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    geometry_grp = rt_naming.fstr('', rt_constants.GEOMETRY_GRP)
+    control_grp = rt_naming.fstr('', rt_constants.CONTROL_GRP)
+    skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP)
+    rig_systems_grp = rt_naming.fstr('', rt_constants.RIG_SYSTEMS_GRP)
+    clusters_grp = rt_naming.fstr('', rt_constants.CLUSTERS_GRP)
 
     if fk and not ik:
         groups = [geometry_grp, control_grp, skeleton_grp, rig_systems_grp, clusters_grp]
     else:
-        fk_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_FK)
-        ik_skeleton_grp = rt_nam.fstr('', rt_cst.SKELETON_GRP, rt_cst.TYPE_IK)
+        fk_skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP, rt_constants.TYPE_FK)
+        ik_skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP, rt_constants.TYPE_IK)
         groups = [geometry_grp, control_grp, skeleton_grp,
                   fk_skeleton_grp, ik_skeleton_grp,
                   rig_systems_grp, clusters_grp]
-    rt_ctl.create_root_cog()
+    rt_control.create_root_cog()
 
     # Create structure groups
     for group in groups:
-        rt_mya.create_group(group, parent=root_grp)
+        rt_maya.create_group(group, parent=root_grp)
         if group == geometry_grp:
-            meshes = rt_mya.get_geometry_from_scene()
+            meshes = rt_maya.get_geometry_from_scene()
             for geo in meshes:
                 # Refuse to create duplicate sibling names: Maya would
                 # auto-rename the incoming node, and the clashing shape
@@ -1114,30 +1114,30 @@ def setup_rig(fk, ik):
                         f"a child named '{leaf}' already exists there. "
                         f"Rename or delete one of the duplicates.")
                     continue
-                rt_mya.parent_to(geo, geometry_grp)
+                rt_maya.parent_to(geo, geometry_grp)
         elif group == control_grp:
-            controls = rt_mya.get_controls_from_scene()
+            controls = rt_maya.get_controls_from_scene()
             for ctrl in controls:
-                rt_mya.parent_to(ctrl, control_grp)
+                rt_maya.parent_to(ctrl, control_grp)
         elif group == skeleton_grp:
-            joints = rt_mya.get_joints_from_scene()
+            joints = rt_maya.get_joints_from_scene()
             for joint in joints:
-                rt_mya.parent_to(joint, skeleton_grp)
+                rt_maya.parent_to(joint, skeleton_grp)
         else:
             logger.trace(f"Group exists '{group}'")
 
     if ik: # Replace names
         rename_components()
 
-    rt_con.connect_root(fk, ik)
-    rt_con.connect_cog(fk, ik)
+    rt_connect.connect_root(fk, ik)
+    rt_connect.connect_cog(fk, ik)
     for rigname in rt_cache.active_parts():
         # Parts without joints were skipped by set_joints/set_joints_auto
-        if rigname not in rt_cst.JOINTS_BN:
+        if rigname not in rt_constants.JOINTS_BN:
             logger.warning(f"{rigname}: No joints set, skipping setup")
             continue
-        rt_ctl.create_basectrl(rigname)
-        rt_con.connect_basectrl(rigname, fk, ik)
+        rt_control.create_basectrl(rigname)
+        rt_connect.connect_basectrl(rigname, fk, ik)
 
 def set_root(root):
     '''
@@ -1153,9 +1153,9 @@ def set_root(root):
         logger.error(f"Invalid argument '{root}'.")
         return
 
-    rt_cst.ROOT = rt_nam.strip_group_suffix(root)
-    root_grp = rt_nam.fstr('', rt_cst.ROOT_GRP)
-    logger.debug(f"Set ROOT '{rt_cst.ROOT}'")
+    rt_constants.ROOT = rt_naming.strip_group_suffix(root)
+    root_grp = rt_naming.fstr('', rt_constants.ROOT_GRP)
+    logger.debug(f"Set ROOT '{rt_constants.ROOT}'")
 
     if cmds.objExists(root) and root != root_grp:
         # User passed an existing group name: rename to template name
@@ -1171,7 +1171,7 @@ def set_root(root):
             cmds.rename(prev_root_grp, root_grp)
     if cmds.objExists(root_grp):
         if cmds.nodeType(root_grp) != 'transform':
-            rt_mya.remove(root_grp)
+            rt_maya.remove(root_grp)
 
 def find_existing_root_grp():
     '''
@@ -1182,9 +1182,9 @@ def find_existing_root_grp():
     Return
         str or None: Existing root group, or None if no rig is built
     '''
-    for template in (rt_cst.GEOMETRY_GRP, rt_cst.SKELETON_GRP,
-                     rt_cst.CONTROL_GRP):
-        grp = rt_nam.fstr('', template)
+    for template in (rt_constants.GEOMETRY_GRP, rt_constants.SKELETON_GRP,
+                     rt_constants.CONTROL_GRP):
+        grp = rt_naming.fstr('', template)
         if cmds.objExists(grp):
             parent = cmds.listRelatives(grp, p=True, typ='transform') or []
             if parent:
@@ -1232,7 +1232,7 @@ def _bn_start_finder():
 
     def find(rigname):
         nonlocal index
-        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN=0)
+        start_jnt = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, NN=0)
         if cmds.objExists(start_jnt):
             return start_jnt
         if index is None:
@@ -1255,9 +1255,9 @@ def _bn_joints_by_rigname():
     '''
     found = {}
     for j in cmds.ls(type='joint') or []:
-        if rt_cst.TYPE_BN not in j:
+        if rt_constants.TYPE_BN not in j:
             continue
-        rigname = rt_nam.get_rigname(j.split('|')[-1], rt_cst.JOINT)
+        rigname = rt_naming.get_rigname(j.split('|')[-1], rt_constants.JOINT)
         if rigname:
             found.setdefault(rigname, j)
     return found
@@ -1276,7 +1276,7 @@ def _find_bn_start(rigname):
 
 def detect_joints_bn():
     '''
-    Populate rt_cst.JOINTS_BN for every RIGPART by chain detection only,
+    Populate rt_constants.JOINTS_BN for every RIGPART by chain detection only,
     with no FK/IK duplication and no renaming. Used by the Setup phase
     (rig_tail_setup.setup_tails), which re-orients the raw BN skeleton
     before any rig components exist; the build's set_joints_auto later
@@ -1288,16 +1288,16 @@ def detect_joints_bn():
     logger.debug('Detect BN joints for all RIGPARTS (Setup phase)')
     found = []
     find_start = _bn_start_finder()
-    for rigname in rt_cst.RIGPARTS:
+    for rigname in rt_constants.RIGPARTS:
         start_jnt = find_start(rigname)
         if not start_jnt:
             logger.warning(f'{rigname}: No BN joints found, skipping')
             continue
-        chain = rt_jnt.get_joint_chain(start_jnt)
+        chain = rt_joint.get_joint_chain(start_jnt)
         if not chain:
             logger.warning(f'{rigname}: Empty joint chain from {start_jnt}')
             continue
-        rt_cst.JOINTS_BN[rigname] = chain
+        rt_constants.JOINTS_BN[rigname] = chain
         found.append(rigname)
         logger.debug(f'{rigname}: {len(chain)} BN joints detected')
     return found
@@ -1315,8 +1315,8 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
         start_jnt (str): First joint in chain (auto-detected if None)
         end_jnt (str): Last joint in chain (auto-detected if None)
     '''
-    joints_list = [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]
-    types = [rt_cst.TYPE_BN, rt_cst.TYPE_FK, rt_cst.TYPE_IK]
+    joints_list = [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]
+    types = [rt_constants.TYPE_BN, rt_constants.TYPE_FK, rt_constants.TYPE_IK]
 
     # Check if cached joints are still valid
     cache_valid = True
@@ -1337,7 +1337,7 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
 
     # Detect or validate start joint
     if not start_jnt:
-        start_jnt = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, 0)
+        start_jnt = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, 0)
         logger.debug(f"{rigname}: Auto-detect start_jnt: {start_jnt}")
 
     if not cmds.objExists(start_jnt):
@@ -1349,18 +1349,18 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
 
     logger.debug(f"{rigname}: Setting joints - start:{start_jnt} end:{end_jnt}")
 
-    joint_chain = rt_jnt.get_joint_chain(start_jnt, end_jnt)
+    joint_chain = rt_joint.get_joint_chain(start_jnt, end_jnt)
     if not joint_chain:
         logger.error(f"{rigname}: No joints found")
         return
     logger.trace(f'Joint Chain: {joint_chain}')
 
     # Create/rename joints - always create BN
-    rt_cst.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, rt_cst.TYPE_BN)
-    logger.debug(f'{rigname}: Processed {rt_cst.TYPE_BN} joints: {len(rt_cst.JOINTS_BN[rigname])} joints')
+    rt_constants.JOINTS_BN[rigname] = create_rename_joints(rigname, joint_chain, rt_constants.TYPE_BN)
+    logger.debug(f'{rigname}: Processed {rt_constants.TYPE_BN} joints: {len(rt_constants.JOINTS_BN[rigname])} joints')
     # Create IK/FK joints here since setup runs before build
-    rt_cst.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_FK)
-    rt_cst.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_cst.JOINTS_BN[rigname], rt_cst.TYPE_IK)
+    rt_constants.JOINTS_FK[rigname] = create_rename_joints(rigname, rt_constants.JOINTS_BN[rigname], rt_constants.TYPE_FK)
+    rt_constants.JOINTS_IK[rigname] = create_rename_joints(rigname, rt_constants.JOINTS_BN[rigname], rt_constants.TYPE_IK)
 
 
 def create_rename_joints(rigname, joints, typ):
@@ -1379,11 +1379,11 @@ def create_rename_joints(rigname, joints, typ):
     logger.trace(f"rigname:'{rigname}' joints:'{typ}'")
 
     # BN: rename in place
-    if typ == rt_cst.TYPE_BN:
+    if typ == rt_constants.TYPE_BN:
         out = []
         for jnt in joints:
-            NN = rt_nam.get_index_from_name(jnt)
-            new_name = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, NN)
+            NN = rt_naming.get_index_from_name(jnt)
+            new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, NN)
             if jnt != new_name:
                 jnt = cmds.rename(jnt, new_name)
             if NN == 'ee':
@@ -1394,7 +1394,7 @@ def create_rename_joints(rigname, joints, typ):
     # FK/IK: duplicate BN hierarchy
     # BN root must already exist
     bn_root = joints[0]
-    target_root = rt_nam.fstr(rigname, rt_cst.JOINT, typ, 0)
+    target_root = rt_naming.fstr(rigname, rt_constants.JOINT, typ, 0)
 
     # Remove existing FK / IK chain cleanly
     if cmds.objExists(target_root):
@@ -1407,8 +1407,8 @@ def create_rename_joints(rigname, joints, typ):
 
     out = []
     for jnt in dup_jnts:
-        NN = rt_nam.get_index_from_name(jnt)
-        new_name = rt_nam.fstr(rigname, rt_cst.JOINT, typ, NN)
+        NN = rt_naming.get_index_from_name(jnt)
+        new_name = rt_naming.fstr(rigname, rt_constants.JOINT, typ, NN)
         if jnt != new_name:
             jnt = cmds.rename(jnt, new_name)
         if NN == 'ee':
@@ -1526,18 +1526,18 @@ def rename_rigpart(old, new):
 
 def _migrate_rigpart_state(old, new, old_token):
     '''Move RIGPARTS, ROOT (if it matched) and joint caches from old to new.'''
-    rt_cst.RIGPARTS = [new if p == old else p for p in rt_cst.RIGPARTS]
-    for jdict in (rt_cst.JOINTS_BN, rt_cst.JOINTS_FK,
-                  rt_cst.JOINTS_IK, rt_cst.JOINTS_FX):
+    rt_constants.RIGPARTS = [new if p == old else p for p in rt_constants.RIGPARTS]
+    for jdict in (rt_constants.JOINTS_BN, rt_constants.JOINTS_FK,
+                  rt_constants.JOINTS_IK, rt_constants.JOINTS_FX):
         if old in jdict:
             jdict[new] = [old_token.sub(new, j) for j in jdict.pop(old)]
-    lb = rt_cst.LAST_BUILD
+    lb = rt_constants.LAST_BUILD
     lb['rigparts'] = [new if p == old else p for p in lb.get('rigparts', [])]
     jp = lb.get('joints_pos') or {}
     if old in jp:
         jp[new] = jp.pop(old)
-    if rt_cst.ROOT == old:
-        rt_cst.ROOT = new
+    if rt_constants.ROOT == old:
+        rt_constants.ROOT = new
         lb['root'] = new
 
 
@@ -1607,8 +1607,8 @@ def rename_components():
         carriers = cmds.ls(f'*.{old_switch}', o=True, r=True) or []
         for node in cmds.ls(carriers, type='transform'):
             cmds.deleteAttr(node, at=old_switch)
-            rt_mya.add_attribute_enum(node, rt_cst.IKFK_DIVIDER[0], rt_cst.IKFK_DIVIDER[1], rt_cst.IKFK_DIVIDER[2])
-            rt_mya.add_attribute_enum(node, rt_cst.IKFK_SWITCH[0], rt_cst.IKFK_SWITCH[1], rt_cst.IKFK_SWITCH[2], rt_cst.IKFK_SWITCH[3])
+            rt_maya.add_attribute_enum(node, rt_constants.IKFK_DIVIDER[0], rt_constants.IKFK_DIVIDER[1], rt_constants.IKFK_DIVIDER[2])
+            rt_maya.add_attribute_enum(node, rt_constants.IKFK_SWITCH[0], rt_constants.IKFK_SWITCH[1], rt_constants.IKFK_SWITCH[2], rt_constants.IKFK_SWITCH[3])
 
     # Rename legacy DAG nodes, then legacy utility nodes. Same two sets as
     # before - DAG nodes, and non-DAG nodes of a utility type - just

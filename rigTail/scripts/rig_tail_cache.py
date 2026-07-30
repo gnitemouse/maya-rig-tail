@@ -8,11 +8,11 @@ Centralized cache management using rig_tail_constants for persistent state.
 Decide upon re-rig whether the previous rig can be reused
 or must be fully torn down. Rebuild is needed (joints changed) if any of:
 
-    1. There's no cached BN joint list for this rigname in rt_cst.JOINTS_BN
+    1. There's no cached BN joint list for this rigname in rt_constants.JOINTS_BN
         (fresh session or first build)
     2. Any cached BN/FK/IK joint no longer exists in scene
     3. Any BN joint moved more than JOINT_POS_TOLERANCE (scene units) from
-        the positions stored in rt_cst.LAST_BUILD['joints_pos'] at the last
+        the positions stored in rt_constants.LAST_BUILD['joints_pos'] at the last
         build. Stored positions are refreshed on every call, so float drift
         from the rig driving the joints never accumulates into a rebuild.
 
@@ -35,7 +35,7 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
+import rig_tail_constants as rt_constants
 import math
 
 logger = logger_setup(__name__)
@@ -60,8 +60,8 @@ def active_parts():
     Return:
         list: included rig part names, in RIGPARTS order
     """
-    getter = getattr(rt_cst, 'active_rigparts', None)
-    return getter() if callable(getter) else list(rt_cst.RIGPARTS)
+    getter = getattr(rt_constants, 'active_rigparts', None)
+    return getter() if callable(getter) else list(rt_constants.RIGPARTS)
 
 
 def excluded_parts():
@@ -72,7 +72,7 @@ def excluded_parts():
         list: excluded rig part names
     """
     active = set(active_parts())
-    return [p for p in rt_cst.RIGPARTS if p not in active]
+    return [p for p in rt_constants.RIGPARTS if p not in active]
 
 
 def include_parts(rignames):
@@ -88,14 +88,14 @@ def include_parts(rignames):
     Arguments:
         rignames (list): Rig part names to include
     """
-    excluded = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
+    excluded = getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or []
     named = set(rignames)
     keep = [p for p in excluded if p not in named]
     if len(keep) != len(excluded):
         lifted = [p for p in excluded if p in named]
         logger.debug(f"Building named parts: lifting exclusion on "
                      f"{', '.join(lifted)}")
-        rt_cst.RIGPARTS_EXCLUDE = keep
+        rt_constants.RIGPARTS_EXCLUDE = keep
 
 
 def validate_cache():
@@ -104,23 +104,23 @@ def validate_cache():
     Compares current values against LAST_BUILD state.
     """
     # Check if RIGPARTS changed
-    if set(rt_cst.RIGPARTS) != set(rt_cst.LAST_BUILD['rigparts']):
-        removed = set(rt_cst.LAST_BUILD['rigparts']) - set(rt_cst.RIGPARTS)
-        added = set(rt_cst.RIGPARTS) - set(rt_cst.LAST_BUILD['rigparts'])
+    if set(rt_constants.RIGPARTS) != set(rt_constants.LAST_BUILD['rigparts']):
+        removed = set(rt_constants.LAST_BUILD['rigparts']) - set(rt_constants.RIGPARTS)
+        added = set(rt_constants.RIGPARTS) - set(rt_constants.LAST_BUILD['rigparts'])
 
         # Clear data for removed rigparts
         for rigname in removed:
-            rt_cst.JOINTS_FK.pop(rigname, None)
-            rt_cst.JOINTS_IK.pop(rigname, None)
-            rt_cst.JOINTS_BN.pop(rigname, None)
+            rt_constants.JOINTS_FK.pop(rigname, None)
+            rt_constants.JOINTS_IK.pop(rigname, None)
+            rt_constants.JOINTS_BN.pop(rigname, None)
 
         logger.debug(f'RIGPARTS changed. Removed: {removed}, Added: {added}')
-        rt_cst.LAST_BUILD['rigparts'] = rt_cst.RIGPARTS.copy()
+        rt_constants.LAST_BUILD['rigparts'] = rt_constants.RIGPARTS.copy()
 
     # Check if ROOT changed
-    if rt_cst.ROOT != rt_cst.LAST_BUILD['root']:
-        logger.debug(f"ROOT changed: '{rt_cst.LAST_BUILD['root']}' -> '{rt_cst.ROOT}'")
-        rt_cst.LAST_BUILD['root'] = rt_cst.ROOT
+    if rt_constants.ROOT != rt_constants.LAST_BUILD['root']:
+        logger.debug(f"ROOT changed: '{rt_constants.LAST_BUILD['root']}' -> '{rt_constants.ROOT}'")
+        rt_constants.LAST_BUILD['root'] = rt_constants.ROOT
 
 
 def validate_cache_structure(fk=None, ik=None):
@@ -149,23 +149,23 @@ def validate_cache_structure(fk=None, ik=None):
     Return:
         bool: True if the structure changed (full rebuild needed)
     """
-    prev_fk = rt_cst.LAST_BUILD.get('num_ctrl_fk')
-    prev_ik = rt_cst.LAST_BUILD.get('num_ctrl_ik')
-    prev_indiv = rt_cst.LAST_BUILD.get('indiv_fk')
-    prev_mode = rt_cst.LAST_BUILD.get('build_mode')
-    rt_cst.LAST_BUILD['num_ctrl_fk'] = rt_cst.NUM_CTRL_FK
-    rt_cst.LAST_BUILD['num_ctrl_ik'] = rt_cst.NUM_CTRL_IK
-    rt_cst.LAST_BUILD['indiv_fk'] = rt_cst.INDIV_FK
+    prev_fk = rt_constants.LAST_BUILD.get('num_ctrl_fk')
+    prev_ik = rt_constants.LAST_BUILD.get('num_ctrl_ik')
+    prev_indiv = rt_constants.LAST_BUILD.get('indiv_fk')
+    prev_mode = rt_constants.LAST_BUILD.get('build_mode')
+    rt_constants.LAST_BUILD['num_ctrl_fk'] = rt_constants.NUM_CTRL_FK
+    rt_constants.LAST_BUILD['num_ctrl_ik'] = rt_constants.NUM_CTRL_IK
+    rt_constants.LAST_BUILD['indiv_fk'] = rt_constants.INDIV_FK
     mode = None if fk is None and ik is None else (bool(fk), bool(ik))
     if mode is not None:
-        rt_cst.LAST_BUILD['build_mode'] = mode
+        rt_constants.LAST_BUILD['build_mode'] = mode
 
     if prev_fk is None and prev_ik is None:
         # No recorded build in this session: joint validation decides
         return False
-    changed = (prev_fk != rt_cst.NUM_CTRL_FK
-               or prev_ik != rt_cst.NUM_CTRL_IK
-               or prev_indiv != rt_cst.INDIV_FK)
+    changed = (prev_fk != rt_constants.NUM_CTRL_FK
+               or prev_ik != rt_constants.NUM_CTRL_IK
+               or prev_indiv != rt_constants.INDIV_FK)
     mode_changed = (mode is not None and prev_mode is not None
                     and prev_mode != mode)
     if mode_changed:
@@ -173,9 +173,9 @@ def validate_cache_structure(fk=None, ik=None):
                      f'Full rebuild.')
     if changed:
         logger.debug(f'Structure changed: NUM_CTRL_FK '
-                    f'{prev_fk} -> {rt_cst.NUM_CTRL_FK}, NUM_CTRL_IK '
-                    f'{prev_ik} -> {rt_cst.NUM_CTRL_IK}, INDIV_FK '
-                    f'{prev_indiv} -> {rt_cst.INDIV_FK}. Full rebuild.')
+                    f'{prev_fk} -> {rt_constants.NUM_CTRL_FK}, NUM_CTRL_IK '
+                    f'{prev_ik} -> {rt_constants.NUM_CTRL_IK}, INDIV_FK '
+                    f'{prev_indiv} -> {rt_constants.INDIV_FK}. Full rebuild.')
     return changed or mode_changed
 
 
@@ -189,19 +189,19 @@ def validate_cache_joints(rigname, tol=None):
     Arguments:
         rigname (str): Name of rig component
         tol (float): Max per-joint position drift in scene units.
-            Defaults to rt_cst.JOINT_POS_TOLERANCE.
+            Defaults to rt_constants.JOINT_POS_TOLERANCE.
 
     Return:
         bool: True if joints changed (full rebuild needed)
     """
     if tol is None:
-        tol = rt_cst.JOINT_POS_TOLERANCE
+        tol = rt_constants.JOINT_POS_TOLERANCE
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         return True  # No cache, need rebuild
 
     # Check if cached joints exist in scene
-    for joint_dict in [rt_cst.JOINTS_BN, rt_cst.JOINTS_FK, rt_cst.JOINTS_IK]:
+    for joint_dict in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
         if rigname in joint_dict:
             for jnt in joint_dict[rigname]:
                 if not cmds.objExists(jnt):
@@ -209,16 +209,16 @@ def validate_cache_joints(rigname, tol=None):
                     return True  # Joints changed
 
     # Compare current joint positions against last build within tolerance
-    stored_pos = rt_cst.LAST_BUILD.get('joints_pos', {}).get(rigname)
+    stored_pos = rt_constants.LAST_BUILD.get('joints_pos', {}).get(rigname)
     current_pos = [cmds.xform(j, q=1, ws=1, t=1)
-                   for j in rt_cst.JOINTS_BN[rigname]]
-    rt_cst.LAST_BUILD.setdefault('joints_pos', {})[rigname] = current_pos
+                   for j in rt_constants.JOINTS_BN[rigname]]
+    rt_constants.LAST_BUILD.setdefault('joints_pos', {})[rigname] = current_pos
 
     if stored_pos is None or len(stored_pos) != len(current_pos):
         logger.debug(f'{rigname}: No stored joint positions, rebuild needed')
         return True
 
-    for jnt, old, new in zip(rt_cst.JOINTS_BN[rigname], stored_pos, current_pos):
+    for jnt, old, new in zip(rt_constants.JOINTS_BN[rigname], stored_pos, current_pos):
         dist = math.dist(old, new)
         if dist > tol:
             logger.debug(f"{rigname}: '{jnt}' moved {dist:.4f} (tol {tol})")
@@ -240,8 +240,8 @@ def cache_controls_ik(rigname):
     """
     global _CONTROL_CACHE
     if rigname not in _CONTROL_CACHE:
-        from rig_tail_control import get_controls_ik
-        _CONTROL_CACHE[rigname] = get_controls_ik(rigname)
+        import rig_tail_control as rt_control
+        _CONTROL_CACHE[rigname] = rt_control.get_controls_ik(rigname)
     return _CONTROL_CACHE[rigname]
 
 

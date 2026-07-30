@@ -39,8 +39,8 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_joint as rt_jnt
+import rig_tail_constants as rt_constants
+import rig_tail_joint as rt_joint
 
 logger = logger_setup(__name__)
 
@@ -62,13 +62,13 @@ def capture_rest_pose(rignames=None):
     re-captures from a later, smoothed BN.
 
     Arguments
-        rignames (list): Parts to capture, or None for all of rt_cst.RIGPARTS.
+        rignames (list): Parts to capture, or None for all of rt_constants.RIGPARTS.
 
     Return
         None.
     '''
-    for rigname in (rignames if rignames is not None else rt_cst.RIGPARTS):
-        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
+    for rigname in (rignames if rignames is not None else rt_constants.RIGPARTS):
+        for jnt in rt_constants.JOINTS_BN.get(rigname, []):
             if not cmds.objExists(jnt):
                 continue
             if cmds.attributeQuery(REST_ATTR, node=jnt, exists=True):
@@ -100,7 +100,7 @@ def rest_positions(rigname, joints):
     Return
         list or None: [(x, y, z), ...] rest positions, or None.
     '''
-    bn = rt_cst.JOINTS_BN.get(rigname, [])
+    bn = rt_constants.JOINTS_BN.get(rigname, [])
     if len(bn) != len(joints):
         return None
     out = []
@@ -131,7 +131,7 @@ def curve_source_positions(rigname, joints):
     rest = rest_positions(rigname, joints)
     if rest is not None:
         return rest
-    return rt_jnt.get_joint_position_from_list(joints)
+    return rt_joint.get_joint_position_from_list(joints)
 
 
 def clear_rest_pose(rignames=None):
@@ -143,10 +143,10 @@ def clear_rest_pose(rignames=None):
     BN is (or will be rebuilt to) the pose you want recorded.
 
     Arguments
-        rignames (list): Parts to clear, or None for all of rt_cst.RIGPARTS.
+        rignames (list): Parts to clear, or None for all of rt_constants.RIGPARTS.
     '''
-    for rigname in (rignames if rignames is not None else rt_cst.RIGPARTS):
-        for jnt in rt_cst.JOINTS_BN.get(rigname, []):
+    for rigname in (rignames if rignames is not None else rt_constants.RIGPARTS):
+        for jnt in rt_constants.JOINTS_BN.get(rigname, []):
             if cmds.objExists(jnt) and cmds.attributeQuery(REST_ATTR, node=jnt, exists=True):
                 cmds.setAttr(f'{jnt}.{REST_ATTR}', lock=False)
                 cmds.deleteAttr(f'{jnt}.{REST_ATTR}')

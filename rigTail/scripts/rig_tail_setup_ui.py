@@ -52,8 +52,8 @@ import maya.cmds as cmds
 from shiboken2 import wrapInstance
 from PySide2 import QtWidgets, QtCore
 
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
 import rig_tail_build_ui as rt_build_ui  # reuse RigPartsEditor
 
 
@@ -547,34 +547,34 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def load_current_values(self):
         '''Refresh fields from rig_tail_constants (getattr for stale sessions).'''
-        self.chk_orient.setChecked(bool(getattr(rt_cst, 'ORIENT_JOINTS', True)))
-        self.chk_mirror_orient.setChecked(bool(getattr(rt_cst, 'MIRROR_ORIENT', False)))
-        self.chk_mirror_joints.setChecked(bool(getattr(rt_cst, 'MIRROR_JOINTS', False)))
-        self.chk_dryrun.setChecked(bool(getattr(rt_cst, 'MIRROR_DRYRUN', False)))
-        self._combo_set(self.cmb_source, getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R'))
+        self.chk_orient.setChecked(bool(getattr(rt_constants, 'ORIENT_JOINTS', True)))
+        self.chk_mirror_orient.setChecked(bool(getattr(rt_constants, 'MIRROR_ORIENT', False)))
+        self.chk_mirror_joints.setChecked(bool(getattr(rt_constants, 'MIRROR_JOINTS', False)))
+        self.chk_dryrun.setChecked(bool(getattr(rt_constants, 'MIRROR_DRYRUN', False)))
+        self._combo_set(self.cmb_source, getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R'))
         self._combo_set(self.cmb_up_mode,
-            str(getattr(rt_cst, 'ORIENT_UP_MODE', 'cascade')).capitalize())
+            str(getattr(rt_constants, 'ORIENT_UP_MODE', 'cascade')).capitalize())
         self._sync_up_mode_enabled(self.chk_orient.isChecked())
         self._combo_set(self.cmb_behavior,
-            str(getattr(rt_cst, 'MIRROR_BEHAVIOR', 'symmetric')).capitalize())
+            str(getattr(rt_constants, 'MIRROR_BEHAVIOR', 'symmetric')).capitalize())
         self._sync_behavior_enabled(self.chk_mirror_orient.isChecked())
-        self._combo_set(self.cmb_axis, getattr(rt_cst, 'MIRROR_AXIS', 'x'))
-        self._combo_set(self.cmb_aim, getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x'))
-        self._combo_set(self.cmb_up, getattr(rt_cst, 'ORIENT_UP_AXIS', 'z'))
+        self._combo_set(self.cmb_axis, getattr(rt_constants, 'MIRROR_AXIS', 'x'))
+        self._combo_set(self.cmb_aim, getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x'))
+        self._combo_set(self.cmb_up, getattr(rt_constants, 'ORIENT_UP_AXIS', 'z'))
         self.update_display()
 
     def save_current_values(self):
         '''Write the UI state into rig_tail_constants.'''
-        rt_cst.ORIENT_JOINTS = self.chk_orient.isChecked()
-        rt_cst.MIRROR_ORIENT = self.chk_mirror_orient.isChecked()
-        rt_cst.MIRROR_JOINTS = self.chk_mirror_joints.isChecked()
-        rt_cst.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
-        rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
-        rt_cst.ORIENT_UP_MODE = self.cmb_up_mode.currentText().lower()
-        rt_cst.MIRROR_BEHAVIOR = self.cmb_behavior.currentText().lower()
-        rt_cst.MIRROR_AXIS = self.cmb_axis.currentText()
-        rt_cst.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
-        rt_cst.ORIENT_UP_AXIS = self.cmb_up.currentText()
+        rt_constants.ORIENT_JOINTS = self.chk_orient.isChecked()
+        rt_constants.MIRROR_ORIENT = self.chk_mirror_orient.isChecked()
+        rt_constants.MIRROR_JOINTS = self.chk_mirror_joints.isChecked()
+        rt_constants.MIRROR_DRYRUN = self.chk_dryrun.isChecked()
+        rt_constants.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
+        rt_constants.ORIENT_UP_MODE = self.cmb_up_mode.currentText().lower()
+        rt_constants.MIRROR_BEHAVIOR = self.cmb_behavior.currentText().lower()
+        rt_constants.MIRROR_AXIS = self.cmb_axis.currentText()
+        rt_constants.ORIENT_AIM_AXIS = self.cmb_aim.currentText()
+        rt_constants.ORIENT_UP_AXIS = self.cmb_up.currentText()
 
     def _sync_behavior_enabled(self, checked):
         '''Grey the Mirror Behavior combo out unless Mirror Orient is on.'''
@@ -597,17 +597,17 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def _mirror_pairs(self):
         '''(pairs, unpaired-sided) preview using the selected source side.'''
-        prev = getattr(rt_cst, 'MIRROR_SOURCE_SIDE', 'R')
-        rt_cst.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
+        prev = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
+        rt_constants.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         try:
-            import rig_tail_setup as rt_set
+            import rig_tail_setup as rt_setup
             # Active parts only, so the preview matches what will run: an
             # excluded side breaks its pair.
-            pairs, _ = rt_set.find_mirror_pairs(rt_set._active())
+            pairs, _ = rt_setup.find_mirror_pairs(rt_setup._active())
         except Exception:
             pairs = []
         finally:
-            rt_cst.MIRROR_SOURCE_SIDE = prev
+            rt_constants.MIRROR_SOURCE_SIDE = prev
         return pairs
 
     def _summary_line(self, label, value):
@@ -620,16 +620,16 @@ class RigTailSetupUI(QtWidgets.QDialog):
         return f'[{"x" if checked else " "}] {text}'
 
     def update_display(self):
-        self.txt_config.setText(getattr(rt_cst, 'LOADED_CONFIG', None) or '')
-        parts = list(rt_cst.RIGPARTS)
+        self.txt_config.setText(getattr(rt_constants, 'LOADED_CONFIG', None) or '')
+        parts = list(rt_constants.RIGPARTS)
         excluded = [p for p in parts
-                    if p in set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])]
+                    if p in set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])]
 
         # Same list form as the Builder's summary, so a part reads the same
         # in both windows. Labelled EXCLUDE, not RIGPARTS_EXCLUDE, to keep
         # the value column near the left edge.
         lines = [
-            self._summary_line('ROOT', f"'{getattr(rt_cst, 'ROOT', '')}'"),
+            self._summary_line('ROOT', f"'{getattr(rt_constants, 'ROOT', '')}'"),
             self._summary_line('RIGPARTS', parts),
         ]
         if excluded:
@@ -686,11 +686,11 @@ class RigTailSetupUI(QtWidgets.QDialog):
     def config_start_path(self):
         '''Config path to preselect in file dialogs: the textbox path if
         one is typed/displayed, otherwise the default CONFIG_FILE.'''
-        return self.txt_config.text().strip() or getattr(rt_cst, 'CONFIG_FILE', '')
+        return self.txt_config.text().strip() or getattr(rt_constants, 'CONFIG_FILE', '')
 
     def load_config_path(self, filepath):
         '''Load the given config file and refresh the UI.'''
-        if rt_cst.load_config(filepath):
+        if rt_constants.load_config(filepath):
             self.load_current_values()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration loaded from:\n{filepath}')
@@ -725,7 +725,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'JSON Files (*.json);;All Files (*)')
         if not filepath:
             return
-        if rt_cst.save_config(filepath):
+        if rt_constants.save_config(filepath):
             self.update_display()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration saved to:\n{filepath}')
@@ -735,9 +735,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def toggle_joint_axes(self, checked):
         '''Show/hide the BN joints' local rotation axes in the viewport.'''
-        import rig_tail_setup as rt_set
+        import rig_tail_setup as rt_setup
         try:
-            n = rt_set.show_joint_orients(bool(checked))
+            n = rt_setup.show_joint_orients(bool(checked))
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, 'Error',
                 f'Could not toggle joint axes:\n{str(e)}')
@@ -753,9 +753,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         Every selected joint contributes its rig part, so selecting joints
         across several tails lists them all - each tail once, however many of
         its joints are selected.'''
-        import rig_tail_setup as rt_set
+        import rig_tail_setup as rt_setup
         try:
-            rignames = rt_set.rignames_from_selection()
+            rignames = rt_setup.rignames_from_selection()
         except Exception as e:
             cmds.warning(f'Roll: could not read selection: {e}')
             return
@@ -777,14 +777,14 @@ class RigTailSetupUI(QtWidgets.QDialog):
         rolled on its own and failures are reported at the end, so a typo in a
         list of four still rolls the other three.
         '''
-        import rig_tail_setup as rt_set
+        import rig_tail_setup as rt_setup
 
         rignames = self._roll_chains()
         if not rignames:
             cmds.warning('Roll: no chain in the Chain box. Type a rig part '
                          'name, or select joints and click Select.')
             return
-        unknown = [n for n in rignames if n not in rt_cst.RIGPARTS]
+        unknown = [n for n in rignames if n not in rt_constants.RIGPARTS]
         if unknown:
             cmds.warning(f'Roll: not in RIGPARTS: {", ".join(unknown)}. Check '
                          'the spelling in the Chain box.')
@@ -798,7 +798,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         failed = []
         for rigname in rignames:
             try:
-                if not rt_set.roll_chain(rigname, angle):
+                if not rt_setup.roll_chain(rigname, angle):
                     failed.append(rigname)
             except Exception as e:
                 cmds.warning(f'Roll failed on {rigname}: {e}')
@@ -809,13 +809,13 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def run_setup(self):
         '''Commit options and run the Setup phase on the skeleton.'''
-        import rig_tail_setup as rt_set
+        import rig_tail_setup as rt_setup
 
-        if not rt_cst.RIGPARTS:
+        if not rt_constants.RIGPARTS:
             QtWidgets.QMessageBox.warning(self, 'Error',
                 'RIGPARTS is empty. Add rig parts first.')
             return
-        if not rt_set._active():
+        if not rt_setup._active():
             QtWidgets.QMessageBox.warning(self, 'Error',
                 'Every rig part is excluded, so Setup has nothing to do. '
                 "Move at least one part back to Include in 'Edit Rig Parts'.")
@@ -843,7 +843,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         try:
             # ROOT is not needed here: the Setup phase detects BN chains by
             # RIGPARTS naming, not by the rig root. Build sets ROOT.
-            result = rt_set.setup_tails(root=None, dry_run=dry)
+            result = rt_setup.setup_tails(root=None, dry_run=dry)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error',
                 f'Setup failed:\n{str(e)}')

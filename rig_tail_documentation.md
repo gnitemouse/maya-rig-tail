@@ -7,95 +7,210 @@ Complete API reference for the Maya Tail Rig system.
 
 ---
 
-## Two phases: Setup then Build
+## Three tools: Chain Builder, Tail Setup, Tail Build
 
-The tool has two phases, run in order and launched from the first two of the
-three shelf buttons (`TailSetup`, then `TailRig`; `TailReload` loads,
-reloads and runs the modules, described below):
+Three tools run in order, each with its own shelf button. Only the last is
+required; the first two prepare the skeleton and never run during a build.
 
-1. **Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`): a pre-build
-   step that orients, mirrors and rolls the raw BN skeleton so tails move
-   coherently, and never runs during the build. Most of it changes only
-   joint orientation; the one exception is `MIRROR_JOINTS`, which also
-   mirrors joint positions. If the skeleton is already well oriented, skip
-   the phase entirely; the build is unaffected.
-2. **Build** (`rig_tail` and the modules below): tear down any previous
-   rig, then create joints, curves, controls, node networks, and bind the
-   geometry.
+```
+[Chain Builder]  ->  [Tail Setup]  ->  [Tail Build]
+ joint positions      orient / mirror   the rig
+   (optional)           (optional)
+```
+
+1. **Chain Builder** (optional, `rig_tail_chain_*`): creates BN joint chains
+   between two objects and re-spaces existing ones at any joint count. Moves
+   joints; leaves orientation to Setup. Removable — no core module imports
+   it.
+2. **Tail Setup** (optional, `rig_tail_setup` + `rig_tail_setup_ui`):
+   orients, mirrors and rolls the raw BN skeleton so tails move coherently.
+   Most of it changes only joint orientation; the exception is
+   `MIRROR_JOINTS`, which mirrors positions too. Skip it if the skeleton is
+   already well oriented; the build is unaffected either way.
+3. **Tail Build** (`rig_tail` and the build modules): tears down any previous
+   rig, then creates joints, curves, controls and node networks, and binds
+   the geometry.
+
+The handover between them is the BN chain and nothing else. Chain Builder
+writes positions, Setup writes orientations, Build reads both and generates
+everything downstream. None of the three leaves state in the scene for the
+next, which is why any of them can be re-run, skipped or removed.
 
 ## How the modules get loaded
 
-`install.py` bakes the chosen install's `scripts/` folder into all three
-shelf buttons as `TOOL_DIR` and puts it at the front of `sys.path`, so a
-button runs the install it was made from even when another copy of Rig Tail
-is registered as a Maya module. The same path goes into the `rigTail.mod`
-under `~/Documents/maya/modules/`, which is what makes a bare
-`import rig_tail` work in the Script Editor.
+`install.py` bakes the chosen install's `scripts/` folder into every shelf
+button as `TOOL_DIR` and puts it at the front of `sys.path`, so a button runs
+the install it was made from even when another copy of Rig Tail is registered
+as a Maya module. The same path goes into the `rigTail.mod` under
+`~/Documents/maya/modules/`, which is what makes a bare `import rig_tail`
+work in the Script Editor.
 
-Two different refresh strategies sit on top of that:
+Every button refreshes the same way: drop modules from `sys.modules`, then
+import. What differs is how much gets dropped.
 
-- **`TailSetup` / `TailRig`** call `il.reload()` down the chain from
-  `rig_tail.py`. Fast, and it deliberately skips `rig_tail_constants` to
-  keep session state (UI settings, joint caches, the loaded config) alive.
-- **`TailReload`** deletes every `rig_tail*` module (and `logger_config`)
-  from `sys.modules` first, so the import that follows is genuinely fresh.
-  This is the only path that picks up edits to `rig_tail_constants` without
-  a Maya restart, at the cost of resetting session state — the config
-  auto-load restores the saved config. It also binds `rt_*` handles for
-  console testing.
+- **`ChainBuild` / `TailSetup` / `TailBuild`** drop only their own prefix
+  (`rig_tail_chain*`, `rig_tail_setup*`, `rig_tail_build*`). Shared modules,
+  `rig_tail_constants` included, stay loaded — so the settings edited in the
+  UI, the loaded config path and the joint/rest caches survive a relaunch.
+- **`TailReload`** drops every `rig_tail*` module and `logger_config`, then
+  re-imports the lot under the `rt_*` aliases and leaves a commented
+  workflow in the Script Editor. It is the only path that picks up an edit
+  to `rig_tail_constants` without a Maya restart, at the cost of resetting
+  session state — the config auto-load restores the saved config.
 
-Editing a module and clicking a UI button therefore picks up the change;
-adding a constant or a function to `rig_tail_constants` needs `TailReload`.
+No module reloads its dependencies on import. `rig_tail.py` used to sweep
+`importlib.reload` down the chain on every import, which ran each module
+twice per launch and made correctness depend on keeping the reload order in
+step with the dependency graph. Purging `sys.modules` in the launcher does
+the same job once, in the right order, for free. The two exceptions are
+`rig_tail.main()` and `main_setup()`, which reload their UI module so a
+hand-typed launch from the Script Editor cannot reopen a stale window.
+
+So a button refreshes its own modules and nothing else: editing
+`rig_tail_chain_build.py` and clicking `ChainBuild` picks the change up,
+editing `rig_tail_maya.py` and clicking anything but `TailReload` does not.
+When in doubt, `TailReload` — it is the only button that guarantees every
+module on disk is the one running, and the only one that picks up an edit to
+`rig_tail_constants`.
 
 ## Module Overview
 
-### Core Modules
+### Chain Builder (removable sub-tool)
+
+Runs before the Setup phase. One-way containment: these modules import from
+the core, no core module imports them — `rig_tail_chain_test.test_containment`
+greps for it on every test pass.
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail` | - | Main entry point, build orchestration, phase launchers |
-| `rig_tail_constants` | `rt_cst` | Global constants, naming templates, caches |
-| `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
+| `rig_tail_chain_spacing` | `rt_chain_spacing` | Pure spacing math, zero Maya imports |
+| `rig_tail_chain_build` | `rt_chain` | Maya layer: detect, guard, create, write |
+| `rig_tail_chain_build_ui` | `rt_chain_ui` | Joint Chain Builder window |
+| `rig_tail_chain_test` | `rt_chain_test` | Tests (the math half runs outside Maya) |
 
-### Setup Phase Modules
-
-| Module | Import Alias | Description |
-|--------|--------------|-------------|
-| `rig_tail_setup` | `rt_set` | Skeleton orient / mirror / roll, run before the build |
-| `rig_tail_setup_ui` | - | Setup UI (Tail Rig Setup) |
-| `rig_tail_test_setup` | `rt_ts` | Tests for the Setup phase (math + scene) |
-
-### Utility Modules
+### Tail Setup
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail_naming` | `rt_nam` | Template strings, naming conventions |
-| `rig_tail_maya` | `rt_mya` | Maya scene operations, node creation, geometry binding |
-| `rig_tail_math` | `rt_mat` | Vector math, orientation helpers |
-| `rig_tail_matrix` | `rt_mtx` | Matrix offset network builder |
-| `rig_tail_cache` | `rt_che` | Control caching and validation |
-| `rig_tail_joint` | `rt_jnt` | Joint chain utilities |
-| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix (Method D) |
+| `rig_tail_setup` | `rt_setup` | Skeleton orient / mirror / roll, run before the build |
+| `rig_tail_setup_ui` | `rt_setup_ui` | Setup UI (Tail Rig Setup) |
+| `rig_tail_setup_test` | `rt_setup_test` | Tests for the Setup phase (math + scene) |
 
-### Build Modules
+### Tail Build
 
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
-| `rig_tail_cleanup` | `rt_cln` | Teardown of a previous rig, plus build-structure setup |
-| `rig_tail_control` | `rt_ctl` | Control creation |
-| `rig_tail_curve` | `rt_crv` | Curve and spline creation |
+| `rig_tail` | `rt` | Main entry point, build orchestration, phase launchers |
+| `rig_tail_build_ui` | `rt_build_ui` | Build UI (Tail Rig Builder) |
+| `rig_tail_cleanup` | `rt_cleanup` | Teardown of a previous rig, plus build-structure setup |
+| `rig_tail_control` | `rt_control` | Control creation |
+| `rig_tail_curve` | `rt_curve` | Curve and spline creation |
 | `rig_tail_fk` | `rt_fk` | FK system with SDK groups |
-| `rig_tail_stretch` | `rt_str` | Stretch/squash system |
-| `rig_tail_connect` | `rt_con` | IK/FK connections and blending |
-| `rig_tail_anim` | `rt_ani` | Wave and dynamic FX |
-| `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
-| `rig_tail_test` | `rt_test` | Diagnostics for a built rig |
+| `rig_tail_stretch` | `rt_stretch` | Stretch/squash system |
+| `rig_tail_connect` | `rt_connect` | IK/FK connections and blending |
+| `rig_tail_anim` | `rt_anim` | Wave and dynamic FX |
+| `rig_tail_ctrlall` | `rt_ctrlall` | Main Controller dashboard (multi-tail) |
+| `rig_tail_build_test` | `rt_build_test` | Diagnostics for a built rig |
+
+### Shared
+
+| Module | Import Alias | Description |
+|--------|--------------|-------------|
+| `rig_tail_constants` | `rt_constants` | Global constants, naming templates, caches |
+| `rig_tail_naming` | `rt_naming` | Template strings, naming conventions |
+| `rig_tail_maya` | `rt_maya` | Maya scene operations, node creation, geometry binding |
+| `rig_tail_math` | `rt_math` | Vector math, orientation helpers |
+| `rig_tail_matrix` | `rt_matrix` | Matrix offset network builder |
+| `rig_tail_cache` | `rt_cache` | Control caching and validation |
+| `rig_tail_joint` | `rt_joint` | Joint chain utilities |
+| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix (Method D) |
+| `logger_config` | - | Shared logging setup |
+
+Every module imports its dependencies as `import rig_tail_x as rt_x`, using
+the same alias `install.py` binds in the `TailReload` button. One name per
+module, everywhere, so a symbol read in the Script Editor after a reload
+means what it means in the source.
 
 > Note: `rig_tail_setup` was previously the teardown/setup module; that
 > module is now `rig_tail_cleanup`, and `rig_tail_setup` is the Setup phase
 > (formerly `rig_tail_orient`).
 
-## Key decisions
+---
+
+## Architecture and key decisions
+
+### Chain Builder
+
+**Architecture.** Three layers, split so the hard part is testable without
+Maya. `rig_tail_chain_spacing` is pure maths — no Maya import at all — and
+holds the curve reconstruction and the distribution profiles.
+`rig_tail_chain_build` is the only layer that touches the scene: it resolves
+a selection into chain specs, guards them, resamples through the spacing
+layer and writes the result. `rig_tail_chain_build_ui` is a stateless
+window: every option is a widget read at click time, with no config file and
+no preferences.
+
+- **Shape and distribution are separate.** Shape is a centripetal
+  Catmull–Rom curve through the chain's own positions; distribution is where
+  along that arclength each joint sits. Because the profiles are analytic
+  functions of `j/(n-1)`, they are count-independent and idempotent.
+- **Interpolating, not approximating.** Catmull–Rom and PCHIP both reproduce
+  their knots, so re-spacing at an unchanged count returns the chain
+  untouched, and re-applying a profile to its own result is a no-op.
+  Shrinking is the only lossy operation, and only because curvature between
+  retained joints is unrecoverable by any algorithm.
+- **Resample from the original, not the last result.** `_ORIGINALS` maps a
+  chain root's long DAG path to the positions first seen this session. "18,
+  then 14, then 22" therefore costs one lossy pass rather than three. Module
+  global, dies on reload, nothing written to the scene; it re-baselines
+  itself when the chain stops matching what was last written (a hand edit).
+- **Reuse joints in place.** Names, rotate orders and custom attributes
+  survive wherever the count allows, rather than being recreated from a
+  template.
+- **Refuse rather than half-apply.** A skinned, rig-driven, branching or
+  degenerate chain aborts before anything moves. Each listed chain is
+  guarded on its own, so one bad chain in four still leaves three rebuilt.
+- **Positions only.** Orientation belongs to Setup; **Orient joints** is an
+  opt-in convenience that calls `rig_tail_setup.aim_frames` read-only, so
+  the two tools agree instead of fighting.
+- **Removable by construction.** One-way imports, no scene state, no config
+  file. Deleting `rig_tail_chain_*.py` and the marked blocks in
+  `install.py` / `uninstall.py` returns the repo to its previous state.
+
+### Tail Setup
+
+**Architecture.** `rig_tail_setup` computes per-joint world frames and
+writes them into `jointOrient`, leaving `rotate` zeroed, so a corrected
+skeleton still reads as a clean rest pose. Three independent batch toggles
+(orient, mirror-orient, mirror-joints) plus a per-chain `roll_chain` fix-up;
+`rig_tail_setup_ui` exposes them and nothing else. It reads and restores the
+same caches the build uses, so running it never invalidates a later build.
+
+- **Orient before mirror, always.** A single run with both ticked is
+  correct by construction; it was the *second* run that used to undo the
+  first.
+- **Cascade is the default up mode.** Roll is carried down the chain by
+  parallel transport from its own first joint, so twist goes while the roll
+  the chain already has — a mirror, a hand fix-up — survives. Best-fit
+  re-derives roll from the bend plane and overwrites both, which is right
+  only on a first pass over a raw skeleton.
+- **Positions are preserved unless asked otherwise.** Only `MIRROR_JOINTS`
+  moves a joint.
+- **Dry Run reports without touching.** A real run unbinds geometry and
+  clears the rest pose before the toggles are consulted, which is exactly
+  the kind of side effect that has to be previewable.
+- **Include / Exclude is one roster.** An excluded tail is skipped by Setup
+  *and* by the build, so a finished tail can be frozen while the rest of the
+  roster is iterated on.
+
+### Tail Build
+
+**Architecture.** One pipeline per rig part, run by `rig_tail.py`: cleanup
+(tear down or reuse the previous rig, decided by the joint cache), joints
+(detect or rebuild the BN/FK/IK chains), curves + clusters + controls, then
+connect (switches, matrix network, stretch, FX, geometry binding). Each
+stage is a module that only knows how to build its own nodes and find them
+again by templated name.
 
 - **Pure matrix drive.** BN joints are driven entirely through
   `offsetParentMatrix` (blendMatrix + multMatrix + composeMatrix): no
@@ -104,15 +219,16 @@ adding a constant or a function to `rig_tail_constants` needs `TailReload`.
 - **Rebuild-safe by name.** Every node is looked up by its templated name
   and reused; the joint cache decides per part whether a rebuild needs a
   full teardown or just re-wiring (`rig_tail_cache`, `rig_tail_cleanup`).
-- **Rest-pose store (Method D).** The IK curve is built from a stored
-  rest pose, so repeated rebuilds reproduce the same rig instead of
-  compounding curve smoothing (`rig_tail_restpose`).
+- **Rest-pose store (Method D).** The IK curve is built from a stored rest
+  pose, so repeated rebuilds reproduce the same rig instead of compounding
+  curve smoothing (`rig_tail_restpose`).
 - **Skin preservation.** With `PRESERVE_SKIN` on, rebuilds and Setup
   re-baseline existing skinClusters instead of unbinding, so painted
   weights survive (`rig_tail_maya`, `rig_tail_setup`).
-- **Session state lives in `rig_tail_constants`,** which is deliberately
-  never reloaded; modules install missing defaults onto it so new
-  features work in a stale session (see "How the modules get loaded").
+- **Session state lives in `rig_tail_constants`,** which the per-tool
+  buttons deliberately leave loaded; modules install missing defaults onto
+  it so new features work in a stale session (see "How the modules get
+  loaded").
 - **Global truth on the cog.** Per-tail IKFK switches and the optional
   ALL/override dashboard live on the cog control; base controls carry
   proxies (`rig_tail_ctrlall`).
@@ -154,7 +270,7 @@ Launch the Tail Rig Setup UI.
 
 ---
 
-## rig_tail_ui.py (rt_ui)
+## rig_tail_build_ui.py (rt_build_ui)
 
 Build UI (Tail Rig Builder window). Shows the loaded config and a summary
 of the current settings, the build options (FK/IK, Indiv FK, Stretchy,
@@ -176,7 +292,7 @@ Build and show the Builder window, closing any previous instance.
 
 ---
 
-## rig_tail_setup.py (rt_set)
+## rig_tail_setup.py (rt_setup)
 
 Setup phase: orient, mirror and roll the BN skeleton before the build.
 Optional and never runs during the build.
@@ -247,7 +363,7 @@ leave them alone:
 Use it to freeze a finished tail while the rest of the roster is iterated
 on. `rig_tail_cache.active_parts()` returns the included parts in
 `RIGPARTS` order, and every phase iterates that instead of `RIGPARTS`;
-`rt_cst.active_rigparts()` is the underlying computation.
+`rt_constants.active_rigparts()` is the underlying computation.
 
 Two things stay roster-wide on purpose. Anything the cog owns per tail (the
 IKFK switch, the dashboard override flag) is still created for excluded
@@ -285,7 +401,7 @@ Detect BN chains, run the enabled steps, then re-baseline the skinned meshes
 (or, with `PRESERVE_SKIN` off, unbind them up front instead).
 
 #### `run_setup(dry_run=None)`
-Run the enabled batch orient/mirror steps on `rt_cst.JOINTS_BN`.
+Run the enabled batch orient/mirror steps on `rt_constants.JOINTS_BN`.
 
 #### `orient_chains(dry_run)`
 Aim-orient every BN chain to remove intra-chain twist (`ORIENT_JOINTS`),
@@ -327,7 +443,7 @@ Reflect source world orientations across the symmetry plane for the target.
 
 ---
 
-## rig_tail_cleanup.py (rt_cln)
+## rig_tail_cleanup.py (rt_cleanup)
 
 Teardown of a previous rig and preparation of the scene structure, run at
 the start of every build. Formerly `rig_tail_setup`.
@@ -354,7 +470,7 @@ removes controls, curves, clusters, ikHandles, FX and utility networks,
 the FK/IK duplicate chains and the whole rig hierarchy. **Destructive and
 not an undo:** animation on the controls goes with the controls. Aborts
 rather than deleting the root group when a mesh or joint could not be moved
-out of it first. Verified by `rt_test.test_remove_rig()`.
+out of it first. Verified by `rt_build_test.test_remove_rig()`.
 
 #### `cleanup_dangling_curveinfo()`
 Delete curveInfo nodes with no input curve. `cmds.ikHandle` creates one on
@@ -403,7 +519,7 @@ Rename a rig part in place across scene nodes and caches.
 
 ---
 
-## rig_tail_control.py (rt_ctl)
+## rig_tail_control.py (rt_control)
 
 Control-curve creation: the root/cog/base hierarchy, the sliding
 variable-FK set, and the IK sets (ik, float, spline, up-vector), plus
@@ -420,7 +536,7 @@ Key functions: `create_root_cog`, `create_basectrl`, `create_controls_fk`,
 
 ---
 
-## rig_tail_curve.py (rt_crv)
+## rig_tail_curve.py (rt_curve)
 
 Curves, spline IK handles and clusters. The FK curve follows the joints
 exactly; the IK curve carries one CV per cluster plus two up-vector CVs,
@@ -446,7 +562,7 @@ Key functions: `set_curveinfo_fk`, `falloff_rotation`,
 
 ---
 
-## rig_tail_stretch.py (rt_str)
+## rig_tail_stretch.py (rt_stretch)
 
 Squash and stretch. One stretch ratio (current curve length over cached
 rest length) drives Length (joints spread along the tail) and Thickness
@@ -463,7 +579,7 @@ Key functions: `build_stretch`, `connect_stretch_to_joints`,
 
 ---
 
-## rig_tail_connect.py (rt_con)
+## rig_tail_connect.py (rt_connect)
 
 Final wiring phase: parents the systems into the hierarchy, creates the
 switch and channel-box attributes (per-tail IKFK switch on the cog;
@@ -471,7 +587,7 @@ stretch/twist/FX attributes on the basectrl, proxied onto every control),
 wires the IKFK mode SDKs that fade constraint weights and visibility, and
 hands off to `rig_tail_matrix`, `rig_tail_anim` and `rig_tail_stretch`
 before binding geometry to the BN joints. With the dashboard active,
-consumers read `rt_ca.resolved_plug()` / `rt_ca.ikfk_driver()` instead of
+consumers read `rt_ctrlall.resolved_plug()` / `rt_ctrlall.ikfk_driver()` instead of
 the plain plugs. Caches `get_controls_ik` results per build.
 
 Key functions: `connect_rig_tail`, `connect_root`, `connect_cog`,
@@ -481,14 +597,14 @@ Key functions: `connect_rig_tail`, `connect_root`, `connect_cog`,
 
 ---
 
-## rig_tail_anim.py (rt_ani)
+## rig_tail_anim.py (rt_anim)
 
 Animation FX layered on the rig: Curl (static, falloff), Wave (traveling
 sine), Noise (jitter) and Loop (modulo time for seamless cycling). Each
 FX writes per-joint rotations into its own composeMatrix, multiplied into
 the BN offsetParentMatrix by `rig_tail_matrix` — joints rotate about
 their own pivots and their channels stay untouched. Attribute sources go
-through `rt_ca.resolved_plug` so the dashboard can route them.
+through `rt_ctrlall.resolved_plug` so the dashboard can route them.
 
 Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
 `build_loop`, `build_wave`, `build_curl`, `build_noise`,
@@ -496,7 +612,7 @@ Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
 
 ---
 
-## rig_tail_ctrlall.py (rt_ca)
+## rig_tail_ctrlall.py (rt_ctrlall)
 
 Main Controller dashboard for rigs with multiple tails. Built during the
 connect phase when `MAIN_CONTROLLER` is on and RIGPARTS has 2+ parts. The
@@ -551,7 +667,7 @@ Remove the stored rest pose (for re-capture or testing).
 
 ---
 
-## rig_tail_setup_ui.py
+## rig_tail_setup_ui.py (rt_setup_ui)
 
 Setup UI (Tail Rig Setup window). Exposes the three batch toggles
 (Orient Joints, Mirror Orient, Mirror Joints), the source-side and axis
@@ -582,7 +698,157 @@ Build and show the Setup window, closing any previous instance.
 
 ---
 
-## rig_tail_test_setup.py (rt_ts)
+## Joint Chain Builder
+
+A removable sub-tool that creates and re-spaces BN joint chains *before*
+Setup. Launched from its own shelf button
+(`rig_tail_chain_build_ui.show_ui()`), never from `rig_tail.py`. The
+reasoning behind the split is under
+[Architecture and key decisions](#chain-builder).
+
+### rig_tail_chain_spacing.py (rt_chain_spacing)
+
+Pure maths, no Maya import, so every claim about the spacing is testable in
+plain Python. Shape is a centripetal Catmull–Rom curve through the source
+positions; distribution is where along its arclength each joint sits.
+
+Tunables: `K_DEFAULT` 1.7 in `K_RANGE` (0.2, 5.0) for Power, `R_DEFAULT`
+0.90 in `R_RANGE` (0.5, 1.0) for Ratio, `ARC_SAMPLES` 16 sub-samples per
+span, `SNAP_TOL` 1e-4 normalised arclength. Ratio stops at 0.5 because a
+smaller one collapses the far segments and a zero-length bone breaks
+aim-orient downstream.
+
+#### `resample(source_points, n, mode, param=None, invert=False, snap=True)`
+The whole pipeline: knots → arclength table → source arclengths → distribute
+→ snap → evaluate. Returns `(positions, snapped_indices)`.
+
+#### `distribute(mode, n, param=None, invert=False, source=None)`
+`n` normalised positions along [0, 1]. `uniform` is `u = t`; `power` is
+`u = t**k`; `ratio` is a geometric series of ratio `r`; `keep` is a monotone
+PCHIP resample of `source`. `invert` mirrors the profile end for end.
+
+#### `snap_to_source(u_list, s_hat, tol=SNAP_TOL)`
+Source index per target that lands within `tol` of an existing joint, else
+None. Ends always snap; indices must strictly increase, so two targets can
+never claim one source and collapse a segment.
+
+#### `catmull_rom_knots(points)` / `catmull_rom_eval(points, knots, t)`
+Centripetal knot parameters, and Barry–Goldman evaluation at one of them.
+`N == 2` falls back to a straight lerp.
+
+#### `arclength_table(points)` / `eval_at_arclength(points, knots, table, total, u)`
+Cumulative arclength sampled per span, and its inverse by binary search plus
+linear interpolation.
+
+#### `pchip_tangents(x, y)` / `pchip_eval(x, y, m, xq)`
+Fritsch–Carlson monotone tangents and Hermite evaluation — the interpolant
+behind `keep`, chosen because it cannot overshoot into a non-monotone
+distribution.
+
+### rig_tail_chain_build.py (rt_chain)
+
+The only layer that touches the scene. Every mutating entry point runs
+inside `rig_tail_maya.build_performance_scope`, so a click is one undo step.
+
+**Guards.** A rebuild aborts before moving anything if a chain joint
+influences a `skinCluster` (found through the joint's *future* —
+`worldMatrix` feeds `skinCluster.matrix`, so its history holds nothing), has
+incoming connections on translate or `offsetParentMatrix` (a built rig is
+driving it — remove the rig first), has branch children that shrinking would
+orphan, has locked translates, or if the chain is shorter than 2 joints or
+wholly coincident.
+
+**Writing.** Joints are reused in place: at an unchanged count only
+positions move and names are left alone; shrinking keeps the first `n` and
+deletes the surplus; growing moves the existing ones and creates the rest,
+copying `rotateOrder` and `preferredAngle` from the nearest surviving
+neighbour. On a count change a chain whose names all parse against the
+configured template is renumbered sequentially (logged at INFO); one with
+arbitrary names keeps them positionally. The `_ee_` end joint is excluded
+from the chain by `get_joint_chain`, so it is looked up from the tip,
+re-parented and placed along the new final segment at its original distance —
+Setup's end-joint handling depends on it.
+
+#### `rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True, orient=False)`
+Re-space an existing chain at a new joint count, resampling from the session
+original rather than the previous result. Returns the BN joints.
+
+#### `build_new(start, end, n, rigname=None, mode='uniform', param=None, invert=False, orient=False)`
+Create a new BN chain between two transforms. The two objects mark the ends
+and are left untouched; the new root is parented under `start`'s parent.
+
+#### `rebuild_selected(n, mode='keep', param=None, invert=False, snap=True, orient=False)`
+`resolve_selection`, then build or rebuild each resolved chain.
+
+#### `resolve_selection()`
+Interpret the viewport selection as `ChainSpec`s. Any joint in the selection
+means rebuild: each is walked up to its chain root — stopping at a non-joint
+parent *or* a branch point, so clicking one tentacle joint cannot climb into
+the spine — and the roots are de-duplicated, giving one spec per chain
+however many of its joints are selected. Two plain transforms with no joint
+among them mean build a new chain between them.
+
+#### `chain_root(joint)`
+The root of the chain a joint belongs to, or None if it is not a joint.
+
+#### `clear_cache(root=None)`
+Forget the session original for one chain (any of its joints will do) or for
+all of them. Returns the number of entries removed.
+
+### rig_tail_chain_build_ui.py (rt_chain_ui)
+
+Stateless window: every option is a widget read at click time, with no
+config file and no preferences. **Select** fills the chain list from the
+viewport and sets Joint Count to the first chain's own length, so the first
+click re-spaces rather than resizing by surprise. **Build Joints** runs each
+listed chain on its own, so one guarded chain in four still leaves three
+rebuilt. **Bake Joint Chain** clears the session original for the listed
+chains only, making their current shape the new baseline; it moves nothing.
+
+#### `show_ui()`
+Build and show the Joint Chain Builder window, closing any previous
+instance.
+
+---
+
+## rig_tail_chain_test.py (rt_chain_test)
+
+Tests for the Chain Builder, split by whether they need a scene.
+
+**Math tests** are deterministic and need no Maya at all — the spacing layer
+imports nothing from it, so `run_math()` runs under plain Python as well as
+in the Script Editor. They pin the properties the tool's promises rest on:
+endpoints land on 0 and 1 for every mode, invert is its own inverse, both
+interpolants reproduce their knots, re-applying a profile to its own result
+does not drift, a clean count change snaps to every other original exactly,
+and `test_containment` greps every core module to enforce the one-way import
+rule. **Scene tests** are MUTATING — they create, rebuild and re-space real
+chains, so reload the scene afterwards.
+
+### Functions
+
+#### `run_math()`
+Every math test, with a PASS/FAIL summary. Safe, and runnable outside Maya.
+
+#### `run_scene()`
+Every scene test, with a PASS/FAIL summary. **Mutating.**
+
+#### `run_all()`
+`run_math()` plus a pointer to the mutating scene tests.
+
+Individual tests: `test_containment`, `test_distribution_endpoints`,
+`test_uniform_equivalence`, `test_invert_symmetry`, `test_pchip_monotone`,
+`test_pchip_knot_exact`, `test_catmullrom_interpolates`, `test_arclength`,
+`test_keep_idempotent`, `test_keep_preserves_distribution`,
+`test_resample_noop`, `test_respace_same_count`, `test_param_defaults`,
+`test_roundtrip_drift`, `test_snap_exact`, `test_degenerate` (math);
+`test_rebuild_count`, `test_names_preserved`, `test_guards`,
+`test_cache_no_compounding`, `test_undo` (scene — currently placeholders
+that report `RAN`, not `PASS`).
+
+---
+
+## rig_tail_setup_test.py (rt_setup_test)
 
 Tests for the Setup phase, split by whether they need a scene.
 
@@ -622,7 +888,7 @@ Individual tests: `test_reflect`, `test_assign_rows`, `test_roll_about`,
 
 ---
 
-## rig_tail_test.py (rt_test)
+## rig_tail_build_test.py (rt_build_test)
 
 Diagnostics for a built rig (the matrix/OPM architecture). Read-only
 `test_*`/`check_*` functions validate wiring and alignment; `fix_*`
@@ -666,7 +932,7 @@ Individual checks (all taking `rigname`): `test_matrix`,
 
 ---
 
-## rig_tail_naming.py (rt_nam)
+## rig_tail_naming.py (rt_naming)
 
 Template string formatting and naming conventions.
 
@@ -677,7 +943,7 @@ Format template string with rig name and placeholders.
 
 **Example:**
 ```python
-rt_nam.fstr('tail', rt_cst.JOINT, 'IK', 3)  # Returns: 'IK_tail_03_jnt'
+rt_naming.fstr('tail', rt_constants.JOINT, 'IK', 3)  # Returns: 'IK_tail_03_jnt'
 ```
 
 #### `get_rigname(node, template)`
@@ -700,7 +966,7 @@ Check if name contains rigname and matching terms.
 
 ---
 
-## rig_tail_maya.py (rt_mya)
+## rig_tail_maya.py (rt_maya)
 
 Maya scene operations and node creation.
 
@@ -894,7 +1160,7 @@ Unbind skinCluster from node.
 
 ---
 
-## rig_tail_joint.py (rt_jnt)
+## rig_tail_joint.py (rt_joint)
 
 Joint chain utilities.
 
@@ -917,7 +1183,7 @@ Compare joint transforms for equality.
 
 ---
 
-## rig_tail_math.py (rt_mat)
+## rig_tail_math.py (rt_math)
 
 Vector and matrix math utilities.
 
@@ -943,7 +1209,7 @@ Check vector alignment.
 
 ---
 
-## rig_tail_matrix.py (rt_mtx)
+## rig_tail_matrix.py (rt_matrix)
 
 Matrix offset network construction.
 
@@ -954,7 +1220,7 @@ Build matrix blend network for IK/FK switching with FX offsets.
 
 ---
 
-## rig_tail_cache.py (rt_che)
+## rig_tail_cache.py (rt_cache)
 
 Control caching and validation.
 
@@ -980,7 +1246,7 @@ JOINT_POS_TOLERANCE; returns True when a full rebuild is needed.
 
 ---
 
-## rig_tail_constants.py (rt_cst)
+## rig_tail_constants.py (rt_constants)
 
 Global constants, naming templates, and data caches. All
 user-editable values can be exported/imported as a JSON config file

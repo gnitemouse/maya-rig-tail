@@ -21,18 +21,18 @@ Credits:
 
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_maya as rt_mya
-import rig_tail_math as rt_mat
-import rig_tail_ctrlall as rt_ca
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
+import rig_tail_math as rt_math
+import rig_tail_ctrlall as rt_ctrlall
 
 logger = logger_setup(__name__)
 
 
 # ADD CURVEINFO (FK) ===================================================
 
-def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
+def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     '''
     Parameterize control position to curve length using pointOnCurveInfo.
     Creates node network to slide controls along curve based on position attribute.
@@ -53,12 +53,12 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
         controls (list): List of Variable FK control names
     '''
     logger.trace(f"{rigname}: Add control curveInfo")
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    curveinfo = rt_mya.create_curveinfo(rigname, curve, rt_cst.TYPE_FK)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    curveinfo = rt_maya.create_curveinfo(rigname, curve, rt_constants.TYPE_FK)
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
 
     for i, ctrl in enumerate(controls):
-        NN = rt_nam.get_index_from_name(ctrl)
+        NN = rt_naming.get_index_from_name(ctrl)
         ctrl_name = f'{typ}_{rigname}_{NN:02d}'
 
         # Create pointOnCurveInfo node
@@ -99,7 +99,7 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_cst.TYPE_FK):
 
 # FALLOFF ROTATION (FK) ================================================
 
-def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
+def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     '''
     Remap control's rotation to joint rotations with falloff.
 
@@ -132,7 +132,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
         joints (list): List of FK joints
         sdks (list): SDK groups corresponding to this control's layer
     '''
-    ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', n+1)
+    ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, '', n+1)
     logger.trace(f"Setup Falloff Rotations for '{ctrl}'")
     control = f'{typ}_{rigname}_{n+1:02d}'
 
@@ -174,7 +174,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
     # Add rotations from all parent controls
     i = 1
     for parent_n in range(n):
-        parent_ctrl = rt_nam.fstr(rigname, rt_cst.CONTROL, '', parent_n+1)
+        parent_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, '', parent_n+1)
         cmds.connectAttr(f'{parent_ctrl}.rotate', f'{rotsum}.input3D[{i}]', f=1)
         i += 1
     # Output: f'{rotsum}.output3D' = accumulated rotation
@@ -182,7 +182,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
     # For each joint, calculate weighted rotation
     for idx, jnt in enumerate(joints):
         sdk_grp = sdks[idx]
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         sdk_name = f'{control}_{NN:02d}'
 
         # Calculate rotation multiplier for positive direction
@@ -233,8 +233,8 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
         cmds.connectAttr(f'{falloff}.output', f'{rotmult_neg}.input2X', f=1)
 
         # Check if joint falls inside falloff range
-        falloff_pos_cond = f'{sdk_name}_falloff_pos_{rt_cst.COND}'
-        falloff_neg_cond = f'{sdk_name}_falloff_neg_{rt_cst.COND}'
+        falloff_pos_cond = f'{sdk_name}_falloff_pos_{rt_constants.COND}'
+        falloff_neg_cond = f'{sdk_name}_falloff_neg_{rt_constants.COND}'
         cmds.createNode('condition', n=falloff_pos_cond, s=1, ss=1)
         cmds.createNode('condition', n=falloff_neg_cond, s=1, ss=1)
 
@@ -253,7 +253,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
         cmds.setAttr(f'{falloff_neg_cond}.colorIfTrueR', 1)
 
         # Choose appropriate rotation multiplier based on position
-        cond = f'{sdk_name}_rotmult_{rt_cst.COND}'
+        cond = f'{sdk_name}_rotmult_{rt_constants.COND}'
         cmds.createNode('condition', n=cond, s=1, ss=1)
         cmds.setAttr(f'{cond}.operation', 2) # greater than
         cmds.connectAttr(f'{ctrlpos}.output', f'{cond}.firstTerm', f=1) # ctrlpos
@@ -285,7 +285,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
         cmds.connectAttr(f'{ctrl}.num_joints', f'{percentage}.input2Z', f=1)
 
         # Apply threshold (zero out rotation if outside falloff range)
-        threshold_cond = f'{sdk_name}_threshold_{rt_cst.COND}'
+        threshold_cond = f'{sdk_name}_threshold_{rt_constants.COND}'
         cmds.createNode('condition', n=threshold_cond, s=1, ss=1)
         cmds.connectAttr(f'{cond}.outColorG', f'{threshold_cond}.firstTerm', f=1)
         cmds.setAttr(f'{threshold_cond}.secondTerm', 0)
@@ -299,7 +299,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_cst.TYPE_FK):
 
 # SDK GROUPS (FK) ======================================================
 
-def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
+def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
     '''
     Create NUM_CTRL_FK+1 SDK groups above each joint for rotation distribution.
 
@@ -319,34 +319,34 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
     Return
         fkjnt_grp (str): Top group containing entire FK joint chain with SDK groups
     '''
-    logger.trace(f'{rigname}: Create {rt_cst.NUM_CTRL_FK + 1} SDK groups above '
+    logger.trace(f'{rigname}: Create {rt_constants.NUM_CTRL_FK + 1} SDK groups above '
                  f'each of {len(joints)} {typ} joints '
                  f"('{joints[0]}' .. '{joints[-1]}')")
     basejnt = joints[0]
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    fkjnt_grp = rt_nam.fstr(rigname, rt_cst.GROUP, typ)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    fkjnt_grp = rt_naming.fstr(rigname, rt_constants.GROUP, typ)
     first_sdk_grp = None
 
     if cmds.objExists(fkjnt_grp):
         logger.trace(f"fkjnt_grp exists:'{fkjnt_grp}' basectrl:'{basectrl}'")
-        rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
+        rt_maya.match_transform(fkjnt_grp, basectrl, moc=1)
     else:
         # Check if first_sdk_grp has a parent that could be fkjnt_grp
         first_sdk_parent = cmds.listRelatives(first_sdk_grp, p=True, typ='transform')
         if first_sdk_parent:
             logger.trace(f"fkjnt_grp found:'{first_sdk_parent[0]}' basectrl:'{basectrl}'")
             fkjnt_grp = cmds.rename(first_sdk_parent[0], fkjnt_grp)
-            rt_mya.match_transform(fkjnt_grp, basectrl, moc=1)
+            rt_maya.match_transform(fkjnt_grp, basectrl, moc=1)
         else:
             logger.trace(f"Create new fkjnt_grp:'{fkjnt_grp}' basectrl:'{basectrl}'")
-            rt_mya.create_group(fkjnt_grp)
-            rt_mya.match_transform(fkjnt_grp, basectrl, moc=0)
+            rt_maya.create_group(fkjnt_grp)
+            rt_maya.match_transform(fkjnt_grp, basectrl, moc=0)
 
 
     # Create SDK groups for each joint (in reverse order for proper parenting)
     for jnt in reversed(joints):
-        NN = rt_nam.get_index_from_name(jnt)
-        jnt_name = rt_nam.fstr(rigname, rt_cst.JOINT, typ, NN, TAG='_sdk')
+        NN = rt_naming.get_index_from_name(jnt)
+        jnt_name = rt_naming.fstr(rigname, rt_constants.JOINT, typ, NN, TAG='_sdk')
         prev_sdk_grp = None
         first_sdk_grp = None
         last_sdk_grp = None
@@ -354,37 +354,37 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
         joint_pos = cmds.getAttr(f'{jnt}.joint_pos')
 
         # Create NUM_CTRL_FK + 1 SDK groups
-        for idx in range(rt_cst.NUM_CTRL_FK+1):
-            if idx < rt_cst.NUM_CTRL_FK:
-                sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_GRP, typ, NN, nn=idx+1)
+        for idx in range(rt_constants.NUM_CTRL_FK+1):
+            if idx < rt_constants.NUM_CTRL_FK:
+                sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, typ, NN, nn=idx+1)
             else:
-                sdk_grp = rt_nam.fstr(rigname, rt_cst.SDK_JNT, typ, NN)
+                sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, typ, NN)
 
             if not cmds.objExists(sdk_grp):
-                rt_mya.create_group(sdk_grp)
+                rt_maya.create_group(sdk_grp)
 
             if idx > 0:
                 # Set joint_pos attribute on SDK group (copy from joint).
                 # The channel-box and lock flags go through the API
-                # (rt_mya.set_channel_flags): this runs NUM_CTRL_FK times
+                # (rt_maya.set_channel_flags): this runs NUM_CTRL_FK times
                 # per joint per rig part, so it is the hottest loop in the
                 # build, and a flag write there is a command spent on
                 # display state.
                 v = joint_pos
                 if cmds.attributeQuery('joint_pos', n=sdk_grp, ex=1):
-                    rt_mya.set_channel_flags(sdk_grp, ['joint_pos'], l=False)
+                    rt_maya.set_channel_flags(sdk_grp, ['joint_pos'], l=False)
                     cmds.addAttr(f'{sdk_grp}.joint_pos', e=1, at='float',
                         min=0, max=1, k=False, h=False, dv=v)
                 else:
                     cmds.addAttr(sdk_grp, ln='joint_pos', nn='Joint Pos', at='float',
                         min=0, max=1, k=False, h=False, dv=v)
                 cmds.setAttr(f'{sdk_grp}.joint_pos', v)
-                rt_mya.set_channel_flags(sdk_grp, ['joint_pos'],
+                rt_maya.set_channel_flags(sdk_grp, ['joint_pos'],
                                          cb=True, l=True)
 
             if prev_sdk_grp: # Nest current SDK group under previous
-                rt_mya.parent_to(sdk_grp, prev_sdk_grp, r=True)
-                rt_mya.match_transform(sdk_grp, prev_sdk_grp, moc=1)
+                rt_maya.parent_to(sdk_grp, prev_sdk_grp, r=True)
+                rt_maya.match_transform(sdk_grp, prev_sdk_grp, moc=1)
             else:
                 first_sdk_grp = sdk_grp
             prev_sdk_grp = sdk_grp
@@ -394,8 +394,8 @@ def create_sdk_groups(rigname, joints, typ=rt_cst.TYPE_FK):
 
 
     # Move first_sdk_grp under fkjnt_grp
-    rt_mya.parent_to(first_sdk_grp, fkjnt_grp)
-    rt_mya.opm(first_sdk_grp)
+    rt_maya.parent_to(first_sdk_grp, fkjnt_grp)
+    rt_maya.opm(first_sdk_grp)
 
     return fkjnt_grp
 
@@ -415,10 +415,10 @@ def get_sdk_groups(joints):
             sdk_list[NUM_CTRL_FK] = [control SDK group for each joint]
     '''
     logger.trace('Get lists of SDK groups for all joints')
-    sdk_list = [list() for n in range(rt_cst.NUM_CTRL_FK+1)]
+    sdk_list = [list() for n in range(rt_constants.NUM_CTRL_FK+1)]
     for jnt in joints:
         child = jnt
-        for num in reversed(range(rt_cst.NUM_CTRL_FK+1)):
+        for num in reversed(range(rt_constants.NUM_CTRL_FK+1)):
             parent = cmds.listRelatives(child, p=True, typ='transform')
             if parent:
                 parent = parent[0]
@@ -438,7 +438,7 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         first_sdk_grp (str): Top SDK group in hierarchy
         last_sdk_grp (str): Bottom SDK group (direct parent of joint)
     '''
-    if rt_mya.is_parent(jnt, last_sdk_grp):
+    if rt_maya.is_parent(jnt, last_sdk_grp):
         return # Joint already under SDK groups
 
     jnt_parent = cmds.listRelatives(jnt, p=True) or []
@@ -449,14 +449,14 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         # cost, and this runs once per FK joint per rig part
         tmp_grp = cmds.createNode('transform', n=f'{jnt}_tmp', ss=1)
         cmds.matchTransform(tmp_grp, jnt)
-        rt_mya.parent_to(jnt, tmp_grp, a=1) # Unparent joint
+        rt_maya.parent_to(jnt, tmp_grp, a=1) # Unparent joint
         logger.trace(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
 
         # Move first_sdk_grp under joint's parent
-        rt_mya.parent_to(first_sdk_grp, jnt_parent)
+        rt_maya.parent_to(first_sdk_grp, jnt_parent)
         cmds.matchTransform(first_sdk_grp, jnt_parent)
-        rt_mya.reset_opm(first_sdk_grp)
-        rt_mya.reset_transforms(first_sdk_grp)
+        rt_maya.reset_opm(first_sdk_grp)
+        rt_maya.reset_transforms(first_sdk_grp)
         cmds.matchTransform(first_sdk_grp, jnt)
         # Bake the joint's rest transform into offsetParentMatrix, which
         # leaves local rotate at zero. falloff_rotation connects the
@@ -464,10 +464,10 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         # orientation left there would be overwritten the moment that
         # connection is made - silently flattening any chain whose joints
         # are not already aligned with their parent.
-        rt_mya.opm(first_sdk_grp)
+        rt_maya.opm(first_sdk_grp)
 
         # Move joint under last_sdk_grp
-        rt_mya.parent_to(jnt, last_sdk_grp, a=1)
+        rt_maya.parent_to(jnt, last_sdk_grp, a=1)
         # Clean up any extra transform created by reparenting
         transf = cmds.listRelatives(jnt, p=True, typ='transform')[0]
         if transf != last_sdk_grp:
@@ -475,8 +475,8 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         cmds.delete(tmp_grp)
     else:
         # No parent - simple case
-        rt_mya.match_transform(first_sdk_grp, jnt, moc=0)
-        rt_mya.parent_to(jnt, last_sdk_grp, a=1)
+        rt_maya.match_transform(first_sdk_grp, jnt, moc=0)
+        rt_maya.parent_to(jnt, last_sdk_grp, a=1)
 
 
 # TWIST / ROLL (FK) ====================================================
@@ -489,7 +489,7 @@ def connect_twist_roll(rigname, joints):
     (rig_tail_matrix), so building both is what makes the dials switch
     with the IKFK mode - there is no separate switching network.
 
-    Sources come from rt_ca.resolved_plug, NOT the basectrl attribute
+    Sources come from rt_ctrlall.resolved_plug, NOT the basectrl attribute
     directly: with the Main Controller dashboard active the tail's own
     value is only one input of its override condition, and reading the
     basectrl behind that condition's back is what makes the cog's
@@ -527,29 +527,29 @@ def connect_twist_roll(rigname, joints):
         rigname (str): Name of rig component
         joints (list): FK joints, base to tip
     '''
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     if not cmds.objExists(basectrl) \
             or not cmds.attributeQuery('twist', n=basectrl, ex=1):
         return
 
     # plusMinusAverage's input3D[i] children are lowercase (.input3Dx),
     # unlike multiplyDivide's uppercase .outputX used elsewhere here.
-    if rt_cst.ORIENT_AIM_AXIS not in ('x', 'y', 'z'):
+    if rt_constants.ORIENT_AIM_AXIS not in ('x', 'y', 'z'):
         logger.warning(f"{rigname}: Unknown ORIENT_AIM_AXIS "
-                       f"'{rt_cst.ORIENT_AIM_AXIS}', skipping twist/roll")
+                       f"'{rt_constants.ORIENT_AIM_AXIS}', skipping twist/roll")
         return
-    axis = rt_cst.ORIENT_AIM_AXIS
+    axis = rt_constants.ORIENT_AIM_AXIS
     n = len(joints)
     if not n:
         return
 
-    twist_src = rt_ca.resolved_plug(rigname, 'twist')
-    roll_src = rt_ca.resolved_plug(rigname, 'roll')
-    offset_src = rt_ca.resolved_plug(rigname, 'offset')
+    twist_src = rt_ctrlall.resolved_plug(rigname, 'twist')
+    roll_src = rt_ctrlall.resolved_plug(rigname, 'roll')
+    offset_src = rt_ctrlall.resolved_plug(rigname, 'offset')
 
     # twist / N, shared by every joint (see docstring: the constant term
     # is what produces a linear ramp once it compounds down the hierarchy)
-    twist_step = f'{rt_cst.TYPE_FK}_{rigname}_twist_step_multiplyDivide'
+    twist_step = f'{rt_constants.TYPE_FK}_{rigname}_twist_step_multiplyDivide'
     if not cmds.objExists(twist_step):
         cmds.createNode('multiplyDivide', n=twist_step, s=1, ss=1)
         cmds.setAttr(f'{twist_step}.operation', 2)  # divide
@@ -557,12 +557,12 @@ def connect_twist_roll(rigname, joints):
     cmds.setAttr(f'{twist_step}.input2X', n)
 
     for i, jnt in enumerate(joints):
-        NN = rt_nam.get_index_from_name(jnt)
-        sdk_jnt = rt_nam.fstr(rigname, rt_cst.SDK_JNT, rt_cst.TYPE_FK, NN)
+        NN = rt_naming.get_index_from_name(jnt)
+        sdk_jnt = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
         if not cmds.objExists(sdk_jnt):
             continue
 
-        sum_node = f'{rt_cst.TYPE_FK}_{rigname}_{NN}_twistroll_plusMinusAverage'
+        sum_node = f'{rt_constants.TYPE_FK}_{rigname}_{NN}_twistroll_plusMinusAverage'
         if not cmds.objExists(sum_node):
             cmds.createNode('plusMinusAverage', n=sum_node, s=1, ss=1)
             cmds.setAttr(f'{sum_node}.operation', 1)  # add
@@ -587,13 +587,13 @@ def connect_twist_roll(rigname, joints):
     # offset: rigid slide along the base joint's aim axis. Layer-1 of
     # joint 0 is free of FK stretch (which starts at joint 1), so this
     # needs no summing node. Scaled into the IK handle's units first.
-    base_NN = rt_nam.get_index_from_name(joints[0])
-    base_sdk = rt_nam.fstr(rigname, rt_cst.SDK_GRP, rt_cst.TYPE_FK, base_NN, 1)
+    base_NN = rt_naming.get_index_from_name(joints[0])
+    base_sdk = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, base_NN, 1)
     if not cmds.objExists(base_sdk):
         logger.warning(f'{rigname}: No base SDK group {base_sdk}, '
                        f'skipping FK offset')
         return
-    scale_node = f'{rt_cst.TYPE_FK}_{rigname}_offset_scale_multiplyDivide'
+    scale_node = f'{rt_constants.TYPE_FK}_{rigname}_offset_scale_multiplyDivide'
     if not cmds.objExists(scale_node):
         cmds.createNode('multiplyDivide', n=scale_node, s=1, ss=1)
         cmds.setAttr(f'{scale_node}.operation', 1)  # multiply
@@ -628,8 +628,8 @@ def offset_unit_scale(rigname):
     Return
         float: multiplier from offset units to scene units
     '''
-    curves = [rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_IK, TAG='_spline'),
-              rt_nam.fstr(rigname, rt_cst.CURVE, rt_cst.TYPE_FK)]
+    curves = [rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_IK, TAG='_spline'),
+              rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_FK)]
     for curve in curves:
         if not cmds.objExists(curve):
             continue

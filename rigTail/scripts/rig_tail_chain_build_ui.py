@@ -23,11 +23,11 @@ import maya.cmds as cmds
 from shiboken2 import wrapInstance
 from PySide2 import QtWidgets, QtCore
 
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_joint as rt_jnt
-import rig_tail_chain_build as rt_chb
-import rig_tail_chain_spacing as rt_spc
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_joint as rt_joint
+import rig_tail_chain_build as rt_chain
+import rig_tail_chain_spacing as rt_chain_spacing
 
 
 class JointChainBuilderUI(QtWidgets.QDialog):
@@ -71,8 +71,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
     # carry a nonsensical number across (1.7 is a fine exponent and an
     # impossible ratio).
     PARAM_MODES = {
-        'power': (rt_spc.K_DEFAULT, rt_spc.K_RANGE, 0.05),
-        'ratio': (rt_spc.R_DEFAULT, rt_spc.R_RANGE, 0.01),
+        'power': (rt_chain_spacing.K_DEFAULT, rt_chain_spacing.K_RANGE, 0.05),
+        'ratio': (rt_chain_spacing.R_DEFAULT, rt_chain_spacing.R_RANGE, 0.01),
     }
 
     def __init__(self, parent=None):
@@ -438,7 +438,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                 counts.append('?')
                 continue
             try:
-                counts.append(str(len(rt_jnt.get_joint_chain(root))))
+                counts.append(str(len(rt_joint.get_joint_chain(root))))
             except Exception:
                 counts.append('?')
         self.lbl_detected.setText(
@@ -457,11 +457,11 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         try:
             root = self._roots.get(name)
             if root and cmds.objExists(root):
-                return rt_chb.chain_root(root)
-            templated = rt_nam.fstr(name, rt_cst.JOINT, rt_cst.TYPE_BN, 0)
+                return rt_chain.chain_root(root)
+            templated = rt_naming.fstr(name, rt_constants.JOINT, rt_constants.TYPE_BN, 0)
             if cmds.objExists(templated):
-                return rt_chb.chain_root(templated)
-            return rt_chb.chain_root(name) if cmds.objExists(name) else None
+                return rt_chain.chain_root(templated)
+            return rt_chain.chain_root(name) if cmds.objExists(name) else None
         except Exception:
             return None
 
@@ -470,7 +470,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
     def select_from_viewport(self):
         '''List the chain of every selected joint, one entry per chain.'''
         try:
-            specs = rt_chb.resolve_selection()
+            specs = rt_chain.resolve_selection()
         except Exception as exc:
             cmds.warning(f'Could not resolve selection: {exc}')
             return
@@ -507,7 +507,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         # Default the count to the first chain's own length, so the first
         # click re-spaces rather than resizing by surprise.
         try:
-            self.spn_count.setValue(len(rt_jnt.get_joint_chain(specs[0].root)))
+            self.spn_count.setValue(len(rt_joint.get_joint_chain(specs[0].root)))
         except Exception:
             pass
         self._sync_detected()
@@ -529,7 +529,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             if not root:
                 missing.append(name)
                 continue
-            cleared += rt_chb.clear_cache(root)
+            cleared += rt_chain.clear_cache(root)
         if missing:
             cmds.warning(f'No chain found for: {", ".join(missing)}.')
         cmds.warning(f'Re-baselined {cleared} chain(s): their shape as it '
@@ -565,7 +565,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                 failed.append(name)
                 continue
             try:
-                rt_chb.rebuild(root, n, mode, param, invert, snap, orient)
+                rt_chain.rebuild(root, n, mode, param, invert, snap, orient)
                 done.append(name)
             except Exception as exc:
                 cmds.warning(f'Rebuild failed on {name}: {exc}')
@@ -590,7 +590,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                          'chain.')
             return
         try:
-            joints = rt_chb.build_new(sel[0], sel[1], n, None, mode, param,
+            joints = rt_chain.build_new(sel[0], sel[1], n, None, mode, param,
                                       invert, orient)
         except Exception as exc:
             cmds.warning(f'Chain build failed: {exc}')

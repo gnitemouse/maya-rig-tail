@@ -25,11 +25,11 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_maya as rt_mya
-import rig_tail_math as rt_mat
-import rig_tail_joint as rt_jnt
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
+import rig_tail_math as rt_math
+import rig_tail_joint as rt_joint
 
 logger = logger_setup(__name__)
 
@@ -55,7 +55,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     Return
         curve (str): Name of created curve, or None if creation failed
     '''
-    curve = rt_nam.fstr(rigname, rt_cst.CURVE, typ, TAG=tag)
+    curve = rt_naming.fstr(rigname, rt_constants.CURVE, typ, TAG=tag)
     logger.debug(f"{rigname}: Create curve '{curve}'")
     logger.trace(f'jnt_pos len{len(jnt_pos)} {jnt_pos}')
 
@@ -73,12 +73,12 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
         logger.error(f'Need at least 2 joint positions, got {len(jnt_pos)}')
         return None
 
-    if typ == rt_cst.TYPE_FK:
+    if typ == rt_constants.TYPE_FK:
         # FK: Create curve matching joint positions exactly for skinCluster binding
         degree = min(3, len(jnt_pos)-1)
         curve = cmds.curve(n=curve, d=degree, p=jnt_pos)
 
-    elif typ == rt_cst.TYPE_IK:
+    elif typ == rt_constants.TYPE_IK:
         if tag:
             # IK Spline solver curve: Duplicate end CVs for upvec clusters
             all_pos = [jnt_pos[0]] + jnt_pos + [jnt_pos[-1]]
@@ -86,7 +86,7 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
         else:
             # IK driver curve: Evenly spaced control CVs + duplicate ends for upvec
-            indices = rt_mat.linspace(0, len(jnt_pos)-1, rt_cst.NUM_CTRL_IK)
+            indices = rt_math.linspace(0, len(jnt_pos)-1, rt_constants.NUM_CTRL_IK)
             all_pos = [jnt_pos[0]] + [jnt_pos[round(i)] for i in indices] + [jnt_pos[-1]]
             degree = min(3, len(all_pos)-1)
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
@@ -96,12 +96,12 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
         curve = cmds.curve(p=jnt_pos, d=degree, n=curve)
 
     # Clean up and organize
-    rt_nam.rename_shapes(curve, typ='crv')
-    rt_mya.set_curve_visibility(curve)
+    rt_naming.rename_shapes(curve, typ='crv')
+    rt_maya.set_curve_visibility(curve)
     cmds.delete(curve, ch=1) # Delete construction history
 
-    spline_grp = rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ)
-    rt_mya.parent_to(curve, spline_grp)
+    spline_grp = rt_naming.fstr(rigname, rt_constants.SPLINE_GRP, typ)
+    rt_maya.parent_to(curve, spline_grp)
 
     num_cv = cmds.getAttr(f'{curve}.controlPoints', size=True)
     logger.trace(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
@@ -160,7 +160,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         poci = f'{typ}_{rigname}_poci_{cv_i:02d}_pointOnCurveInfo'
         if not cmds.objExists(poci):
             cmds.createNode('pointOnCurveInfo', n=poci, s=1, ss=1)
-        rt_mya.ensure_connect(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
+        rt_maya.ensure_connect(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
 
         # Calculate parameter: Map solver CV position to driver curve parameter space
         if solver_num_cv == 1:
@@ -175,11 +175,11 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         logger.trace(f'CV {cv_i}: parameter {driver_param:.3f}')
 
         # Connect position to solver curve CV
-        rt_mya.ensure_connect(f'{poci}.positionX',
+        rt_maya.ensure_connect(f'{poci}.positionX',
                               f'{solver_shape}.controlPoints[{cv_i}].xValue')
-        rt_mya.ensure_connect(f'{poci}.positionY',
+        rt_maya.ensure_connect(f'{poci}.positionY',
                               f'{solver_shape}.controlPoints[{cv_i}].yValue')
-        rt_mya.ensure_connect(f'{poci}.positionZ',
+        rt_maya.ensure_connect(f'{poci}.positionZ',
                               f'{solver_shape}.controlPoints[{cv_i}].zValue')
 
     logger.trace(f'Created {solver_num_cv} pointOnCurveInfo connections')
@@ -192,7 +192,7 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
 
 # SPLINE ===============================================================
 
-def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
+def create_spline_handle(rigname, joints, curve, typ=rt_constants.TYPE_IK):
     '''
     Create spline IK handle with separated driver/solver curve system.
 
@@ -232,18 +232,18 @@ def create_spline_handle(rigname, joints, curve, typ=rt_cst.TYPE_IK):
     # below, so removing them by name cannot break a working part -- it only
     # makes the removal reliable. This mirrors cleanup_rigname's full-teardown
     # removal, moved into the build so the light path gets it too.
-    rt_mya.remove('curveInfo1')
-    rt_mya.remove(rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ))
-    rt_mya.remove(rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ))
+    rt_maya.remove('curveInfo1')
+    rt_maya.remove(rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, typ))
+    rt_maya.remove(rt_naming.fstr(rigname, rt_constants.SPLINE_EFFECTOR, typ))
 
     # Create IK handle [ikhandle, effector, temp_curve]
-    spline_list = cmds.ikHandle(n=rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ),
+    spline_list = cmds.ikHandle(n=rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, typ),
                                 sj=joints[0],
                                 ee=joints[-1],
                                 sol='ikSplineSolver')
 
     # Get curve CV information
-    num_cv, _spans, _degree = rt_mya.get_num_cv(spline_list[2])
+    num_cv, _spans, _degree = rt_maya.get_num_cv(spline_list[2])
     logger.trace(f"ikHandle curve '{spline_list[2]}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
     # Replace ikHandle's curve with our solver curve
@@ -273,18 +273,18 @@ def rename_spline_handle(rigname, spline_list, curve, typ):
     Return
         list: [renamed_handle, renamed_effector, curve]
     '''
-    spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, typ)
-    spline_effector = rt_nam.fstr(rigname, rt_cst.SPLINE_EFFECTOR, typ)
+    spline_handle = rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, typ)
+    spline_effector = rt_naming.fstr(rigname, rt_constants.SPLINE_EFFECTOR, typ)
 
     # Rename components
     cmds.rename(spline_list[0], spline_handle)
     cmds.rename(spline_list[1], spline_effector)
-    rt_mya.remove(spline_list[2]) # Delete temp curve
+    rt_maya.remove(spline_list[2]) # Delete temp curve
 
     # Organize
-    rt_mya.parent_to(spline_list[0], rt_nam.fstr(rigname, rt_cst.SPLINE_GRP, typ))
-    rt_nam.rename_shapes(curve, typ='crv')
-    rt_mya.set_curve_visibility(curve)
+    rt_maya.parent_to(spline_list[0], rt_naming.fstr(rigname, rt_constants.SPLINE_GRP, typ))
+    rt_naming.rename_shapes(curve, typ='crv')
+    rt_maya.set_curve_visibility(curve)
 
     return [spline_handle, spline_effector, curve]
 
@@ -298,7 +298,7 @@ def get_spline_handle(rigname, joints=None):
     Return
         spline_list (list): [ikhandle, effector, curve]
     '''
-    spline_handle = rt_nam.fstr(rigname, rt_cst.SPLINE_HANDLE, rt_cst.TYPE_IK)
+    spline_handle = rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, rt_constants.TYPE_IK)
 
     if not cmds.objExists(spline_handle):
         return []
@@ -324,7 +324,7 @@ def get_spline_handle(rigname, joints=None):
 
     # If joints provided, validate against them
     if joints:
-        if not (rt_jnt.is_equal_joint(jl[0], joints[0]) and rt_jnt.is_equal_joint(jl[-1], joints[-2])):
+        if not (rt_joint.is_equal_joint(jl[0], joints[0]) and rt_joint.is_equal_joint(jl[-1], joints[-2])):
             logger.warning(f'IK handle joint mismatch')
             return []
 
@@ -382,7 +382,7 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     Return
         clusters (list): List of (cluster_node, cluster_handle) tuples
     '''
-    if typ not in [rt_cst.TYPE_FK, rt_cst.TYPE_IK]:
+    if typ not in [rt_constants.TYPE_FK, rt_constants.TYPE_IK]:
         logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
         return []
 
@@ -400,27 +400,27 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
                 cmds.delete(node)
                 for handle in handles:
                     if cmds.objExists(handle):
-                        rt_mya.remove(handle)
+                        rt_maya.remove(handle)
 
     # Get curve CV information
-    num_cv, _spans, _degree = rt_mya.get_num_cv(curve)
+    num_cv, _spans, _degree = rt_maya.get_num_cv(curve)
     logger.trace(f"Curve '{curve}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
     # Create clusters based on type
-    if typ == rt_cst.TYPE_FK:
+    if typ == rt_constants.TYPE_FK:
         # FK: Clusters at first and last CVs only
         for i in [0, num_cv-1]:
-            cluster_node = rt_nam.fstr(rigname, rt_cst.CLUSTER, typ, i)
-            cluster_handle = rt_nam.fstr(rigname, rt_cst.CLUSTER_HANDLE, typ, i)
+            cluster_node = rt_naming.fstr(rigname, rt_constants.CLUSTER, typ, i)
+            cluster_handle = rt_naming.fstr(rigname, rt_constants.CLUSTER_HANDLE, typ, i)
             cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
-    elif typ == rt_cst.TYPE_IK:
+    elif typ == rt_constants.TYPE_IK:
         # IK: Create upvec clusters at first and last CVs
-        cluster_upv_bse = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV, typ, TAG='base')
-        cluster_handle_bse = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='base')
-        cluster_upv_end = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV, typ, TAG='end')
-        cluster_handle_end = rt_nam.fstr(rigname, rt_cst.CLUSTER_UPV_HANDLE, typ, TAG='end')
+        cluster_upv_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='base')
+        cluster_handle_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='base')
+        cluster_upv_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='end')
+        cluster_handle_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='end')
 
         upv_bse = create_cluster([cluster_upv_bse, cluster_handle_bse], curve, 0)
         upv_end = create_cluster([cluster_upv_end, cluster_handle_end], curve, num_cv-1)
@@ -429,8 +429,8 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
 
         # IK: Control clusters for interior CVs (1 to num_cv-2)
         for i in range(1, num_cv-1):
-            cluster_node = rt_nam.fstr(rigname, rt_cst.CLUSTER, typ, i)
-            cluster_handle = rt_nam.fstr(rigname, rt_cst.CLUSTER_HANDLE, typ, i)
+            cluster_node = rt_naming.fstr(rigname, rt_constants.CLUSTER, typ, i)
+            cluster_handle = rt_naming.fstr(rigname, rt_constants.CLUSTER_HANDLE, typ, i)
             cluster = create_cluster([cluster_node, cluster_handle], curve, i)
             clusters.append(cluster)
 
@@ -439,13 +439,13 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     # aborted partway through a previous run) can reach this point
     # without it, and parenting to a name that is not there aborts the
     # whole build on 'No object matches name'.
-    cluster_grp = rt_nam.fstr(rigname, rt_cst.CLUSTER_GRP, typ)
+    cluster_grp = rt_naming.fstr(rigname, rt_constants.CLUSTER_GRP, typ)
     if not cmds.objExists(cluster_grp):
         logger.warning(f"Cluster group '{cluster_grp}' missing, creating it")
-        rt_mya.create_group(cluster_grp,
-                            parent=rt_nam.fstr('', rt_cst.CLUSTERS_GRP))
+        rt_maya.create_group(cluster_grp,
+                            parent=rt_naming.fstr('', rt_constants.CLUSTERS_GRP))
     for cluster_node, cluster_handle in clusters:
-        rt_mya.parent_to(cluster_handle, cluster_grp)
+        rt_maya.parent_to(cluster_handle, cluster_grp)
         cmds.setAttr(f'{cluster_handle}.displayHandle', show_handle)
         logger.trace(f'[{cluster_node}, {cluster_handle}],')
 

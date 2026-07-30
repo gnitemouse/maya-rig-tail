@@ -133,6 +133,16 @@ import rig_tail_restpose as rt_rest
 import rig_tail_stretch as rt_stretch
 import rig_tail_setup as rt_setup
 
+import rig_tail_chain_build as rt_chain
+import rig_tail_chain_spacing as rt_chain_spacing
+import rig_tail_chain_test as rt_chain_test
+import rig_tail_build_test as rt_build_test
+import rig_tail_setup_test as rt_setup_test
+
+# --- CHAIN phase (optional; run BEFORE Setup, on raw BN skeleton) ---
+#rt_chain.rebuild_selected(21, 'keep')   # re-space the selected chain(s)
+#rt_chain.rebuild_selected(30, 'power', param=1.7)   # pack joints toward the base
+
 # --- SETUP phase (optional; run BEFORE the build, on raw BN skeleton) ---
 #rt.setup_tails('squid', dry_run=True)   # preview only (orient/mirror), no changes
 #rt.setup_tails('squid')                 # apply orient/mirror, then build
@@ -143,11 +153,12 @@ import rig_tail_setup as rt_setup
 #rt.rig_tail_multiple('squid', fk=True, ik=True)
 #rt.main()                               # or open the Builder UI
 
-# --- TEST / INSPECT (after a build) ---
-#rt_test.run_all('squid')                          # full test sweep
-#rt_test.report_bend(rt_constants.RIGPARTS)        # per-chain bend angles
-#rt_test.probe('after build', 'C_fintail')         # quick joint probe
-#rt_test.measure_rebuild_degradation(rt_constants.RIGPARTS, rebuilds=2)
+# --- TEST / INSPECT ---
+#rt_chain_test.run_math()                                # chain spacing maths (safe)
+#rt_build_test.run_all('squid')                          # full test sweep
+#rt_build_test.report_bend(rt_constants.RIGPARTS)        # per-chain bend angles
+#rt_build_test.probe('after build', 'C_fintail')         # quick joint probe
+#rt_build_test.measure_rebuild_degradation(rt_constants.RIGPARTS, rebuilds=2)
 '''
 
 

@@ -2,6 +2,14 @@
 
 A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 
+Three tools, run in order. Only the last one is required:
+
+```
+[Chain Builder]  ->  [Tail Setup]  ->  [Tail Build]
+ joint positions      orient / mirror   the rig
+   (optional)           (optional)
+```
+
 ## Features
 
 - **Spline IK** - Smooth curve-based tail deformation with a fixed
@@ -15,6 +23,8 @@ A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 - **Wave/Curl FX** - Built-in procedural animation effects
 - **Main Controller** - Optional cog dashboard driving every tail at once,
   with a per-tail override (for multi-tail rigs)
+- **Chain Builder** - Optional pre-Setup step that creates BN chains and
+  re-spaces existing ones at any joint count
 - **Setup phase** - Optional pre-build step that orients each chain (fixes
   twist), mirrors matching L/R tails (orientation and/or positions), and
   rolls individual chains onto the right plane
@@ -33,17 +43,17 @@ rigTail.mod      module descriptor, for installing by hand
                  (the installer writes its own)
 rigTail/
     scripts/     rig_tail*.py + logger_config.py
-    icons/       octopus{,_black,_grey}.png (+ _200 variants)
+    icons/       octopus_{white,light_grey,dark_grey,black}.png
+                 (+ _200 variants)
 ```
 
 **Drag-and-drop (recommended)**
 
-Drag `install.py` from a file browser into the Maya viewport. It asks
-where to install, then adds three shelf buttons to the active shelf:
-**TailSetup** (skeleton orient / mirror), **TailRig** (the builder) and
-**TailReload** (load/reload the modules and run commands). Works
-immediately, with no restart and no `userSetup.py` edits. Keep
-`install.py` next to `rigTail/` when you drag it.
+Drag `install.py` from a file browser into the Maya viewport. It asks where
+to install and whether to add the optional Chain Builder button, then adds
+its shelf buttons to the active shelf: **ChainBuild**, **TailSetup**,
+**TailBuild** and **TailReload**. Works immediately, with no restart and no
+`userSetup.py` edits. Keep `install.py` next to `rigTail/` when you drag it.
 
 | Choice | What it does |
 | --- | --- |
@@ -54,153 +64,69 @@ immediately, with no restart and no `userSetup.py` edits. Keep
 Whichever is chosen, one resolved path drives everything:
 
 - `rigTail.mod` is written to `~/Documents/maya/modules/` (the only place
-  Maya scans) pointing at the chosen location - relative when the tree
-  sits alongside it, absolute otherwise. So a clone or a picked folder is
+  Maya scans) pointing at the chosen location - relative when the tree sits
+  alongside it, absolute otherwise. So a clone or a picked folder is
   registered on every Maya start, and `import rig_tail` works in a bare
   Script Editor, not just from the shelf buttons.
-- `TOOL_DIR` is baked into all three shelf buttons, which put it at the
-  front of `sys.path`. A button therefore always runs the install it was
-  made from, even with another copy of Rig Tail registered as a module.
+- `TOOL_DIR` is baked into every shelf button, which put it at the front of
+  `sys.path`. A button therefore always runs the install it was made from,
+  even with another copy of Rig Tail registered as a module.
 - `rigTail.install.json` records what went where, so `uninstall.py` knows
   what to remove.
 
-**TailReload** additionally purges every loaded `rig_tail*` module before
-importing, so even `rig_tail_constants` (which the normal reload sweep
-skips) is picked up without restarting Maya.
-
-**Re-installing** over an existing install overwrites it file by file
-rather than deleting it first, so a file Windows has locked costs that
-file rather than the whole tool, and the installer says which one.
-Files left behind by an older version are cleared afterwards. If Maya has
-already imported the old modules, click **TailReload** (or restart Maya)
-after installing - the files on disk change, but code already loaded into
-the session does not.
+**Re-installing** over an existing install overwrites it file by file rather
+than deleting it first, so a file Windows has locked costs that file rather
+than the whole tool, and the installer says which one. Files left behind by
+an older version are cleared afterwards. If Maya has already imported the
+old modules, click **TailReload** (or restart Maya) after installing - the
+files on disk change, but code already loaded into the session does not.
 
 **Manual**
 
-Copy `rigTail/` and `rigTail.mod` into
-`~/Documents/maya/modules/` (create the `modules` folder if needed), then
-restart Maya. Launch from the Script Editor with `import rig_tail;
-rig_tail.main()`, or make a shelf button that runs the same two lines.
+Copy `rigTail/` and `rigTail.mod` into `~/Documents/maya/modules/` (create
+the `modules` folder if needed), then restart Maya. Launch from the Script
+Editor with `import rig_tail; rig_tail.main()`, or make a shelf button that
+runs the same two lines.
 
 **Uninstall** - drag `uninstall.py` into the viewport. It reads
-`rigTail.install.json` (falling back to the `.mod`, then to the
-`TOOL_DIR` baked into the shelf buttons) to find the install wherever it
-went, then removes the buttons, the `.mod` and the module folder. A
-folder it only pointed at - a clone installed with **Current** - is left
-untouched, and deleting a copy outside the Maya modules folder asks
-first. By hand: delete `rigTail.mod` and `rigTail.install.json` from
-`~/Documents/maya/modules/`, delete the `rigTail` folder if it was copied
-there, and remove the shelf buttons.
+`rigTail.install.json` (falling back to the `.mod`, then to the `TOOL_DIR`
+baked into the shelf buttons) to find the install wherever it went, then
+removes the buttons, the `.mod` and the module folder. A folder it only
+pointed at - a clone installed with **Current** - is left untouched, and
+deleting a copy outside the Maya modules folder asks first. By hand: delete
+`rigTail.mod` and `rigTail.install.json` from `~/Documents/maya/modules/`,
+delete the `rigTail` folder if it was copied there, and remove the shelf
+buttons.
 
 ## Quick Start
 
 ```python
-import importlib as il
-import rig_tail
+import rig_tail as rt
 
-il.reload(rig_tail)
+# --- Chain Builder (optional; before Setup, on the raw BN skeleton) ---
+import rig_tail_chain_build as rt_chain
+rt_chain.rebuild_selected(21, 'keep')               # re-space, same profile
+rt_chain.rebuild_selected(30, 'power', param=1.7)   # pack toward the base
 
-# Optional Setup phase: orient / mirror the skeleton before building.
-# Preview first (logs only), then apply.
-rig_tail.setup_tails(root='tail', dry_run=True)
-rig_tail.setup_tails(root='tail')
-rig_tail.main_setup()   # or launch the Setup UI
+import rig_tail_chain_build_ui as rt_chain_ui
+rt_chain_ui.show_ui()   # or launch the Chain Builder UI
 
-# Build a single tail from a single joint chain
-rig_tail.rig_tail_single(root='tail', fk=True, ik=True)
-# Build multiple tails with each part defined in rig_tail_constants.RIGPARTS
-rig_tail.rig_tail_multiple(root='tail', fk=True, ik=True)
-rig_tail.main()         # or launch the Builder UI
+# --- Setup phase (optional; orient / mirror before building) ---
+rt.setup_tails(root='tail', dry_run=True)   # preview only, logs the changes
+rt.setup_tails(root='tail')                 # apply
+rt.main_setup()                             # or launch the Setup UI
+
+# --- Build ---
+# a single tail from a single joint chain
+rt.rig_tail_single(root='tail', fk=True, ik=True)
+# multiple tails, each part defined in rig_tail_constants.RIGPARTS
+rt.rig_tail_multiple(root='tail', fk=True, ik=True)
+rt.main()                                   # or launch the Builder UI
 ```
 
-## Setup phase (optional)
-
-Run before building, from the **TailSetup** shelf button or
-`rig_tail.main_setup()`. It re-orients the raw BN skeleton so tails move
-coherently, and never affects the build itself. Three independent options:
-
-- **Orient Joints** (`ORIENT_JOINTS`): aim-orient each chain so its up-axis
-  stops twisting down the chain. The joint positions fix the aim, so the
-  dropdown in the same row only picks the chain's **roll** about it
-  (`ORIENT_UP_MODE`): *Cascade* (default) seeds from the chain's own first
-  joint as it stands now, so the twist goes but the roll the chain already
-  has is kept — a mirrored pair stays mirrored and a **Roll Chain** fix-up
-  survives, which makes a re-run safe. *Best-fit* takes the roll from the
-  chain's bend plane instead, ignoring how the joints stand now: right for
-  the first pass on a raw skeleton, but it overwrites any mirrored or
-  hand-rolled orientation.
-- **Mirror Orient** (`MIRROR_ORIENT`): reflect matching `L_`/`R_` tails'
-  *orientation* so the two sides face as mirror images. The dropdown in the
-  same row picks the **behavior** (`MIRROR_BEHAVIOR`): *Symmetric* (default)
-  moves the two sides as exact mirrors for the same channel value — curl the
-  right tail up and the left curls up too — while *Parallel* moves them
-  opposite ways, so a splayed pair reads as one up, one down. The two differ
-  by a 180 deg roll about the aim, so **Roll Chain** at 180 flips a single
-  tail between them.
-- **Mirror Joints** (`MIRROR_JOINTS`): reflect matching `L_`/`R_` tails'
-  *positions*, so the target side's joints sit at the exact mirror of the
-  source side's.
-
-**Edit Rig Parts** splits the roster into **Include** and **Exclude**
-columns — move parts across with the arrow buttons or by double-clicking,
-as in Maya's channel editor. Excluded tails stay in `RIGPARTS` and keep
-their skin bound; Setup just leaves their joints alone, which is what you
-want when fixing one tail without disturbing the rest. Excluding one side
-of an L/R pair stops that pair mirroring. The exclusion covers the **build**
-too — an excluded tail's rig is neither torn down nor rebuilt — so a
-finished tail can be frozen while the rest of the roster is iterated on.
-
-A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
-only when the two sides are positionally off. Everything except Mirror
-Joints preserves joint positions. Enable **Dry Run** first to log the
-intended changes without modifying anything, then apply and build. Skip
-this phase entirely if the skeleton is already oriented.
-
-Orient runs before the mirrors, so a single run with both ticked is always
-correct. It is the *second* run that used to undo the first: with
-*Best-fit* the orient step re-derives every chain from its bend plane and
-throws the mirror away. Leave Up Mode on *Cascade* once a skeleton has been
-mirrored or hand-rolled.
-
-**Roll Chain** is a separate per-tail fix-up below the Setup options, for
-chains that are cleanly oriented but facing the wrong way: list the chains
-in the Chain box (type them comma separated, or **Select** them from
-selected joints) and use the left/right arrows to roll them onto the right
-plane. Every listed chain is rolled, so a whole set of tails is corrected
-in one click. It applies immediately and never moves joints.
-
-A typical pass on a messy rig: run Orient Joints + Mirror Joints, roll any
-individual chains that face the wrong way, then build.
-
-## Build
-
-Launch from the **TailRig** shelf button or `rig_tail.main()`. Pick the
-build options (FK/IK, stretch, FX, Main Controller) and click **Build
-Rig**: tails whose joints are unchanged since the last build are kept as
-they are, so iterating is fast. **Force Rebuild** tears everything down
-first instead — a one-click action that is never saved as a setting.
-
-**Preserve skinClusters** (on by default) keeps existing skins across
-rebuilds: rig joints are added to the cluster (new ones at weight 0) and
-painted weights survive. Turn it off to unbind and rebind from scratch.
-
-## Highlights
-
-- BN joints are driven purely through `offsetParentMatrix` — no
-  constraints, no Euler decomposition, and joint channels stay zeroed.
-- Rebuild-safe: nodes are found by templated name and reused, and a
-  stored rest pose keeps repeated rebuilds from degrading the curve.
-- Skin- and shape-preserving: painted weights and hand-edited control
-  shapes survive a rebuild.
-- Excluded rig parts are frozen: Setup leaves them alone and the build
-  neither tears them down nor rebuilds them.
-
-## Requirements
-
-- Maya 2020+ (Python 3)
-- UI was tested in Maya 2024, 2025
-- Joint chain following naming template (customizable)
+Editing a module mid-session? Click **TailReload** (see
+[Tail Reload](#tail-reload)). Importing again on its own will not pick the
+change up, and the other buttons only refresh their own modules.
 
 ## Rig Hierarchy
 
@@ -233,35 +159,156 @@ ROOT                                        (ROOT_GRP)
     └─ IK_{rigname}_grp                     (IK_GRP)
        └─ IK_{rigname}_NN_jnt               (IK Joints)
 ```
-Component naming can be changed through UI or in rig_tail_constants.py
 
-## Module Structure
+The BN chain is the input; everything else is generated. Component naming
+can be changed through the UI or in `rig_tail_constants.py`.
+
+## Chain Builder (optional)
+
+Launch from the **ChainBuild** shelf button or
+`rig_tail_chain_build_ui.show_ui()`. It creates BN joint chains between two
+objects and re-spaces existing ones at any joint count, before Setup and
+before any rig exists.
+
+Pick the chains (**Select** reads them from the viewport, one entry per
+chain however many of their joints are picked), set **Joint Count**, choose
+a **Spacing** profile — *Keep* holds the current pattern, *Uniform* evens the
+segments, *Power* packs joints toward the base, *Ratio* toward the tip — and
+click **Build Joints**. One click, one undo step, every listed chain.
+
+### Highlights
+
+- Joints are reused in place, so names, rotate orders and custom attributes
+  survive wherever the count allows.
+- Shrinking is the only lossy operation: re-spacing at an unchanged count,
+  and re-applying a profile to its own result, both leave the chain put.
+- Each chain's original shape is remembered per session and always
+  re-measured from, so 18 → 14 → 22 joints costs one lossy pass, not three.
+  **Bake Joint Chain** makes the current shape the new baseline.
+- Refuses rather than half-applies: a skinned, rig-driven, branching or
+  degenerate chain is reported and skipped, and the other chains still run.
+- Removable: no core module imports it (a test enforces this), it stores
+  nothing in the scene and keeps no config file.
+
+### Modules
 
 | Module | Alias | Purpose |
 |--------|-------|---------|
-| `rig_tail` | - | Entry point and build orchestration |
-| `rig_tail_constants` | `rt_cst` | Global constants and caches |
-| `rig_tail_naming` | `rt_nam` | Template strings and naming |
-| `rig_tail_maya` | `rt_mya` | Maya scene/node operations |
-| `rig_tail_joint` | `rt_jnt` | Joint chain utilities |
-| `rig_tail_math` | `rt_mat` | Vector/matrix math |
-| `rig_tail_matrix` | `rt_mtx` | Matrix network builder |
-| `rig_tail_cache` | `rt_che` | Control caching |
-| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix |
-| `rig_tail_setup` | `rt_set` | Setup phase: skeleton orient / mirror (pre-build) |
-| `rig_tail_setup_ui` | - | Setup UI (Tail Rig Setup) |
-| `rig_tail_cleanup` | `rt_cln` | Teardown + build-structure setup |
-| `rig_tail_control` | `rt_ctl` | Control creation |
-| `rig_tail_curve` | `rt_crv` | Curve/spline creation |
+| `rig_tail_chain_spacing` | `rt_chain_spacing` | Spacing maths; no Maya imports |
+| `rig_tail_chain_build` | `rt_chain` | Maya layer: detect, guard, create, write |
+| `rig_tail_chain_build_ui` | `rt_chain_ui` | Joint Chain Builder window |
+| `rig_tail_chain_test` | `rt_chain_test` | Tests; the math half runs outside Maya |
+
+## Tail Setup (optional)
+
+Launch from the **TailSetup** shelf button or `rig_tail.main_setup()`. It
+re-orients the raw BN skeleton so tails move coherently, and never runs
+during the build. Three independent toggles: **Orient Joints** (stop the
+up-axis twisting down the chain), **Mirror Orient** (make matching `L_`/`R_`
+tails face as mirror images) and **Mirror Joints** (mirror their positions
+too). **Roll Chain** is a separate per-tail fix-up that rolls listed chains
+onto the right plane without moving a joint.
+
+A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
+only when the two sides are positionally off. Enable **Dry Run** first to
+log the intended changes without touching anything. Skip the phase entirely
+if the skeleton is already oriented.
+
+### Highlights
+
+- Everything except Mirror Joints preserves joint positions.
+- Orient runs before the mirrors, so one run with both ticked is always
+  correct.
+- Up Mode *Cascade* (default) keeps the roll a chain already has, so a
+  mirrored pair and a Roll Chain fix-up survive a re-run; *Best-fit*
+  re-derives roll from the bend plane and overwrites both.
+- **Edit Rig Parts** splits the roster into Include / Exclude; an excluded
+  tail is left alone by Setup *and* by the build, so a finished tail can be
+  frozen while the rest is iterated on.
+
+### Modules
+
+| Module | Alias | Purpose |
+|--------|-------|---------|
+| `rig_tail_setup` | `rt_setup` | Orient / mirror / roll the BN skeleton |
+| `rig_tail_setup_ui` | `rt_setup_ui` | Tail Rig Setup window |
+| `rig_tail_setup_test` | `rt_setup_test` | Tests for the Setup phase |
+
+## Tail Build
+
+Launch from the **TailBuild** shelf button or `rig_tail.main()`. Pick the
+build options (FK/IK, stretch, FX, Main Controller) and click **Build Rig**:
+tails whose joints are unchanged since the last build are kept as they are,
+so iterating is fast. **Force Rebuild** tears everything down first — a
+one-click action that is never saved as a setting.
+
+**Preserve skinClusters** (on by default) keeps existing skins across
+rebuilds: rig joints are added to the cluster (new ones at weight 0) and
+painted weights survive. Turn it off to unbind and rebind from scratch.
+
+### Highlights
+
+- BN joints are driven purely through `offsetParentMatrix` — no
+  constraints, no Euler decomposition, and joint channels stay zeroed.
+- Rebuild-safe: nodes are found by templated name and reused, and a stored
+  rest pose keeps repeated rebuilds from degrading the curve.
+- Skin- and shape-preserving: painted weights and hand-edited control
+  shapes survive a rebuild.
+- Excluded rig parts are frozen: the build neither tears them down nor
+  rebuilds them.
+
+### Modules
+
+| Module | Alias | Purpose |
+|--------|-------|---------|
+| `rig_tail` | `rt` | Entry point and build orchestration |
+| `rig_tail_build_ui` | `rt_build_ui` | Tail Rig Builder window |
+| `rig_tail_cleanup` | `rt_cleanup` | Teardown + build-structure setup |
+| `rig_tail_control` | `rt_control` | Control creation |
+| `rig_tail_curve` | `rt_curve` | Curve/spline creation |
 | `rig_tail_fk` | `rt_fk` | FK system building |
-| `rig_tail_stretch` | `rt_str` | Stretch system |
-| `rig_tail_anim` | `rt_ani` | Animation effects |
-| `rig_tail_connect` | `rt_con` | IK/FK connections |
-| `rig_tail_ctrlall` | `rt_ca` | Main Controller dashboard (multi-tail) |
-| `rig_tail_ui` | `rt_ui` | Build UI (Tail Rig Builder) |
-| `rig_tail_test` | `rt_test` | Diagnostics for a built rig |
-| `rig_tail_test_setup` | `rt_ts` | Tests for the Setup phase |
+| `rig_tail_stretch` | `rt_stretch` | Stretch system |
+| `rig_tail_connect` | `rt_connect` | IK/FK connections |
+| `rig_tail_anim` | `rt_anim` | Animation effects |
+| `rig_tail_ctrlall` | `rt_ctrlall` | Main Controller dashboard (multi-tail) |
+| `rig_tail_build_test` | `rt_build_test` | Diagnostics for a built rig |
+
+Shared by all three tools:
+
+| Module | Alias | Purpose |
+|--------|-------|---------|
+| `rig_tail_constants` | `rt_constants` | Global constants, settings and caches |
+| `rig_tail_naming` | `rt_naming` | Naming templates and name parsing |
+| `rig_tail_maya` | `rt_maya` | Maya scene/node operations |
+| `rig_tail_joint` | `rt_joint` | Joint chain utilities |
+| `rig_tail_math` | `rt_math` | Vector/matrix math |
+| `rig_tail_matrix` | `rt_matrix` | Matrix network builder |
+| `rig_tail_cache` | `rt_cache` | Control caching |
+| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix |
 | `logger_config` | - | Shared logging setup |
+
+## Tail Reload
+
+The **TailReload** button opens no window. It drops every `rig_tail*` module
+(and `logger_config`) from `sys.modules`, imports them all again under the
+aliases above, and leaves a commented workflow in the Script Editor — chain,
+setup, build and test calls — ready to uncomment.
+
+Use it after editing a module, after re-installing, or to get a clean
+session. The other three buttons refresh only their own modules
+(`rig_tail_chain*`, `rig_tail_setup*`, `rig_tail_build*`), so **TailReload**
+is the only one that guarantees every module on disk is the one running —
+and the only one that picks up an edit to `rig_tail_constants` without
+restarting Maya. The trade-off is that a full reload also resets session
+state: the settings edited in the UI return to the loaded config. The other
+buttons leave `rig_tail_constants` alone, so those settings persist across
+relaunches.
+
+## Requirements
+
+- Maya 2020+ (Python 3)
+- UI was tested in Maya 2024, 2025
+- Joint chain following naming template (customizable)
 
 ## Configuration
 
@@ -276,8 +323,11 @@ Constants) or by editing `rig_tail_constants.py`:
 - Effect settings (stretch, wave, curl, noise, loop)
 - Control colors and shapes
 
-All settings round-trip through a JSON config file with the UI's
-Load/Save Config buttons, so setups can be shared per show or user.
+All settings round-trip through a JSON config file with the UI's Load/Save
+Config buttons, so setups can be shared per show or user.
+
+Full API reference, architecture notes and the reasoning behind each design
+decision: [rig_tail_documentation.md](rig_tail_documentation.md).
 
 ## Credits
 

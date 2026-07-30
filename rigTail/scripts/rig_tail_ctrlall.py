@@ -46,9 +46,9 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_maya as rt_mya
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
 import re
 
 logger = logger_setup(__name__)
@@ -56,7 +56,7 @@ logger = logger_setup(__name__)
 # rig_tail_constants is deliberately never reloaded by rig_tail (it holds
 # session state), so a Maya session started before this feature existed
 # has a stale constants module without the dashboard templates. This
-# module IS reloaded every run: install anything missing onto rt_cst so
+# module IS reloaded every run: install anything missing onto rt_constants so
 # the build works without a Maya restart. Values must match
 # rig_tail_constants; existing attributes are never overwritten, so a
 # restarted session or a user-customized constants module wins.
@@ -71,8 +71,8 @@ _CST_DEFAULTS = {
     'ALL_PREFIX': 'all_',
 }
 for _name, _value in _CST_DEFAULTS.items():
-    if not hasattr(rt_cst, _name):
-        setattr(rt_cst, _name, _value)
+    if not hasattr(rt_constants, _name):
+        setattr(rt_constants, _name, _value)
 
 
 # NAMES ================================================================
@@ -85,15 +85,15 @@ def active():
     than in rig_tail_constants so a stale (never-reloaded) constants
     module cannot break the build.
     '''
-    return rt_cst.MAIN_CONTROLLER and len(rt_cst.RIGPARTS) >= 2
+    return rt_constants.MAIN_CONTROLLER and len(rt_constants.RIGPARTS) >= 2
 
 def all_attr(attr):
     ''' Name of the ALL copy of a routed attribute on the cog. '''
-    return f'{rt_cst.ALL_PREFIX}{attr}'
+    return f'{rt_constants.ALL_PREFIX}{attr}'
 
 def condition_node(rigname, attr):
     ''' Name of the override condition for one tail's routed attribute. '''
-    return f'{rigname}_{attr}_override_{rt_cst.COND}'
+    return f'{rigname}_{attr}_override_{rt_constants.COND}'
 
 
 # ATTRIBUTE SPECS ======================================================
@@ -117,7 +117,7 @@ def routed_attr_specs(fk, ik):
         list: [(attr, kwargs), ...] for the active build options
     '''
     specs = list()
-    if rt_cst.EFFECTS['stretchy']:
+    if rt_constants.EFFECTS['stretchy']:
         specs += [
             ('stretch', dict(at='float', dv=0, min=-10, max=10)),
             ('squash', dict(at='float', dv=0, min=-10, max=10)),
@@ -131,7 +131,7 @@ def routed_attr_specs(fk, ik):
     if fk or ik:
         specs += [(atr, dict(at='float', dv=0))
                   for atr in ('twist', 'roll', 'offset')]
-    if rt_cst.EFFECTS['wave']:
+    if rt_constants.EFFECTS['wave']:
         specs += [(f'wave{axis}', dict(at='float', dv=0, min=-10, max=10))
                   for axis in 'XYZ']
         specs += [
@@ -139,22 +139,22 @@ def routed_attr_specs(fk, ik):
             ('wave_speed', dict(at='float', dv=3, min=0, max=10)),
             ('wave_falloff', dict(at='float', dv=1, min=0.1, max=10)),
         ]
-    if rt_cst.EFFECTS['curl']:
+    if rt_constants.EFFECTS['curl']:
         specs += [(f'curl{axis}', dict(at='float', dv=0, min=-10, max=10))
                   for axis in 'XYZ']
         specs += [('curl_falloff', dict(at='float', dv=3.0, min=0.1, max=10))]
-    if rt_cst.EFFECTS['noise']:
+    if rt_constants.EFFECTS['noise']:
         specs += [
             ('noise', dict(at='float', dv=0, min=-10, max=10)),
             ('noise_frequency', dict(at='float', dv=1, min=0.1, max=5)),
             ('noise_speed', dict(at='float', dv=3, min=0, max=10)),
         ]
-    if rt_cst.EFFECTS['loop']:
+    if rt_constants.EFFECTS['loop']:
         # Deferred import: rig_tail_anim imports this module at its top
-        import rig_tail_anim as rt_ani
+        import rig_tail_anim as rt_anim
         specs += [
             ('loop', dict(at='bool', dv=0)),
-            ('loop_frame', dict(at='long', dv=rt_ani.LOOP_FRAME_DEFAULT, min=1)),
+            ('loop_frame', dict(at='long', dv=rt_anim.LOOP_FRAME_DEFAULT, min=1)),
         ]
     return specs
 
@@ -178,16 +178,16 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
 
     # ALL section: one real copy of every routed attribute. Nice names
     # are left to Maya ('all_wave_frequency' -> 'All Wave Frequency').
-    rt_mya.add_attribute_enum(cog_ctrl, rt_cst.ALL_DIVIDER[0],
-                              rt_cst.ALL_DIVIDER[1], rt_cst.ALL_DIVIDER[2])
+    rt_maya.add_attribute_enum(cog_ctrl, rt_constants.ALL_DIVIDER[0],
+                              rt_constants.ALL_DIVIDER[1], rt_constants.ALL_DIVIDER[2])
     if ik:
         # Same build-derived default as the per-tail switches: a tail whose
         # override is Off follows this one, so leaving it on a stale mode
         # would put the rig in that mode regardless of the per-tail default.
-        dv = rt_cst.IKFK_SWITCH[3]
-        rt_mya.add_attribute_enum(cog_ctrl, all_attr('ikfk'), 'All IKFK',
-                                  rt_cst.IKFK_SWITCH[2], dv)
-        rt_mya.set_attr_value(f'{cog_ctrl}.{all_attr("ikfk")}', dv)
+        dv = rt_constants.IKFK_SWITCH[3]
+        rt_maya.add_attribute_enum(cog_ctrl, all_attr('ikfk'), 'All IKFK',
+                                  rt_constants.IKFK_SWITCH[2], dv)
+        rt_maya.set_attr_value(f'{cog_ctrl}.{all_attr("ikfk")}', dv)
     for attr, kwargs in routed_attr_specs(fk, ik):
         ln = all_attr(attr)
         if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
@@ -195,13 +195,13 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
 
     # OVERRIDE section: per-tail flags. Off (default) follows the
     # ALL values; On uses the tail's own basectrl values.
-    rt_mya.add_attribute_enum(cog_ctrl, rt_cst.OVERRIDE_DIVIDER[0],
-                              rt_cst.OVERRIDE_DIVIDER[1],
-                              rt_cst.OVERRIDE_DIVIDER[2])
-    for rigname in rt_cst.RIGPARTS:
-        ln = rt_nam.fstr(rigname, rt_cst.OVERRIDE)
+    rt_maya.add_attribute_enum(cog_ctrl, rt_constants.OVERRIDE_DIVIDER[0],
+                              rt_constants.OVERRIDE_DIVIDER[1],
+                              rt_constants.OVERRIDE_DIVIDER[2])
+    for rigname in rt_constants.RIGPARTS:
+        ln = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
         nn = re.sub(r'[-_\s]+', ' ', ln).title()
-        rt_mya.add_attribute_enum(cog_ctrl, ln, nn, rt_cst.OVERRIDE_ENUM, 0)
+        rt_maya.add_attribute_enum(cog_ctrl, ln, nn, rt_constants.OVERRIDE_ENUM, 0)
 
 def add_override_to_basectrl(rigname, basectrl):
     '''
@@ -212,12 +212,12 @@ def add_override_to_basectrl(rigname, basectrl):
         rigname (str): Name of rig component
         basectrl (str): Base control
     '''
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    override = rt_nam.fstr(rigname, rt_cst.OVERRIDE)
-    rt_mya.add_attribute_enum(basectrl, rt_cst.OVERRIDE_ALL_DIVIDER[0],
-                              rt_cst.OVERRIDE_ALL_DIVIDER[1],
-                              rt_cst.OVERRIDE_ALL_DIVIDER[2])
-    rt_mya.add_attribute_enum(basectrl, override, 'Override All',
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    override = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
+    rt_maya.add_attribute_enum(basectrl, rt_constants.OVERRIDE_ALL_DIVIDER[0],
+                              rt_constants.OVERRIDE_ALL_DIVIDER[1],
+                              rt_constants.OVERRIDE_ALL_DIVIDER[2])
+    rt_maya.add_attribute_enum(basectrl, override, 'Override All',
                               pxy=f'{cog_ctrl}.{override}')
 
 def build_override_conditions(rigname, fk, ik):
@@ -246,15 +246,15 @@ def build_override_conditions(rigname, fk, ik):
         ik (bool): IK is being built
     '''
     logger.debug(f'{rigname}: Build override conditions')
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    override_plug = f'{cog_ctrl}.{rt_nam.fstr(rigname, rt_cst.OVERRIDE)}'
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    override_plug = f'{cog_ctrl}.{rt_naming.fstr(rigname, rt_constants.OVERRIDE)}'
 
     routed = [(attr, f'{basectrl}.{attr}', f'{cog_ctrl}.{all_attr(attr)}')
               for attr, _ in routed_attr_specs(fk, ik)]
     if ik:
         # IKFK local truth already lives on the cog (basectrl proxies it)
-        local_ikfk = f'{cog_ctrl}.{rt_nam.fstr(rigname, rt_cst.IKFK)}'
+        local_ikfk = f'{cog_ctrl}.{rt_naming.fstr(rigname, rt_constants.IKFK)}'
         routed.append(('ikfk', local_ikfk, f'{cog_ctrl}.{all_attr("ikfk")}'))
 
     for attr, local_plug, all_plug in routed:
@@ -263,15 +263,15 @@ def build_override_conditions(rigname, fk, ik):
             cmds.createNode('condition', n=cond, s=1, ss=1)
         cmds.setAttr(f'{cond}.operation', 0)  # equal
         cmds.setAttr(f'{cond}.secondTerm', 1)
-        rt_mya.ensure_connect(override_plug, f'{cond}.firstTerm')
-        rt_mya.ensure_connect(local_plug, f'{cond}.colorIfTrueR')
-        rt_mya.ensure_connect(all_plug, f'{cond}.colorIfFalseR')
+        rt_maya.ensure_connect(override_plug, f'{cond}.firstTerm')
+        rt_maya.ensure_connect(local_plug, f'{cond}.colorIfTrueR')
+        rt_maya.ensure_connect(all_plug, f'{cond}.colorIfFalseR')
 
     if ik:
-        resolved = rt_nam.fstr(rigname, rt_cst.IKFK_RESOLVED)
+        resolved = rt_naming.fstr(rigname, rt_constants.IKFK_RESOLVED)
         if not cmds.attributeQuery(resolved, n=cog_ctrl, ex=1):
             cmds.addAttr(cog_ctrl, ln=resolved, at='float', k=0)
-        rt_mya.ensure_connect(f'{condition_node(rigname, "ikfk")}.outColorR',
+        rt_maya.ensure_connect(f'{condition_node(rigname, "ikfk")}.outColorR',
                               f'{cog_ctrl}.{resolved}')
 
 
@@ -295,7 +295,7 @@ def resolved_plug(rigname, attr):
     cond = condition_node(rigname, attr)
     if active() and cmds.objExists(cond):
         return f'{cond}.outColorR'
-    return f'{rt_nam.fstr(rigname, rt_cst.BASECTRL)}.{attr}'
+    return f'{rt_naming.fstr(rigname, rt_constants.BASECTRL)}.{attr}'
 
 def ikfk_driver(rigname):
     '''
@@ -308,12 +308,12 @@ def ikfk_driver(rigname):
     Return
         str: Driver plug for setup_switch_fk/ik/upvec
     '''
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
-    resolved = rt_nam.fstr(rigname, rt_cst.IKFK_RESOLVED)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    resolved = rt_naming.fstr(rigname, rt_constants.IKFK_RESOLVED)
     if active() and cmds.objExists(cog_ctrl) \
             and cmds.attributeQuery(resolved, n=cog_ctrl, ex=1):
         return f'{cog_ctrl}.{resolved}'
-    return f'{cog_ctrl}.{rt_nam.fstr(rigname, rt_cst.IKFK)}'
+    return f'{cog_ctrl}.{rt_naming.fstr(rigname, rt_constants.IKFK)}'
 
 def hide_resolved_attrs():
     '''
@@ -324,11 +324,11 @@ def hide_resolved_attrs():
     '''
     if not active():
         return
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
     if not cmds.objExists(cog_ctrl):
         return
-    for rigname in rt_cst.RIGPARTS:
-        resolved = rt_nam.fstr(rigname, rt_cst.IKFK_RESOLVED)
+    for rigname in rt_constants.RIGPARTS:
+        resolved = rt_naming.fstr(rigname, rt_constants.IKFK_RESOLVED)
         if cmds.attributeQuery(resolved, n=cog_ctrl, ex=1):
             cmds.setAttr(f'{cog_ctrl}.{resolved}', k=0)
             cmds.setAttr(f'{cog_ctrl}.{resolved}', cb=0)
@@ -347,7 +347,7 @@ def cleanup_ctrlall(fk, ik):
     values and per-tail override choices survive the rebuild; the connect
     phase re-adds and re-wires them idempotently.
 
-    Nodes are removed with rt_mya.remove (disconnect first), so a
+    Nodes are removed with rt_maya.remove (disconnect first), so a
     condition still referenced by an FX expression cannot cascade the
     delete through the expression web.
 
@@ -357,7 +357,7 @@ def cleanup_ctrlall(fk, ik):
     '''
     act = active()
     logger.debug(f'Cleanup main controller dashboard (active={act})')
-    cog_ctrl = rt_nam.fstr('', rt_cst.COG_CTRL)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
 
     # Condition nodes: keep only the set the current build will rewire
     expected_nodes = set()
@@ -366,12 +366,12 @@ def cleanup_ctrlall(fk, ik):
         if ik:
             attrs.append('ikfk')
         expected_nodes = {condition_node(rigname, attr)
-                          for rigname in rt_cst.RIGPARTS for attr in attrs}
+                          for rigname in rt_constants.RIGPARTS for attr in attrs}
     # One disconnect pass and one delete for every stale condition
-    # (rt_mya.remove_nodes keeps remove()'s disconnect-before-delete rule,
+    # (rt_maya.remove_nodes keeps remove()'s disconnect-before-delete rule,
     # so a condition still referenced by an FX expression cannot cascade)
-    rt_mya.remove_nodes([node for node
-                         in cmds.ls(f'*_override_{rt_cst.COND}',
+    rt_maya.remove_nodes([node for node
+                         in cmds.ls(f'*_override_{rt_constants.COND}',
                                     type='condition') or []
                          if node not in expected_nodes])
 
@@ -380,18 +380,18 @@ def cleanup_ctrlall(fk, ik):
     # everything goes; when it is on, only the stale divider from the
     # old naming goes ('override_divider' now labels the cog section,
     # basectrls carry 'override_all_divider').
-    for rigname in rt_cst.RIGPARTS:
-        basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
+    for rigname in rt_constants.RIGPARTS:
+        basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
         if not cmds.objExists(basectrl):
             continue
-        stale = [rt_cst.OVERRIDE_DIVIDER[0]]
+        stale = [rt_constants.OVERRIDE_DIVIDER[0]]
         if not act:
-            stale = [rt_nam.fstr(rigname, rt_cst.OVERRIDE),
-                     rt_cst.OVERRIDE_ALL_DIVIDER[0],
-                     rt_cst.OVERRIDE_DIVIDER[0]]
+            stale = [rt_naming.fstr(rigname, rt_constants.OVERRIDE),
+                     rt_constants.OVERRIDE_ALL_DIVIDER[0],
+                     rt_constants.OVERRIDE_DIVIDER[0]]
         for attr in stale:
             if cmds.attributeQuery(attr, n=basectrl, ex=1):
-                rt_mya.remove_attribute(basectrl, attr)
+                rt_maya.remove_attribute(basectrl, attr)
 
     if not cmds.objExists(cog_ctrl):
         return
@@ -403,20 +403,20 @@ def cleanup_ctrlall(fk, ik):
     if act:
         expected_attrs = {all_attr(attr)
                           for attr, _ in routed_attr_specs(fk, ik)}
-        expected_attrs |= {rt_cst.ALL_DIVIDER[0],
-                           rt_cst.OVERRIDE_DIVIDER[0]}
+        expected_attrs |= {rt_constants.ALL_DIVIDER[0],
+                           rt_constants.OVERRIDE_DIVIDER[0]}
         if ik:
             expected_attrs.add(all_attr('ikfk'))
-        for rigname in rt_cst.RIGPARTS:
-            expected_attrs.add(rt_nam.fstr(rigname, rt_cst.OVERRIDE))
+        for rigname in rt_constants.RIGPARTS:
+            expected_attrs.add(rt_naming.fstr(rigname, rt_constants.OVERRIDE))
             if ik:
-                expected_attrs.add(rt_nam.fstr(rigname, rt_cst.IKFK_RESOLVED))
+                expected_attrs.add(rt_naming.fstr(rigname, rt_constants.IKFK_RESOLVED))
     for attr in cmds.listAttr(cog_ctrl, ud=1) or []:
-        dashboard = (attr.startswith(rt_cst.ALL_PREFIX)
+        dashboard = (attr.startswith(rt_constants.ALL_PREFIX)
                      or attr.endswith('_override')
                      or attr.endswith('_ikfk_resolved')
-                     or attr in (rt_cst.ALL_DIVIDER[0],
-                                 rt_cst.OVERRIDE_DIVIDER[0],
-                                 rt_cst.OVERRIDE_ALL_DIVIDER[0]))
+                     or attr in (rt_constants.ALL_DIVIDER[0],
+                                 rt_constants.OVERRIDE_DIVIDER[0],
+                                 rt_constants.OVERRIDE_ALL_DIVIDER[0]))
         if dashboard and attr not in expected_attrs:
-            rt_mya.remove_attribute(cog_ctrl, attr)
+            rt_maya.remove_attribute(cog_ctrl, attr)

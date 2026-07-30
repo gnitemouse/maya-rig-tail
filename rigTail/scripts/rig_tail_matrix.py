@@ -36,8 +36,8 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_name
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
 
 logger = logger_setup(__name__)
 
@@ -60,21 +60,21 @@ def build_matrix_offset_network(rigname, fk, ik):
 
     logger.debug(f'{rigname}: Building matrix OPM network')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         logger.warning(f'{rigname}: No BN joints found')
         return
 
-    joints = rt_cst.JOINTS_BN[rigname]
-    cog_ctrl = rt_name.fstr('', rt_cst.COG_CTRL)
-    ikfk_attr = rt_name.fstr(rigname, rt_cst.IKFK)
+    joints = rt_constants.JOINTS_BN[rigname]
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
 
     # Build FX list from constants
     fx_list = []
-    if rt_cst.EFFECTS.get('curl'):
+    if rt_constants.EFFECTS.get('curl'):
         fx_list.append('curl')
-    if rt_cst.EFFECTS.get('wave'):
+    if rt_constants.EFFECTS.get('wave'):
         fx_list.append('wave')
-    if rt_cst.EFFECTS.get('noise'):
+    if rt_constants.EFFECTS.get('noise'):
         fx_list.append('noise')
 
     logger.debug(f'{rigname}: Zeroing OPM and local TRS on {len(joints)} BN joints')
@@ -122,10 +122,10 @@ def _get_driver_joint(rigname, index, fk, ik):
     Return:
         str or None: Driver joint name
     '''
-    if ik and rigname in rt_cst.JOINTS_IK:
-        return rt_cst.JOINTS_IK[rigname][index]
-    elif fk and rigname in rt_cst.JOINTS_FK:
-        return rt_cst.JOINTS_FK[rigname][index]
+    if ik and rigname in rt_constants.JOINTS_IK:
+        return rt_constants.JOINTS_IK[rigname][index]
+    elif fk and rigname in rt_constants.JOINTS_FK:
+        return rt_constants.JOINTS_FK[rigname][index]
     return None
 
 
@@ -237,7 +237,7 @@ def create_matrix_nodes_for_joint(
         fk (bool): FK components are being built
         ik (bool): IK components are being built
     '''
-    NN = rt_name.get_index_from_name(bn_jnt)
+    NN = rt_naming.get_index_from_name(bn_jnt)
 
     # Create BlendMatrix for IK/FK switching
     blend_mtx = f'{rigname}_{NN:02d}_ikfk_blendMatrix'
@@ -253,7 +253,7 @@ def create_matrix_nodes_for_joint(
 
     # IK/FK blending only applies when both chains are built
     # Switch attribute on the cog only exists when IK is built
-    fk_mode = rt_cst.ikfk_fk_mode_index()
+    fk_mode = rt_constants.ikfk_fk_mode_index()
     blending = (fk and ik and fk_mode is not None
                 and fk_driver and ik_driver and fk_driver != ik_driver)
     ikfk_remap = f'{rigname}_{NN:02d}_ikfk_remap_condition'
@@ -300,7 +300,7 @@ def create_matrix_nodes_for_joint(
     else:
         cmds.connectAttr(f'{blend_mtx}.outputMatrix', f'{baselocal_mult}.matrixIn[0]', f=1) # driver-child world
         # parent term is driver parent inverse, not bn_parent, so curl propagates
-        parent_NN = rt_name.get_index_from_name(bn_parent)
+        parent_NN = rt_naming.get_index_from_name(bn_parent)
         parent_blend = f'{rigname}_{parent_NN:02d}_ikfk_blendMatrix'
         parent_inv = f'{rigname}_{NN:02d}_driverParentInv_inverseMatrix'
         if not cmds.objExists(parent_inv):
@@ -327,7 +327,7 @@ def create_matrix_nodes_for_joint(
     # translation lives in parent space, so without compensation the
     # parent scale shears every child position and the error compounds
     # down the chain (tail end drifts off the end control on bent poses).
-    if index > 0 and rt_cst.EFFECTS.get('stretchy'):
+    if index > 0 and rt_constants.EFFECTS.get('stretchy'):
         squash_inv = _get_parent_squash_inverse(rigname, parent_NN)
         if squash_inv:
             matrix_plugs.append(squash_inv)

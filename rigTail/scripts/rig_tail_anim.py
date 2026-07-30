@@ -15,7 +15,7 @@ rig_tail_matrix multiplies into the BN joint's offsetParentMatrix in
 front of the driver term - so FX rotate each joint about its own pivot
 and never touch the joints' channels. Wave and noise are expressions
 (they need time); curl is a pure node network. Attribute sources go
-through rt_ca.resolved_plug so the Main Controller dashboard can route
+through rt_ctrlall.resolved_plug so the Main Controller dashboard can route
 them, and expressions are deleted via delete_expression - a raw delete
 on a connected expression cascades through its connection web.
 
@@ -23,17 +23,17 @@ Functions:
     delete_expression: remove an expression without the delete cascading
     build_anim_effects: entry point; build the enabled FX for one part
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
-        per enabled effect; mirrored by rt_ca.routed_attr_specs)
+        per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
     build_loop: modulo-time driver the other FX read
     build_wave, build_curl, build_noise: one network per effect
 '''
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_maya as rt_mya
-import rig_tail_ctrlall as rt_ca
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
+import rig_tail_ctrlall as rt_ctrlall
 
 logger = logger_setup(__name__)
 
@@ -64,12 +64,12 @@ def delete_expression(expr):
     conv_types = ('unitConversion', 'unitToTimeConversion', 'timeToUnitConversion')
     convs = {c for c in (cmds.listConnections(expr) or [])
              if cmds.nodeType(c) in conv_types}
-    rt_mya.remove(expr)
+    rt_maya.remove(expr)
     for conv in convs:
         if cmds.objExists(conv):
-            rt_mya.remove(conv)
+            rt_maya.remove(conv)
 
-ensure_connect = rt_mya.ensure_connect
+ensure_connect = rt_maya.ensure_connect
 
 
 # BUILD ANIM EFFECTS ===================================================
@@ -88,34 +88,34 @@ def build_anim_effects(rigname, fk, ik):
     '''
     logger.debug(f'{rigname}: Build Animation Effects (Matrix-Per-FX)')
 
-    if rigname not in rt_cst.JOINTS_BN:
+    if rigname not in rt_constants.JOINTS_BN:
         logger.warning(f'{rigname}: No BN joints found')
         return
 
-    basectrl = rt_nam.fstr(rigname, rt_cst.BASECTRL)
-    joints = rt_cst.JOINTS_BN[rigname]
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    joints = rt_constants.JOINTS_BN[rigname]
 
     loop_time = None
-    if rt_cst.EFFECTS['loop']:
+    if rt_constants.EFFECTS['loop']:
         loop_time = build_loop(rigname, basectrl)
 
-    if rt_cst.EFFECTS['wave']:
+    if rt_constants.EFFECTS['wave']:
         build_wave(rigname, basectrl, joints, loop_time)
-    if rt_cst.EFFECTS['curl']:
+    if rt_constants.EFFECTS['curl']:
         build_curl(rigname, basectrl, joints)
-    if rt_cst.EFFECTS['noise']:
+    if rt_constants.EFFECTS['noise']:
         build_noise(rigname, basectrl, joints, loop_time)
 
 def add_anim_attributes_to_basectrl(rigname, basectrl):
     logger.debug(f'{rigname}: Add animation effect attributes to basectrl')
 
-    if rt_cst.effects_enabled():
-        rt_mya.add_attribute_enum(basectrl, rt_cst.ANIM_DIVIDER[0], rt_cst.ANIM_DIVIDER[1], rt_cst.ANIM_DIVIDER[2])
+    if rt_constants.effects_enabled():
+        rt_maya.add_attribute_enum(basectrl, rt_constants.ANIM_DIVIDER[0], rt_constants.ANIM_DIVIDER[1], rt_constants.ANIM_DIVIDER[2])
 
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]
 
-    if rt_cst.EFFECTS['wave']:
+    if rt_constants.EFFECTS['wave']:
         for axis, attr in wave_axes:
             if not cmds.attributeQuery(attr, n=basectrl, ex=1):
                 cmds.addAttr(basectrl, ln=attr, nn=f'Wave {axis}', at='float', k=1, dv=0, min=-10, max=10)
@@ -126,14 +126,14 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
         if not cmds.attributeQuery('wave_falloff', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='wave_falloff', nn='Wave Falloff', at='float', k=1, dv=1, min=0.1, max=10)
 
-    if rt_cst.EFFECTS['curl']:
+    if rt_constants.EFFECTS['curl']:
         for axis, attr in curl_axes:
             if not cmds.attributeQuery(attr, n=basectrl, ex=1):
                 cmds.addAttr(basectrl, ln=attr, nn=f'Curl {axis}', at='float', k=1, dv=0, min=-10, max=10)
         if not cmds.attributeQuery('curl_falloff', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='curl_falloff', nn='Curl Falloff', at='float', k=1, dv=3.0, min=0.1, max=10)
 
-    if rt_cst.EFFECTS['noise']:
+    if rt_constants.EFFECTS['noise']:
         if not cmds.attributeQuery('noise', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='noise', nn='Noise', at='float', k=1, dv=0, min=-10, max=10)
         if not cmds.attributeQuery('noise_frequency', n=basectrl, ex=1):
@@ -141,7 +141,7 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
         if not cmds.attributeQuery('noise_speed', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='noise_speed', nn='Noise Speed', at='float', k=1, dv=3, min=0, max=10)
 
-    if rt_cst.EFFECTS['loop']:
+    if rt_constants.EFFECTS['loop']:
         if not cmds.attributeQuery('loop', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='loop', nn='Loop', at='bool', k=1, dv=0)
         if not cmds.attributeQuery('loop_frame', n=basectrl, ex=1):
@@ -169,8 +169,8 @@ def build_loop(rigname, basectrl):
 
     # resolved_plug: override condition output when the main controller
     # dashboard is active, the basectrl attribute otherwise
-    loop_src = rt_ca.resolved_plug(rigname, 'loop')
-    frame_src = rt_ca.resolved_plug(rigname, 'loop_frame')
+    loop_src = rt_ctrlall.resolved_plug(rigname, 'loop')
+    frame_src = rt_ctrlall.resolved_plug(rigname, 'loop_frame')
 
     expr_code = f'''// Loop modulo expression - normalized time output
 float $loop_enabled = {loop_src};
@@ -223,13 +223,13 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
     # takes the non-looping branch. resolved_plug: override condition
     # output when the main controller dashboard is active, the basectrl
     # attribute otherwise.
-    loop_enabled_src = rt_ca.resolved_plug(rigname, 'loop') if loop_time else '0'
-    freq_src = rt_ca.resolved_plug(rigname, 'wave_frequency')
-    speed_src = rt_ca.resolved_plug(rigname, 'wave_speed')
-    falloff_src = rt_ca.resolved_plug(rigname, 'wave_falloff')
+    loop_enabled_src = rt_ctrlall.resolved_plug(rigname, 'loop') if loop_time else '0'
+    freq_src = rt_ctrlall.resolved_plug(rigname, 'wave_frequency')
+    speed_src = rt_ctrlall.resolved_plug(rigname, 'wave_speed')
+    falloff_src = rt_ctrlall.resolved_plug(rigname, 'wave_falloff')
 
     for idx, jnt in enumerate(joints[1:], 1):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
 
         for rot_axis, wave_attr in wave_axes:
@@ -240,7 +240,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None):
                 logger.trace(f'{compose_node} does not exist, skipping wave expression')
                 continue
 
-            amp_src = rt_ca.resolved_plug(rigname, wave_attr)
+            amp_src = rt_ctrlall.resolved_plug(rigname, wave_attr)
 
             expr_code = f'''// Wave expression for joint {NN:02d} axis {rot_axis}
 float $loop_enabled = {loop_enabled_src};
@@ -309,10 +309,10 @@ def build_curl(rigname, basectrl, joints):
             cmds.setAttr(f'{remap}.input2X', 20.0)
         # resolved_plug: override condition output when the dashboard is
         # active, the basectrl attribute otherwise
-        ensure_connect(rt_ca.resolved_plug(rigname, curl_attr), f'{remap}.input1X')
+        ensure_connect(rt_ctrlall.resolved_plug(rigname, curl_attr), f'{remap}.input1X')
 
         for i, jnt in enumerate(joints[1:], 1):
-            NN = rt_nam.get_index_from_name(jnt)
+            NN = rt_naming.get_index_from_name(jnt)
             compose_node = f'{rigname}_{NN:02d}_curl_composeMatrix'
 
             u = i / float(num_joints - 1) if num_joints > 1 else 0.0
@@ -322,7 +322,7 @@ def build_curl(rigname, basectrl, joints):
                 cmds.createNode('multiplyDivide', n=falloff_node)
                 cmds.setAttr(f'{falloff_node}.operation', 3)
                 cmds.setAttr(f'{falloff_node}.input1X', u)
-            ensure_connect(rt_ca.resolved_plug(rigname, 'curl_falloff'),
+            ensure_connect(rt_ctrlall.resolved_plug(rigname, 'curl_falloff'),
                            f'{falloff_node}.input2X')
 
             weight_scale = f'{rigname}_curl{rot_axis}_{NN:02d}_weight_multiplyDivide'
@@ -377,13 +377,13 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
     # takes the non-looping branch. resolved_plug: override condition
     # output when the main controller dashboard is active, the basectrl
     # attribute otherwise.
-    loop_enabled_src = rt_ca.resolved_plug(rigname, 'loop') if loop_time else '0'
-    amp_src = rt_ca.resolved_plug(rigname, 'noise')
-    freq_src = rt_ca.resolved_plug(rigname, 'noise_frequency')
-    speed_src = rt_ca.resolved_plug(rigname, 'noise_speed')
+    loop_enabled_src = rt_ctrlall.resolved_plug(rigname, 'loop') if loop_time else '0'
+    amp_src = rt_ctrlall.resolved_plug(rigname, 'noise')
+    freq_src = rt_ctrlall.resolved_plug(rigname, 'noise_frequency')
+    speed_src = rt_ctrlall.resolved_plug(rigname, 'noise_speed')
 
     for idx, jnt in enumerate(joints[1:], 1):
-        NN = rt_nam.get_index_from_name(jnt)
+        NN = rt_naming.get_index_from_name(jnt)
         u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
 
         for axis in effect_axes:

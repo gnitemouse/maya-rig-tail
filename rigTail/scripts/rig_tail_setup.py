@@ -66,7 +66,7 @@ unbound first and left for the build to rebind, losing its weights.
 
 Functions:
     setup_tails: entry point; detect joints, run the phase, re-baseline skin
-    run_setup: run the enabled batch orient/mirror steps on rt_cst.JOINTS_BN
+    run_setup: run the enabled batch orient/mirror steps on rt_constants.JOINTS_BN
     orient_chains: aim-orient every BN chain to remove twist (ORIENT_JOINTS)
     mirror_chains: reflect each L/R pair's orientation and/or positions
         (MIRROR_ORIENT / MIRROR_JOINTS)
@@ -81,10 +81,10 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
-import rig_tail_cleanup as rt_cln
+import rig_tail_constants as rt_constants
+import rig_tail_cleanup as rt_cleanup
 import rig_tail_cache as rt_cache
-import rig_tail_maya as rt_mya
+import rig_tail_maya as rt_maya
 import math
 import re
 
@@ -92,7 +92,7 @@ logger = logger_setup(__name__)
 
 # rig_tail_constants is never reloaded (it holds session state), so a
 # session started before this feature existed lacks these settings. This
-# module IS reloaded every run: install any missing default onto rt_cst so
+# module IS reloaded every run: install any missing default onto rt_constants so
 # Setup works without a Maya restart, never overwriting a value a
 # restarted or customized session already provides.
 _CST_DEFAULTS = {
@@ -109,8 +109,8 @@ _CST_DEFAULTS = {
     'PRESERVE_SKIN': True,          # re-baseline skinned meshes, never unbind
 }
 for _name, _value in _CST_DEFAULTS.items():
-    if not hasattr(rt_cst, _name):
-        setattr(rt_cst, _name, _value)
+    if not hasattr(rt_constants, _name):
+        setattr(rt_constants, _name, _value)
 
 # Rig part prefix that marks a mirrored side, e.g. 'L_fintail'.
 _SIDE_RE = re.compile(r'^([LlRr])_(.+)$')
@@ -119,7 +119,7 @@ _EPS = 1e-9
 
 def _cst(name):
     ''' Read a Setup setting, falling back to the installed default. '''
-    return getattr(rt_cst, name, _CST_DEFAULTS.get(name))
+    return getattr(rt_constants, name, _CST_DEFAULTS.get(name))
 
 
 def _active():
@@ -146,12 +146,12 @@ def setup_tails(root=None, dry_run=None):
     then build.
 
     Usage:
-        import rig_tail_setup as rt_set
-        rt_set.setup_tails('squid')          # apply
-        rt_set.setup_tails('squid', True)    # preview only
+        import rig_tail_setup as rt_setup
+        rt_setup.setup_tails('squid')          # apply
+        rt_setup.setup_tails('squid', True)    # preview only
 
     Arguments
-        root (str): Rig root name (sets rt_cst.ROOT); skipped when None.
+        root (str): Rig root name (sets rt_constants.ROOT); skipped when None.
         dry_run (bool): Override MIRROR_DRYRUN; None uses the setting.
             When true nothing is unbound or modified.
 
@@ -160,21 +160,21 @@ def setup_tails(root=None, dry_run=None):
         matching mesh) and 'excluded' (parts held back by RIGPARTS_EXCLUDE).
     '''
     if root:
-        rt_cln.set_root(root)
+        rt_cleanup.set_root(root)
 
     # Same performance scope the build entry points use (viewport refresh
     # suspended, evaluation manager in DG mode, one undo chunk). Setup
     # rewrites the world matrix of every joint in every chain, and each
     # write would otherwise trigger a redraw and an EM graph rebuild -
     # exactly the churn the build already avoids. See rig_tail_maya.
-    with rt_mya.build_performance_scope('rig_tail setup'), \
-            rt_mya.build_timer('setup_tails') as timer:
+    with rt_maya.build_performance_scope('rig_tail setup'), \
+            rt_maya.build_timer('setup_tails') as timer:
         # Detect over the FULL roster (cheap, non-destructive) so JOINTS_BN
         # is populated for excluded parts too - the interactive roll_chain
         # fix-up still needs them. Everything destructive below is filtered
         # to the active parts.
         with timer.phase('detect'):
-            found = rt_cln.detect_joints_bn()
+            found = rt_cleanup.detect_joints_bn()
         if not found:
             logger.warning('Setup: no BN joints found for any RIGPART')
             return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
@@ -190,7 +190,7 @@ def setup_tails(root=None, dry_run=None):
         # Warn about parts whose mesh does not follow the naming convention:
         # they are not unbound before re-orienting (so their mesh distorts)
         # nor rebound by the build. Reported so the meshes can be renamed.
-        missing_geo = rt_mya.report_missing_geometry(active)
+        missing_geo = rt_maya.report_missing_geometry(active)
 
         preview = dry_run if dry_run is not None \
             else bool(_cst('MIRROR_DRYRUN'))
@@ -203,7 +203,7 @@ def setup_tails(root=None, dry_run=None):
             # painted weights.
             with timer.phase('unbind'):
                 for rigname in active:
-                    if rt_mya.unbind_geometry(rigname):
+                    if rt_maya.unbind_geometry(rigname):
                         skinned.append(rigname)
 
         with timer.phase('orient/mirror'):
@@ -214,7 +214,7 @@ def setup_tails(root=None, dry_run=None):
         # out of shape by the re-orient.
         with timer.phase('rebaseline'):
             for rigname in skinned:
-                rt_mya.rebaseline_skin(rigname)
+                rt_maya.rebaseline_skin(rigname)
 
         result['missing_geo'] = missing_geo
         result['excluded'] = excluded
@@ -227,7 +227,7 @@ def run_setup(dry_run=None):
 
     orient_chains runs first when ORIENT_JOINTS is on, then mirror_chains
     when MIRROR_ORIENT and/or MIRROR_JOINTS is on, so each L/R pair mirrors
-    a clean source. Expects rt_cst.JOINTS_BN to be populated (setup_tails
+    a clean source. Expects rt_constants.JOINTS_BN to be populated (setup_tails
     does this) and the affected geometry unbound. Orientation-only steps
     keep positions; MIRROR_JOINTS moves the target side's joints.
 
@@ -260,8 +260,8 @@ def run_setup(dry_run=None):
     # keep every joint keyable and visible (the build later makes the rig
     # joints non-keyable). Skipped on a dry run, which changes nothing.
     if not dry_run:
-        rt_mya.finalize_joint_channels(
-            keyable=True, visibility=1, joint_dicts=[rt_cst.JOINTS_BN])
+        rt_maya.finalize_joint_channels(
+            keyable=True, visibility=1, joint_dicts=[rt_constants.JOINTS_BN])
         _clear_rest_pose()
 
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
@@ -299,10 +299,10 @@ def show_joint_orients(show=True):
     Return
         int: number of joints toggled.
     '''
-    rt_cln.detect_joints_bn()
+    rt_cleanup.detect_joints_bn()
     val = 1 if show else 0
     count = 0
-    for joints in rt_cst.JOINTS_BN.values():
+    for joints in rt_constants.JOINTS_BN.values():
         for jnt in joints:
             if cmds.objExists(jnt) and \
                     cmds.attributeQuery('displayLocalAxis', node=jnt, exists=True):
@@ -317,7 +317,7 @@ def show_joint_orients(show=True):
 
 
 # OPERATIONS ===========================================================
-# Both operate on the BN skeleton only (rt_cst.JOINTS_BN).
+# Both operate on the BN skeleton only (rt_constants.JOINTS_BN).
 
 def orient_chains(dry_run):
     '''
@@ -344,7 +344,7 @@ def orient_chains(dry_run):
     mode = ' [dry-run]' if dry_run else ''
     count = 0
     for rigname in _active():
-        joints = rt_cst.JOINTS_BN.get(rigname)
+        joints = rt_constants.JOINTS_BN.get(rigname)
         if not joints or len(joints) < 2:
             continue
         try:
@@ -420,7 +420,7 @@ def mirror_chains(dry_run, do_orient, do_positions):
     '''
     Reflect each L/R pair's BN chain across the symmetry plane.
 
-    Overwrites the target side (rt_cst.MIRROR_SOURCE_SIDE picks the source)
+    Overwrites the target side (rt_constants.MIRROR_SOURCE_SIDE picks the source)
     with the mirror of the source. Two independent effects, per the flags:
         do_orient    reflect the source ORIENTATION onto the target, so the
                      target's joints face as mirror images. Positions kept.
@@ -464,8 +464,8 @@ def mirror_chains(dry_run, do_orient, do_positions):
         return 0
     count = 0
     for source, target in pairs:
-        src = rt_cst.JOINTS_BN.get(source)
-        tgt = rt_cst.JOINTS_BN.get(target)
+        src = rt_constants.JOINTS_BN.get(source)
+        tgt = rt_constants.JOINTS_BN.get(target)
         if not src or not tgt:
             logger.warning(f'Mirror: {source} or {target} has no BN joints')
             continue
@@ -562,7 +562,7 @@ def find_mirror_pairs(rigparts):
 
     A pair exists when both an 'L_<base>' and an 'R_<base>' rig part are
     present (prefix match is case-insensitive; the base must be identical).
-    The source side is rt_cst.MIRROR_SOURCE_SIDE (default 'R'); the other
+    The source side is rt_constants.MIRROR_SOURCE_SIDE (default 'R'); the other
     side is the target that gets overwritten. Center and unpaired parts are
     ignored.
 
@@ -750,8 +750,8 @@ def roll_chain(rigname, degrees):
     Return
         int: joints rolled (0 if none, or on a no-op angle).
     '''
-    rt_cln.detect_joints_bn()
-    joints = rt_cst.JOINTS_BN.get(rigname)
+    rt_cleanup.detect_joints_bn()
+    joints = rt_constants.JOINTS_BN.get(rigname)
     if not joints or len(joints) < 2:
         logger.warning(f'Roll: {rigname} has no BN chain to roll')
         return 0
@@ -766,8 +766,8 @@ def roll_chain(rigname, degrees):
 
     # Rewrites every joint's world matrix, same as the batch orient, so it
     # gets the same performance scope (see setup_tails)
-    with rt_mya.build_performance_scope('rig_tail roll'):
-        skinned = rt_mya.unbind_geometry(rigname)
+    with rt_maya.build_performance_scope('rig_tail roll'):
+        skinned = rt_maya.unbind_geometry(rigname)
 
         # Capture the end joint BEFORE re-orienting its parent, which would
         # swing it (see _end_joint_position).
@@ -784,7 +784,7 @@ def roll_chain(rigname, degrees):
         _orient_end_joint(joints[-1], frames[-1], dry_run=False,
                           position=ee_pos)
         if skinned:
-            rt_mya.rebaseline_skin(rigname)
+            rt_maya.rebaseline_skin(rigname)
         _clear_rest_pose()
     logger.info(f'Roll: {rigname} rolled {degrees:g} deg about {aim_axis} '
                 f'({count} joints)')
@@ -807,11 +807,11 @@ def rignames_from_selection():
         duplicates. Empty when nothing is selected or no selected node is a
         recognized rig part.
     '''
-    import rig_tail_naming as rt_nam
+    import rig_tail_naming as rt_naming
     rignames = []
     for node in cmds.ls(selection=True) or []:
-        rigname = rt_nam.get_rigname(node.split('|')[-1], rt_cst.JOINT)
-        if rigname and rigname in rt_cst.RIGPARTS and rigname not in rignames:
+        rigname = rt_naming.get_rigname(node.split('|')[-1], rt_constants.JOINT)
+        if rigname and rigname in rt_constants.RIGPARTS and rigname not in rignames:
             rignames.append(rigname)
     return rignames
 
@@ -875,7 +875,7 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
         aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
         up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
         behavior (str): 'symmetric' or 'parallel'; None reads
-            rt_cst.MIRROR_BEHAVIOR. An unrecognized value falls back to
+            rt_constants.MIRROR_BEHAVIOR. An unrecognized value falls back to
             'symmetric' with a warning.
 
     Return
@@ -1070,8 +1070,8 @@ def _orient_end_joint(parent, frame, dry_run, position=None):
         return 1
     pos = position if position is not None \
         else cmds.xform(ee, q=True, ws=True, translation=True)
-    rt_mya.disconnect_all(ee, source=True, destination=False)
-    rt_mya.reset_opm(ee)
+    rt_maya.disconnect_all(ee, source=True, destination=False)
+    rt_maya.reset_opm(ee)
     cmds.setAttr(f'{ee}.rotate', 0, 0, 0)
     cmds.setAttr(f'{ee}.jointOrient', 0, 0, 0)
     cmds.xform(ee, ws=True, matrix=_world_matrix(frame, pos))
@@ -1134,8 +1134,8 @@ def _apply_frames(joints, frames, dry_run, positions=None):
         # Detach build drivers (incoming only: keep the outgoing
         # worldMatrix -> skinCluster geometry bind) and clear opm so the
         # joint re-orients as a plain joint, root to tip.
-        rt_mya.disconnect_all(jnt, source=True, destination=False)
-        rt_mya.reset_opm(jnt)
+        rt_maya.disconnect_all(jnt, source=True, destination=False)
+        rt_maya.reset_opm(jnt)
         cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
         cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
         cmds.xform(jnt, ws=True, matrix=_world_matrix(frames[i], positions[i]))

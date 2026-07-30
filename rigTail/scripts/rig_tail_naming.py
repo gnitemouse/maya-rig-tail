@@ -19,7 +19,7 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
-import rig_tail_constants as rt_cst
+import rig_tail_constants as rt_constants
 import re
 
 logger = logger_setup(__name__)
@@ -67,21 +67,21 @@ def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):
     Return:
         str: Evaluated name following naming convention
     """
-    DFORMAT = rt_cst.DFORMAT
-    GRP = rt_cst.GRP
-    CTRL = rt_cst.CTRL
-    JNT = rt_cst.JNT
-    SDK = rt_cst.SDK
-    CRV = rt_cst.CRV
-    CSR = rt_cst.CSR
-    HDL = rt_cst.HDL
-    EFF = rt_cst.EFF
-    VIS = rt_cst.VIS
-    COND = rt_cst.COND
-    CST = rt_cst.CST
+    DFORMAT = rt_constants.DFORMAT
+    GRP = rt_constants.GRP
+    CTRL = rt_constants.CTRL
+    JNT = rt_constants.JNT
+    SDK = rt_constants.SDK
+    CRV = rt_constants.CRV
+    CSR = rt_constants.CSR
+    HDL = rt_constants.HDL
+    EFF = rt_constants.EFF
+    VIS = rt_constants.VIS
+    COND = rt_constants.COND
+    CST = rt_constants.CST
 
     if '{ROOT}' in template:
-        template = template.replace('{ROOT}', rt_cst.ROOT)
+        template = template.replace('{ROOT}', rt_constants.ROOT)
     if NN != '' and NN != 'ee':
         NN = f"{DFORMAT.format(int(NN))}"
     if nn != '' and nn != 'ee':
@@ -151,7 +151,7 @@ def compile_template_to_regex(template):
             # exact value so the neighboring tokens anchor the capture:
             # NN/nn are indices (digits or 'ee'), TYPE is one of the
             # joint type labels, and labels like JNT/GRP/CTRL resolve
-            # to their rt_cst constants. This keeps multi-token
+            # to their rt_constants constants. This keeps multi-token
             # rignames unambiguous without greedy captures:
             # 'BN_C_tail_00_jnt' -> 'C_tail', never 'C' or 'C_tail_00'.
             if name == 'rigname':
@@ -159,11 +159,11 @@ def compile_template_to_regex(template):
             elif name in ('NN', 'nn'):
                 parts.append(r'(?:\d+|ee)')
             elif name == 'TYPE':
-                types = [rt_cst.TYPE_BN, rt_cst.TYPE_IK,
-                         rt_cst.TYPE_FK, rt_cst.TYPE_FX]
+                types = [rt_constants.TYPE_BN, rt_constants.TYPE_IK,
+                         rt_constants.TYPE_FK, rt_constants.TYPE_FX]
                 parts.append('(?:' + '|'.join(re.escape(t) for t in types) + ')')
             else:
-                const = getattr(rt_cst, name, None)
+                const = getattr(rt_constants, name, None)
                 if isinstance(const, str) and const:
                     parts.append(re.escape(const))
                 else:
@@ -257,7 +257,7 @@ def get_index_from_name(node, first=False, underscore=True):
 
 def strip_group_suffix(name):
     """
-    Strip a trailing group label (rt_cst.GRP) and its separator from a
+    Strip a trailing group label (rt_constants.GRP) and its separator from a
     name, e.g. 'tail_root_grp' -> 'tail_root'. Names that do not end
     with the group label are returned unchanged (whitespace-stripped).
 
@@ -268,7 +268,7 @@ def strip_group_suffix(name):
         str: Name without the trailing group label
     """
     name = name.strip()
-    grp = rt_cst.GRP
+    grp = rt_constants.GRP
     if grp and name != grp and name.endswith(grp):
         stripped = name[:-len(grp)].rstrip('_- ')
         if stripped:

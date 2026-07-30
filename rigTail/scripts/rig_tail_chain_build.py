@@ -27,12 +27,12 @@ import math
 
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
-import rig_tail_joint as rt_jnt
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
+import rig_tail_joint as rt_joint
 import rig_tail_math as rt_math
-import rig_tail_chain_spacing as rt_spc
-import rig_tail_maya as rt_mya
+import rig_tail_chain_spacing as rt_chain_spacing
+import rig_tail_maya as rt_maya
 
 logger = logger_setup(__name__)
 
@@ -138,7 +138,7 @@ def _guess_rigname(joint):
     '''Extract a rig part name from a joint name using the naming template,
     falling back to a sanitised version of the root joint name sans index.'''
     try:
-        rigname = rt_nam.get_rigname(joint, rt_cst.JOINT)
+        rigname = rt_naming.get_rigname(joint, rt_constants.JOINT)
         if rigname:
             return rigname
     except Exception:
@@ -147,8 +147,8 @@ def _guess_rigname(joint):
     name = joint.split('|')[-1]
     parts = name.split('_')
     # Remove known trailing type tags
-    while parts and parts[-1] in (rt_cst.JNT, rt_cst.TYPE_BN, rt_cst.TYPE_IK,
-                                  rt_cst.TYPE_FK):
+    while parts and parts[-1] in (rt_constants.JNT, rt_constants.TYPE_BN, rt_constants.TYPE_IK,
+                                  rt_constants.TYPE_FK):
         parts.pop()
     # Remove trailing digits (index)
     while parts and parts[-1].isdigit():
@@ -199,13 +199,17 @@ def _guard_chain(joints):
 
 
 def _find_influence_skin(joint):
-    '''Return the first skinCluster that lists this joint as an influence.'''
-    history = cmds.listHistory(joint, type='skinCluster') or []
-    for skin in history:
-        influences = cmds.skinCluster(skin, q=True, inf=True) or []
-        if any(joint.split('|')[-1] in (inf.split('|')[-1]) for inf in influences):
-            return skin
-    return None
+    '''Return the first skinCluster this joint is an influence of.
+
+    A skinCluster sits DOWNSTREAM of its influences -- joint.worldMatrix
+    feeds skinCluster.matrix -- so the lookup follows the joint's future.
+    Walking its history instead finds nothing however tightly the joint is
+    bound, which is the difference between guarding a skinned chain and
+    silently re-spacing one.
+    '''
+    skins = cmds.listConnections(f'{joint}.worldMatrix', source=False,
+                                 destination=True, type='skinCluster') or []
+    return skins[0] if skins else None
 
 
 def _guard_min_length(joints):
@@ -215,7 +219,7 @@ def _guard_min_length(joints):
     total = sum(
         rt_math.get_vec_length(joints[i], joints[i + 1])
         for i in range(len(joints) - 1))
-    if total < rt_spc.EPS:
+    if total < rt_chain_spacing.EPS:
         abort_build(logger, 'All joints in the chain are coincident '
                            '(total length < EPS).')
 
@@ -265,7 +269,7 @@ def _write_chain(joints, positions, rigname):
 def _renumber_chain(joints, rigname):
     '''Renumber the chain's BN joints sequentially from the naming template.'''
     bn_joints = [j for j in joints if '_ee_' not in j]
-    targets = [rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, i)
+    targets = [rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i)
                for i in range(len(bn_joints))]
     # Maya cannot swap names in-place.  Move every changing name through a
     # unique temporary name first, then assign the final sequence.
@@ -288,8 +292,8 @@ def _can_renumber(joints, rigname):
     """Whether every BN joint follows one consistent configured template."""
     bn_joints = [j for j in joints if '_ee_' not in j]
     try:
-        return all(rt_nam.get_rigname(j, rt_cst.JOINT) == rigname and
-                   isinstance(rt_nam.get_index_from_name(j), int)
+        return all(rt_naming.get_rigname(j, rt_constants.JOINT) == rigname and
+                   isinstance(rt_naming.get_index_from_name(j), int)
                    for j in bn_joints)
     except Exception:
         return False
@@ -335,7 +339,7 @@ def _grow_chain(joints, positions, rigname, ee_distance):
     result = list(bn)
     for i in range(old_n, len(positions)):
         parent = result[-1]
-        new_name = rt_nam.fstr(rigname, rt_cst.JOINT, rt_cst.TYPE_BN, i)
+        new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i)
         j = cmds.createNode('joint', name=new_name)
         cmds.parent(j, parent)
         cmds.xform(j, ws=True, t=positions[i])
@@ -387,7 +391,7 @@ def _end_joint(last_bn):
     '''
     The _ee_ end joint hanging off a chain's last BN joint, if any.
 
-    rt_jnt.get_joint_chain stops BEFORE the _ee_, so it never appears in the
+    rt_joint.get_joint_chain stops BEFORE the _ee_, so it never appears in the
     chain list and has to be looked up from the tip.  Setup's end-joint
     handling depends on it existing and being sensibly placed, so a rebuild
     that ignored it would leave it behind at the old tip.
@@ -463,20 +467,20 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
 
     start_pos = cmds.xform(start, q=True, ws=True, t=True)
     end_pos = cmds.xform(end, q=True, ws=True, t=True)
-    if _length_vec(_sub(end_pos, start_pos)) < rt_spc.EPS:
+    if _length_vec(_sub(end_pos, start_pos)) < rt_chain_spacing.EPS:
         abort_build(logger, f'{start} and {end} are at the same position — '
                            'a chain needs two distinct ends.')
 
-    with rt_mya.build_performance_scope(name='Joint Chain Builder'):
-        positions, _ = rt_spc.resample(
+    with rt_maya.build_performance_scope(name='Joint Chain Builder'):
+        positions, _ = rt_chain_spacing.resample(
             [start_pos, end_pos], n, mode, param=param, invert=invert, snap=False)
 
         # Create joints
         joints = []
         parent = cmds.listRelatives(start, parent=True) or None
         for i, pos in enumerate(positions):
-            j = cmds.createNode('joint', name=rt_nam.fstr(
-                rigname, rt_cst.JOINT, rt_cst.TYPE_BN, i))
+            j = cmds.createNode('joint', name=rt_naming.fstr(
+                rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i))
             if joints:
                 cmds.parent(j, joints[-1])
             elif parent:
@@ -508,14 +512,14 @@ def _up_axis_of(joint, up_axis):
         logger.warning(f'Could not read up axis of {joint}: {exc}')
         return None
     row = matrix[index * 4:index * 4 + 3]
-    return row if _length_vec(row) > rt_spc.EPS else None
+    return row if _length_vec(row) > rt_chain_spacing.EPS else None
 
 
 def _orient_chain(joints, positions, ee=None, up_ref=None):
     '''
     Aim-orient a chain down its own length.
 
-    Read-only use of rt_set.aim_frames — the same frames Setup's Orient
+    Read-only use of rt_setup.aim_frames — the same frames Setup's Orient
     Joints produces, so the two agree rather than fighting. up_ref None is
     Setup's 'best-fit' (roll from the chain's bend plane), which is right for
     a brand-new chain; passing the chain's current up is its 'cascade', which
@@ -530,11 +534,11 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
         ee (str): the _ee_ end joint to align to the final frame, if any.
         up_ref (list): world up seed, or None for best-fit.
     '''
-    import rig_tail_setup as rt_set
+    import rig_tail_setup as rt_setup
 
-    aim_axis = getattr(rt_cst, 'ORIENT_AIM_AXIS', 'x')
-    up_axis = getattr(rt_cst, 'ORIENT_UP_AXIS', 'z')
-    frames = rt_set.aim_frames(positions, aim_axis, up_axis, up_ref)
+    aim_axis = getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')
+    up_axis = getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')
+    frames = rt_setup.aim_frames(positions, aim_axis, up_axis, up_ref)
     for joint, frame, pos in zip(joints, frames, positions):
         _write_frame(joint, frame, pos)
     # The _ee_ is excluded from the chain, so it would keep a stale
@@ -590,11 +594,11 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         abort_build(logger, 'Joint count must be at least 2.')
 
     # Resolve the full chain
-    chain = rt_jnt.get_joint_chain(root_joint)
+    chain = rt_joint.get_joint_chain(root_joint)
     _guard_chain(chain)
     _guard_min_length(chain)
 
-    with rt_mya.build_performance_scope(name='Joint Chain Builder'):
+    with rt_maya.build_performance_scope(name='Joint Chain Builder'):
         key = (cmds.ls(root_joint, long=True) or [root_joint])[0]
         current_positions = [cmds.xform(j, q=True, ws=True, t=True)
                              for j in chain if '_ee_' not in j]
@@ -602,7 +606,7 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         # Read the cascade seed while the chain still stands as it was:
         # re-spacing moves the joints, so its own roll is unreadable after.
         up_ref = _up_axis_of(
-            chain[0], getattr(rt_cst, 'ORIENT_UP_AXIS', 'z')) if orient else None
+            chain[0], getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')) if orient else None
 
         # Session original cache: resample from the first-seen positions
         # when the chain has not been hand-edited since the last write.
@@ -615,7 +619,7 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
                 _length_vec(_sub(current_positions[i], written[i]))
                 for i in range(min(len(current_positions), len(written)))
             ) if written else float('inf')
-            if drift > rt_cst.JOINT_POS_TOLERANCE:
+            if drift > rt_constants.JOINT_POS_TOLERANCE:
                 # Hand-edited — re-baseline
                 _ORIGINALS[key]['positions'] = [list(p) for p in current_positions]
             source = _ORIGINALS[key]['positions']
@@ -627,7 +631,7 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             source = current_positions
 
         # Resample
-        positions, snapped = rt_spc.resample(
+        positions, snapped = rt_chain_spacing.resample(
             source, n, mode, param=param, invert=invert, snap=snap)
 
         # Write.  get_joint_chain stops before the _ee_, so append it here:

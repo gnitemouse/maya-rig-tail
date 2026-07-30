@@ -64,8 +64,8 @@ import maya.cmds as cmds
 import maya.api.OpenMaya as om
 from contextlib import contextmanager
 from logger_config import logger_setup, abort_build
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
 import re
 import time
 
@@ -186,8 +186,8 @@ def timed(label):
     whichever ones repeat per rig part per joint. Wrapping the suspects
     turns the next build into the measurement:
 
-        with rt_mya.timed('cleanup.unbind'):
-            rt_mya.unbind_geometry(rigname)
+        with rt_maya.timed('cleanup.unbind'):
+            rt_maya.unbind_geometry(rigname)
 
     Re-entering a label accumulates, and the call count is reported with
     the total, so 'per part' costs are visible as such. Labels are free
@@ -1257,8 +1257,8 @@ def finalize_joint_channels(keyable, visibility=None, joint_dicts=None):
         int: number of joints processed.
     """
     if joint_dicts is None:
-        joint_dicts = [rt_cst.JOINTS_BN, rt_cst.JOINTS_IK,
-                       rt_cst.JOINTS_FK, rt_cst.JOINTS_FX]
+        joint_dicts = [rt_constants.JOINTS_BN, rt_constants.JOINTS_IK,
+                       rt_constants.JOINTS_FK, rt_constants.JOINTS_FX]
     count = 0
     for jdict in joint_dicts:
         for joints in jdict.values():
@@ -1289,7 +1289,7 @@ def set_joint_color(joint, color):
     """
     if not cmds.objExists(joint):
         return
-    index = rt_cst.COLOR_OVERRIDE.get(color, color) if isinstance(color, str) \
+    index = rt_constants.COLOR_OVERRIDE.get(color, color) if isinstance(color, str) \
         else color
     # The drawing-override plugs exist on every DAG node, so there is
     # nothing to check for but settability - and asking costs as much as
@@ -1311,7 +1311,7 @@ def color_skeletons(bn_color=None, ik_color=None, fk_color=None):
     Colour each cached rig joint by its chain type (BN / IK / FK; FX
     follows the IK colour), so the three skeletons read apart at a glance.
 
-    Colours default to the rt_cst.*_COLOR settings; getattr fallbacks keep
+    Colours default to the rt_constants.*_COLOR settings; getattr fallbacks keep
     it working in a session started before those constants existed
     (rig_tail_constants is never reloaded).
 
@@ -1321,11 +1321,11 @@ def color_skeletons(bn_color=None, ik_color=None, fk_color=None):
     Return
         int: number of joints coloured.
     """
-    bn = bn_color or getattr(rt_cst, 'BN_COLOR', 'blue')
-    ik = ik_color or getattr(rt_cst, 'IK_COLOR', 'orange')
-    fk = fk_color or getattr(rt_cst, 'FK_COLOR', 'purple')
-    mapping = [(rt_cst.JOINTS_BN, bn), (rt_cst.JOINTS_IK, ik),
-               (rt_cst.JOINTS_FK, fk), (rt_cst.JOINTS_FX, ik)]
+    bn = bn_color or getattr(rt_constants, 'BN_COLOR', 'blue')
+    ik = ik_color or getattr(rt_constants, 'IK_COLOR', 'orange')
+    fk = fk_color or getattr(rt_constants, 'FK_COLOR', 'purple')
+    mapping = [(rt_constants.JOINTS_BN, bn), (rt_constants.JOINTS_IK, ik),
+               (rt_constants.JOINTS_FK, fk), (rt_constants.JOINTS_FX, ik)]
     count = 0
     for jdict, color in mapping:
         for joints in jdict.values():
@@ -1511,8 +1511,7 @@ def create_curveinfo(rigname, curve, typ=''):
     Return:
         str: CurveInfo node name
     """
-    from rig_tail_naming import fstr
-    curveinfo = fstr(rigname, rt_cst.CURVEINFO, typ)
+    curveinfo = rt_naming.fstr(rigname, rt_constants.CURVEINFO, typ)
     if cmds.objExists(curveinfo):
         return curveinfo
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
@@ -1766,10 +1765,10 @@ def geometry_matches_rigname(rigname, geo, warn=False):
     Return:
         bool: True if geo belongs to the rig part
     '''
-    if rt_nam.name_contains_rigname_terms(rigname, geo,
+    if rt_naming.name_contains_rigname_terms(rigname, geo,
                                           terms=r'mesh|geo|geometry'):
         return True
-    if rt_nam.name_matches_rigname(rigname, geo):
+    if rt_naming.name_matches_rigname(rigname, geo):
         if warn:
             logger.warning(
                 f"Geometry '{geo}' matches rig part '{rigname}' but not "
@@ -1792,7 +1791,7 @@ def bind_geometry(rigname):
     Arguments:
         rigname (str): Rig component name
     '''
-    if rigname not in rt_cst.JOINTS_BN or not rt_cst.JOINTS_BN[rigname]:
+    if rigname not in rt_constants.JOINTS_BN or not rt_constants.JOINTS_BN[rigname]:
         logger.warning(f'No BN joints found for {rigname}, skipping geometry bind')
         return
 
@@ -1805,7 +1804,7 @@ def bind_geometry(rigname):
     for geo in geos:
         if geometry_matches_rigname(rigname, geo, warn=True):
             geo_leaf = geo.split('|')[-1]
-            bind_skincluster(rt_cst.JOINTS_BN[rigname], geo,
+            bind_skincluster(rt_constants.JOINTS_BN[rigname], geo,
                              f'{geo_leaf}_skinCluster',
                              preserve=preserve_skin())
             bound.append(geo_leaf)
@@ -1835,7 +1834,7 @@ def geometry_transforms(root=None):
     Return:
         list: full paths of mesh transforms (empty when there is no root).
     '''
-    root = root or rt_nam.fstr('', rt_cst.GEOMETRY_GRP)
+    root = root or rt_naming.fstr('', rt_constants.GEOMETRY_GRP)
     if not cmds.objExists(root):
         return []
     # Full paths: descendant short names are frequently ambiguous under a
@@ -1881,7 +1880,7 @@ def report_missing_geometry(rignames):
     Return:
         list: rignames with no matching geometry.
     '''
-    if not cmds.objExists(rt_nam.fstr('', rt_cst.GEOMETRY_GRP)):
+    if not cmds.objExists(rt_naming.fstr('', rt_constants.GEOMETRY_GRP)):
         return []
     # One subtree scan for every part, not one per part
     geos = geometry_transforms()
@@ -1900,7 +1899,7 @@ def unbind_geometry(rigname, force=False):
     '''
     Get geometry and unbind skinclusters.
 
-    With rt_cst.PRESERVE_SKIN on, geometry that already carries a
+    With rt_constants.PRESERVE_SKIN on, geometry that already carries a
     skinCluster is LEFT BOUND and returned instead: its weights are paint
     work that an unbind destroys. The caller is responsible for the pose
     those meshes are left in -- Setup re-baselines them (rebaseline_skin)
@@ -1965,7 +1964,7 @@ def _delete_orphan_bindposes(poses):
 
 def preserve_skin():
     '''
-    Read rt_cst.PRESERVE_SKIN, defaulting to on.
+    Read rt_constants.PRESERVE_SKIN, defaulting to on.
 
     rig_tail_constants is never reloaded (it holds session state), so a
     Maya session started before this setting existed does not have it;
@@ -1974,7 +1973,7 @@ def preserve_skin():
     Return:
         bool: True when existing skinClusters must be kept.
     '''
-    return bool(getattr(rt_cst, 'PRESERVE_SKIN', True))
+    return bool(getattr(rt_constants, 'PRESERVE_SKIN', True))
 
 
 def find_skincluster(node):
@@ -2076,7 +2075,7 @@ def _chain_influence_joints(rigname):
     Return:
         list: joints to re-baseline
     '''
-    joints = list(rt_cst.JOINTS_BN.get(rigname) or [])
+    joints = list(rt_constants.JOINTS_BN.get(rigname) or [])
     if not joints:
         return []
     for child in cmds.listRelatives(joints[-1], c=True, typ='joint') or []:
@@ -2127,7 +2126,7 @@ def rebaseline_skin(rigname, tolerance=None):
     Arguments:
         rigname (str): Rig component name
         tolerance (float): Position drift treated as unchanged. Defaults
-            to rt_cst.JOINT_POS_TOLERANCE.
+            to rt_constants.JOINT_POS_TOLERANCE.
 
     Return:
         int: influences re-baselined
@@ -2136,7 +2135,7 @@ def rebaseline_skin(rigname, tolerance=None):
     if not joints:
         return 0
     if tolerance is None:
-        tolerance = getattr(rt_cst, 'JOINT_POS_TOLERANCE', 0.001)
+        tolerance = getattr(rt_constants, 'JOINT_POS_TOLERANCE', 0.001)
 
     total = 0
     for geo in find_geometry_for_rigname(rigname):

@@ -33,8 +33,8 @@ import maya.OpenMayaUI as omui
 import maya.cmds as cmds
 from shiboken2 import wrapInstance
 from PySide2 import QtWidgets, QtCore, QtGui
-import rig_tail_constants as rt_cst
-import rig_tail_naming as rt_nam
+import rig_tail_constants as rt_constants
+import rig_tail_naming as rt_naming
 
 class RigTailUI(QtWidgets.QDialog):
     '''Main Tail Rig Builder window.'''
@@ -189,9 +189,9 @@ class RigTailUI(QtWidgets.QDialog):
         # deliberately not rig_tail_constants (it holds the session state),
         # so a constant added after this session started may be missing
         # from the cached module. Fall back rather than crash the window.
-        self.chk_fk.setChecked(getattr(rt_cst, 'BUILD_FK', True))
-        self.chk_ik.setChecked(getattr(rt_cst, 'BUILD_IK', True))
-        self.chk_indiv_fk.setChecked(rt_cst.INDIV_FK)
+        self.chk_fk.setChecked(getattr(rt_constants, 'BUILD_FK', True))
+        self.chk_ik.setChecked(getattr(rt_constants, 'BUILD_IK', True))
+        self.chk_indiv_fk.setChecked(rt_constants.INDIV_FK)
         self.chk_stretchy.setChecked(True)
         # First-column boxes share a width so the second column aligns
         self.chk_fk.setMinimumWidth(52)
@@ -273,7 +273,7 @@ class RigTailUI(QtWidgets.QDialog):
 
         toggles_layout = QtWidgets.QHBoxLayout()
         self.chk_main = QtWidgets.QCheckBox('Control All Tails (cog)')
-        self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_main.setEnabled(len(rt_constants.RIGPARTS) > 1)
         self.chk_main.setToolTip(
             'Drive every tail from one ALL section on the cog, with a '
             'per-tail Override flag to opt out. Needs 2+ rig parts.')
@@ -517,20 +517,20 @@ class RigTailUI(QtWidgets.QDialog):
 
     def load_current_values(self):
         '''Refresh UI fields and checkboxes from rig_tail_constants.'''
-        self.txt_root.setText(rt_cst.ROOT)
-        self.chk_indiv_fk.setChecked(rt_cst.INDIV_FK)
+        self.txt_root.setText(rt_constants.ROOT)
+        self.chk_indiv_fk.setChecked(rt_constants.INDIV_FK)
         self.chk_indiv_fk.setEnabled(self.chk_fk.isChecked())
-        self.chk_stretchy.setChecked(rt_cst.EFFECTS.get('stretchy', False))
-        self.chk_wave.setChecked(rt_cst.EFFECTS.get('wave', False))
-        self.chk_curl.setChecked(rt_cst.EFFECTS.get('curl', False))
-        self.chk_noise.setChecked(rt_cst.EFFECTS.get('noise', False))
-        self.chk_loop.setChecked(rt_cst.EFFECTS.get('loop', False))
-        self.chk_fk.setChecked(getattr(rt_cst, 'BUILD_FK', True))
-        self.chk_ik.setChecked(getattr(rt_cst, 'BUILD_IK', True))
+        self.chk_stretchy.setChecked(rt_constants.EFFECTS.get('stretchy', False))
+        self.chk_wave.setChecked(rt_constants.EFFECTS.get('wave', False))
+        self.chk_curl.setChecked(rt_constants.EFFECTS.get('curl', False))
+        self.chk_noise.setChecked(rt_constants.EFFECTS.get('noise', False))
+        self.chk_loop.setChecked(rt_constants.EFFECTS.get('loop', False))
+        self.chk_fk.setChecked(getattr(rt_constants, 'BUILD_FK', True))
+        self.chk_ik.setChecked(getattr(rt_constants, 'BUILD_IK', True))
         # getattr: a session started before PRESERVE_SKIN existed has a
         # stale constants module without it (constants are never reloaded)
-        self.chk_preserve.setChecked(getattr(rt_cst, 'PRESERVE_SKIN', True))
-        self.chk_main.setChecked(rt_cst.MAIN_CONTROLLER)
+        self.chk_preserve.setChecked(getattr(rt_constants, 'PRESERVE_SKIN', True))
+        self.chk_main.setChecked(rt_constants.MAIN_CONTROLLER)
         self.update_display()
 
     def save_current_values(self):
@@ -549,12 +549,12 @@ class RigTailUI(QtWidgets.QDialog):
         '''
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
-        setattr(rt_cst, 'BUILD_FK', fk)
-        setattr(rt_cst, 'BUILD_IK', ik)
-        rt_cst.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
-        rt_cst.PRESERVE_SKIN = self.chk_preserve.isChecked()
-        rt_cst.MAIN_CONTROLLER = self.chk_main.isChecked()
-        rt_cst.EFFECTS = {
+        setattr(rt_constants, 'BUILD_FK', fk)
+        setattr(rt_constants, 'BUILD_IK', ik)
+        rt_constants.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
+        rt_constants.PRESERVE_SKIN = self.chk_preserve.isChecked()
+        rt_constants.MAIN_CONTROLLER = self.chk_main.isChecked()
+        rt_constants.EFFECTS = {
             'stretchy': self.chk_stretchy.isChecked() and ik,
             'wave': self.chk_wave.isChecked(),
             'curl': self.chk_curl.isChecked(),
@@ -577,10 +577,10 @@ class RigTailUI(QtWidgets.QDialog):
 
     def update_display(self):
         '''Refresh the config-file textbox and configuration summary.'''
-        self.txt_config.setText(rt_cst.LOADED_CONFIG or '')
-        parts = list(rt_cst.RIGPARTS)
+        self.txt_config.setText(rt_constants.LOADED_CONFIG or '')
+        parts = list(rt_constants.RIGPARTS)
         lines = [
-            self._summary_line('ROOT', f"'{rt_cst.ROOT}'"),
+            self._summary_line('ROOT', f"'{rt_constants.ROOT}'"),
             self._summary_line('RIGPARTS', parts),
         ]
         # Excluded parts are not built, so say so here rather than leaving
@@ -588,25 +588,25 @@ class RigTailUI(QtWidgets.QDialog):
         # EXCLUDE, not RIGPARTS_EXCLUDE, to keep the value column near the
         # left edge.
         excluded = [p for p in parts
-                    if p in set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])]
+                    if p in set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])]
         if excluded:
             lines.append(self._summary_line(
                 'EXCLUDE',
                 f'{excluded}   ({len(parts) - len(excluded)} of '
                 f'{len(parts)} built)'))
         display_text = '\n'.join(lines + [
-            self._summary_line('IKFK_MODES', rt_cst.IKFK_MODES),
-            f'NUM_CTRL_FK = {rt_cst.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_cst.NUM_CTRL_IK}',
+            self._summary_line('IKFK_MODES', rt_constants.IKFK_MODES),
+            f'NUM_CTRL_FK = {rt_constants.NUM_CTRL_FK}   NUM_CTRL_IK = {rt_constants.NUM_CTRL_IK}',
             'Control Sizes:',
-            f'  ROOT = {rt_cst.ROOT_CTRL_SZ}  COG = {rt_cst.COG_CTRL_SZ}  BASE = {rt_cst.BASE_CTRL_SZ}',
-            f'  FK = {rt_cst.VARFK_CTRL_SZ}  {rt_cst.FK_CTRL_SZ}    IK = {rt_cst.IK_CTRL_SZ}',
-            f'  SPLINE_BOT = {rt_cst.SPLINE_BOT_SZ}  MID = {rt_cst.SPLINE_MID_SZ}  TOP = {rt_cst.SPLINE_TOP_SZ}',
+            f'  ROOT = {rt_constants.ROOT_CTRL_SZ}  COG = {rt_constants.COG_CTRL_SZ}  BASE = {rt_constants.BASE_CTRL_SZ}',
+            f'  FK = {rt_constants.VARFK_CTRL_SZ}  {rt_constants.FK_CTRL_SZ}    IK = {rt_constants.IK_CTRL_SZ}',
+            f'  SPLINE_BOT = {rt_constants.SPLINE_BOT_SZ}  MID = {rt_constants.SPLINE_MID_SZ}  TOP = {rt_constants.SPLINE_TOP_SZ}',
         ])
         self.txt_display.setText(display_text)
-        self.chk_main.setEnabled(len(rt_cst.RIGPARTS) > 1)
+        self.chk_main.setEnabled(len(rt_constants.RIGPARTS) > 1)
 
     def apply_root_name(self):
-        '''Commit the Root Name textbox to rt_cst.ROOT (stripping a
+        '''Commit the Root Name textbox to rt_constants.ROOT (stripping a
         trailing group label) so the configuration summary and Save
         Config always reflect what is typed. A name already used by an
         unrelated scene node is refused: the build would adopt that
@@ -615,20 +615,20 @@ class RigTailUI(QtWidgets.QDialog):
         working.'''
         root = self.txt_root.text().strip()
         if root:
-            stripped = rt_nam.strip_group_suffix(root)
-            if stripped != rt_cst.ROOT:
-                import rig_tail_cleanup as rt_cln
+            stripped = rt_naming.strip_group_suffix(root)
+            if stripped != rt_constants.ROOT:
+                import rig_tail_cleanup as rt_cleanup
                 if cmds.objExists(stripped) and \
-                        stripped != rt_cln.find_existing_root_grp():
+                        stripped != rt_cleanup.find_existing_root_grp():
                     QtWidgets.QMessageBox.warning(
                         self, 'Invalid Root Name',
                         f"'{stripped}' is already a node in the scene. "
                         "The build would take over that node as the rig "
                         "root group. Choose a name not used by an "
                         "existing node.")
-                    self.txt_root.setText(rt_cst.ROOT)
+                    self.txt_root.setText(rt_constants.ROOT)
                     return
-                rt_cst.ROOT = stripped
+                rt_constants.ROOT = stripped
                 self.update_display()
 
     def on_build_mode_changed(self):
@@ -657,19 +657,19 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_indiv_fk.setEnabled(fk)
         if not fk:
             self.chk_indiv_fk.setChecked(False)
-        if rt_cst.update_ikfk_modes(fk, ik):
+        if rt_constants.update_ikfk_modes(fk, ik):
             self.update_display()
 
     def config_start_path(self):
         '''Config path to preselect in file dialogs: the textbox path if
         one is typed/displayed, otherwise the default CONFIG_FILE.'''
-        return self.txt_config.text().strip() or rt_cst.CONFIG_FILE
+        return self.txt_config.text().strip() or rt_constants.CONFIG_FILE
 
     def load_config_path(self, filepath):
         '''Load the given config file and refresh the UI.'''
-        if rt_cst.load_config(filepath):
+        if rt_constants.load_config(filepath):
             # Reconcile the loaded mode list with the build checkboxes
-            rt_cst.update_ikfk_modes(self.chk_fk.isChecked(),
+            rt_constants.update_ikfk_modes(self.chk_fk.isChecked(),
                                      self.chk_ik.isChecked())
             self.load_current_values()
             QtWidgets.QMessageBox.information(
@@ -705,7 +705,7 @@ class RigTailUI(QtWidgets.QDialog):
             'JSON Files (*.json);;All Files (*)')
         if not filepath:
             return
-        if rt_cst.save_config(filepath):
+        if rt_constants.save_config(filepath):
             self.update_display()
             QtWidgets.QMessageBox.information(
                 self, 'Success', f'Configuration saved to:\n{filepath}')
@@ -726,7 +726,7 @@ class RigTailUI(QtWidgets.QDialog):
             if section == 'ikfk':
                 # Re-derive the active modes from the edited
                 # IKFK_MODES_ALL for the current build checkboxes
-                rt_cst.update_ikfk_modes(self.chk_fk.isChecked(),
+                rt_constants.update_ikfk_modes(self.chk_fk.isChecked(),
                                          self.chk_ik.isChecked())
             self.update_display()
 
@@ -747,11 +747,11 @@ class RigTailUI(QtWidgets.QDialog):
         import rig_tail as rt
 
         self.apply_root_name()
-        # Pass the raw text through; rt_cln.set_root strips the group
+        # Pass the raw text through; rt_cleanup.set_root strips the group
         # label and renames the previous root group in the scene
         root = self.txt_root.text().strip() or None
 
-        if not rt_cst.RIGPARTS:
+        if not rt_constants.RIGPARTS:
             QtWidgets.QMessageBox.warning(self, 'Error',
                 'RIGPARTS is empty. Add rig parts first.')
             return
@@ -774,8 +774,8 @@ class RigTailUI(QtWidgets.QDialog):
             return
 
         # Warn about rig parts with no joints instead of failing mid-build
-        import rig_tail_cleanup as rt_cln
-        missing = [p for p in parts if not rt_cln.rigpart_has_joints(p)]
+        import rig_tail_cleanup as rt_cleanup
+        missing = [p for p in parts if not rt_cleanup.rigpart_has_joints(p)]
         if missing:
             QtWidgets.QMessageBox.warning(self, 'Missing Joints',
                 'No BN joints found for: ' + ', '.join(missing) + '.\n'
@@ -788,7 +788,7 @@ class RigTailUI(QtWidgets.QDialog):
         # force flag is per-click, not a setting: it lasts exactly one
         # build and is never persisted.
         self.save_current_values()
-        rt_cst.FORCE_REBUILD = force
+        rt_constants.FORCE_REBUILD = force
 
         try:
             rt.rig_tail_multiple(root=root, fk=fk, ik=ik)
@@ -811,18 +811,18 @@ class RigTailUI(QtWidgets.QDialog):
         large. The scene is left with the posed BN skeleton and the
         geometry still bound to it, ready to build again or hand on.
         '''
-        import rig_tail_cleanup as rt_cln
+        import rig_tail_cleanup as rt_cleanup
 
         # A session started before this feature existed holds a stale
         # rig_tail_cleanup (modules are only reloaded by TailReload), and
         # the call below would die with a bare AttributeError
-        if not hasattr(rt_cln, 'remove_rig'):
+        if not hasattr(rt_cleanup, 'remove_rig'):
             QtWidgets.QMessageBox.warning(self, 'Remove Rig',
                 'This Maya session is running an older rig_tail_cleanup.\n'
                 'Run the TailReload shelf button, then try again.')
             return
 
-        root_grp = rt_cln.find_existing_root_grp()
+        root_grp = rt_cleanup.find_existing_root_grp()
         if not root_grp:
             QtWidgets.QMessageBox.information(self, 'Remove Rig',
                 'No built rig found in this scene.')
@@ -833,7 +833,7 @@ class RigTailUI(QtWidgets.QDialog):
         # whenever anything is excluded
         import rig_tail_cache as rt_cache
         parts = rt_cache.active_parts()
-        kept = [p for p in rt_cst.RIGPARTS if p not in parts]
+        kept = [p for p in rt_constants.RIGPARTS if p not in parts]
         if not parts:
             QtWidgets.QMessageBox.information(self, 'Remove Rig',
                 'Every rig part is Excluded, so there is nothing to remove.\n'
@@ -866,7 +866,7 @@ class RigTailUI(QtWidgets.QDialog):
             # One undo chunk, so a failed teardown is not left half-applied
             cmds.undoInfo(openChunk=True, chunkName='rigTail Remove Rig')
             try:
-                removed = rt_cln.remove_rig()
+                removed = rt_cleanup.remove_rig()
             finally:
                 cmds.undoInfo(closeChunk=True)
         except Exception as e:
@@ -898,7 +898,7 @@ class RigPartsEditor(QtWidgets.QDialog):
     renameable, and still resolve for L/R pairing - they are simply left
     alone: Setup does not orient or mirror them and leaves their geometry
     bound, and the build neither tears their rig down nor rebuilds it.
-    See rt_cst.RIGPARTS_EXCLUDE.
+    See rt_constants.RIGPARTS_EXCLUDE.
 
     The editor is shared by both windows, so `phase` names the caller
     ('Setup' or 'Build') for the wording that would otherwise have to
@@ -939,12 +939,12 @@ class RigPartsEditor(QtWidgets.QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        excluded = set(getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or [])
+        excluded = set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])
         self.list_widget = self._make_list(
-            [p for p in rt_cst.RIGPARTS if p not in excluded],
+            [p for p in rt_constants.RIGPARTS if p not in excluded],
             f'Rig parts {self.phase} will process.')
         self.list_exclude = self._make_list(
-            [p for p in rt_cst.RIGPARTS if p in excluded],
+            [p for p in rt_constants.RIGPARTS if p in excluded],
             'Rig parts held back from both Setup and Build. They keep their '
             'place in RIGPARTS and their geometry stays bound; Setup leaves '
             'their joints alone, and the build neither tears their rig down '
@@ -1112,7 +1112,7 @@ class RigPartsEditor(QtWidgets.QDialog):
 
         rignames = list()
         for jnt in selected:
-            rigname = rt_nam.get_rigname(jnt, rt_cst.JOINT)
+            rigname = rt_naming.get_rigname(jnt, rt_constants.JOINT)
             if rigname:
                 rignames.append(rigname)
             else:
@@ -1136,8 +1136,8 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.list_widget.addItem(text)
         self._refresh_counts()
         # Validate/warn: an added name with no joints builds nothing
-        import rig_tail_cleanup as rt_cln
-        if not rt_cln.rigpart_has_joints(text):
+        import rig_tail_cleanup as rt_cleanup
+        if not rt_cleanup.rigpart_has_joints(text):
             QtWidgets.QMessageBox.warning(self, 'Missing Joints',
                 f"No BN joints found for rig part '{text}'.")
 
@@ -1165,15 +1165,15 @@ class RigPartsEditor(QtWidgets.QDialog):
         if not new or new == old:
             return
 
-        import rig_tail_cleanup as rt_cln
-        success, message = rt_cln.rename_rigpart(old, new)
+        import rig_tail_cleanup as rt_cleanup
+        success, message = rt_cleanup.rename_rigpart(old, new)
         if success:
             item.setText(new)
             # The scene rename is already committed, so keep the stored
             # exclusion in step even if the dialog is cancelled afterwards -
             # otherwise it would still name a part that no longer exists.
-            stored = getattr(rt_cst, 'RIGPARTS_EXCLUDE', None) or []
-            rt_cst.RIGPARTS_EXCLUDE = [new if p == old else p for p in stored]
+            stored = getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or []
+            rt_constants.RIGPARTS_EXCLUDE = [new if p == old else p for p in stored]
             # Backend already updated RIGPARTS/ROOT/caches; refresh main UI
             if self.parent():
                 self.parent().load_current_values()
@@ -1190,7 +1190,7 @@ class RigPartsEditor(QtWidgets.QDialog):
 
     def accept(self):
         '''
-        Commit both columns to rt_cst.RIGPARTS / RIGPARTS_EXCLUDE.
+        Commit both columns to rt_constants.RIGPARTS / RIGPARTS_EXCLUDE.
 
         RIGPARTS keeps every name, included first then excluded, so the
         roster survives an exclusion intact; RIGPARTS_EXCLUDE records which
@@ -1200,8 +1200,8 @@ class RigPartsEditor(QtWidgets.QDialog):
                     for i in range(self.list_widget.count())]
         excluded = [self.list_exclude.item(i).text()
                     for i in range(self.list_exclude.count())]
-        rt_cst.RIGPARTS = included + excluded
-        rt_cst.RIGPARTS_EXCLUDE = excluded
+        rt_constants.RIGPARTS = included + excluded
+        rt_constants.RIGPARTS_EXCLUDE = excluded
         super().accept()
 
 
@@ -1214,7 +1214,7 @@ class NamingTemplateEditor(QtWidgets.QDialog):
     attribute templates: those are shown as comma-separated values and
     parsed back on OK. IKFK_SWITCH's enum string is derived from
     IKFK_MODES, so it is not edited directly; it is rebuilt via
-    rt_cst.rebuild_derived() whenever the dialog is accepted.
+    rt_constants.rebuild_derived() whenever the dialog is accepted.
     '''
 
     # Human-readable titles per section key
@@ -1303,84 +1303,84 @@ class NamingTemplateEditor(QtWidgets.QDialog):
         '''Return {attr name: display string} for this section.'''
         if self.section == 'types':
             return {
-                'GRP': rt_cst.GRP,
-                'CTRL': rt_cst.CTRL,
-                'JNT': rt_cst.JNT,
-                'SDK': rt_cst.SDK,
-                'CRV': rt_cst.CRV,
-                'CSR': rt_cst.CSR,
-                'HDL': rt_cst.HDL,
-                'EFF': rt_cst.EFF,
-                'VIS': rt_cst.VIS,
-                'COND': rt_cst.COND,
-                'CST': rt_cst.CST,
+                'GRP': rt_constants.GRP,
+                'CTRL': rt_constants.CTRL,
+                'JNT': rt_constants.JNT,
+                'SDK': rt_constants.SDK,
+                'CRV': rt_constants.CRV,
+                'CSR': rt_constants.CSR,
+                'HDL': rt_constants.HDL,
+                'EFF': rt_constants.EFF,
+                'VIS': rt_constants.VIS,
+                'COND': rt_constants.COND,
+                'CST': rt_constants.CST,
             }
         elif self.section == 'controls':
             return {
-                'ROOT_CTRL': rt_cst.ROOT_CTRL,
-                'COG_CTRL': rt_cst.COG_CTRL,
-                'BASECTRL_GRP': rt_cst.BASECTRL_GRP,
-                'BASECTRL': rt_cst.BASECTRL,
-                'CTRLROOT_GRP': rt_cst.CTRLROOT_GRP,
-                'CTRL_GRP': rt_cst.CTRL_GRP,
-                'CONTROL': rt_cst.CONTROL,
-                'JOINT': rt_cst.JOINT,
+                'ROOT_CTRL': rt_constants.ROOT_CTRL,
+                'COG_CTRL': rt_constants.COG_CTRL,
+                'BASECTRL_GRP': rt_constants.BASECTRL_GRP,
+                'BASECTRL': rt_constants.BASECTRL,
+                'CTRLROOT_GRP': rt_constants.CTRLROOT_GRP,
+                'CTRL_GRP': rt_constants.CTRL_GRP,
+                'CONTROL': rt_constants.CONTROL,
+                'JOINT': rt_constants.JOINT,
             }
         elif self.section == 'groups':
             return {
-                'ROOT_GRP': rt_cst.ROOT_GRP,
-                'GEOMETRY_GRP': rt_cst.GEOMETRY_GRP,
-                'CONTROL_GRP': rt_cst.CONTROL_GRP,
-                'SKELETON_GRP': rt_cst.SKELETON_GRP,
-                'RIG_SYSTEMS_GRP': rt_cst.RIG_SYSTEMS_GRP,
-                'CLUSTERS_GRP': rt_cst.CLUSTERS_GRP,
-                'SCALE_GRP': rt_cst.SCALE_GRP,
-                'SDK_GRP': rt_cst.SDK_GRP,
-                'SDK_JNT': rt_cst.SDK_JNT,
-                'GROUP': rt_cst.GROUP,
+                'ROOT_GRP': rt_constants.ROOT_GRP,
+                'GEOMETRY_GRP': rt_constants.GEOMETRY_GRP,
+                'CONTROL_GRP': rt_constants.CONTROL_GRP,
+                'SKELETON_GRP': rt_constants.SKELETON_GRP,
+                'RIG_SYSTEMS_GRP': rt_constants.RIG_SYSTEMS_GRP,
+                'CLUSTERS_GRP': rt_constants.CLUSTERS_GRP,
+                'SCALE_GRP': rt_constants.SCALE_GRP,
+                'SDK_GRP': rt_constants.SDK_GRP,
+                'SDK_JNT': rt_constants.SDK_JNT,
+                'GROUP': rt_constants.GROUP,
             }
         elif self.section == 'curves':
             return {
-                'CURVE': rt_cst.CURVE,
-                'CURVE_SCALE': rt_cst.CURVE_SCALE,
-                'CURVEINFO': rt_cst.CURVEINFO,
-                'CLUSTER_GRP': rt_cst.CLUSTER_GRP,
-                'CLUSTER': rt_cst.CLUSTER,
-                'CLUSTER_HANDLE': rt_cst.CLUSTER_HANDLE,
-                'UPV_CTRLGRP': rt_cst.UPV_CTRLGRP,
-                'UPV_CTRL': rt_cst.UPV_CTRL,
-                'CLUSTER_UPV': rt_cst.CLUSTER_UPV,
-                'CLUSTER_UPV_HANDLE': rt_cst.CLUSTER_UPV_HANDLE,
+                'CURVE': rt_constants.CURVE,
+                'CURVE_SCALE': rt_constants.CURVE_SCALE,
+                'CURVEINFO': rt_constants.CURVEINFO,
+                'CLUSTER_GRP': rt_constants.CLUSTER_GRP,
+                'CLUSTER': rt_constants.CLUSTER,
+                'CLUSTER_HANDLE': rt_constants.CLUSTER_HANDLE,
+                'UPV_CTRLGRP': rt_constants.UPV_CTRLGRP,
+                'UPV_CTRL': rt_constants.UPV_CTRL,
+                'CLUSTER_UPV': rt_constants.CLUSTER_UPV,
+                'CLUSTER_UPV_HANDLE': rt_constants.CLUSTER_UPV_HANDLE,
             }
         elif self.section == 'spline':
             return {
-                'SPLINE_GRP': rt_cst.SPLINE_GRP,
-                'SPLINE_HANDLE': rt_cst.SPLINE_HANDLE,
-                'SPLINE_EFFECTOR': rt_cst.SPLINE_EFFECTOR,
-                'SPLINE_IK_CTRL': rt_cst.SPLINE_IK_CTRL,
-                'SPLINE_FLOAT_CTRL': rt_cst.SPLINE_FLOAT_CTRL,
-                'SPLINE_BOT': rt_cst.SPLINE_BOT,
-                'SPLINE_BOT_SML': rt_cst.SPLINE_BOT_SML,
-                'SPLINE_MID_ROT': rt_cst.SPLINE_MID_ROT,
-                'SPLINE_MID': rt_cst.SPLINE_MID,
-                'SPLINE_TOP_SML': rt_cst.SPLINE_TOP_SML,
-                'SPLINE_TOP': rt_cst.SPLINE_TOP,
+                'SPLINE_GRP': rt_constants.SPLINE_GRP,
+                'SPLINE_HANDLE': rt_constants.SPLINE_HANDLE,
+                'SPLINE_EFFECTOR': rt_constants.SPLINE_EFFECTOR,
+                'SPLINE_IK_CTRL': rt_constants.SPLINE_IK_CTRL,
+                'SPLINE_FLOAT_CTRL': rt_constants.SPLINE_FLOAT_CTRL,
+                'SPLINE_BOT': rt_constants.SPLINE_BOT,
+                'SPLINE_BOT_SML': rt_constants.SPLINE_BOT_SML,
+                'SPLINE_MID_ROT': rt_constants.SPLINE_MID_ROT,
+                'SPLINE_MID': rt_constants.SPLINE_MID,
+                'SPLINE_TOP_SML': rt_constants.SPLINE_TOP_SML,
+                'SPLINE_TOP': rt_constants.SPLINE_TOP,
             }
         elif self.section == 'ikfk':
             return {
-                'IKFK': rt_cst.IKFK,
+                'IKFK': rt_constants.IKFK,
                 # Edit the full list; the active subset (IKFK_MODES) is
                 # re-derived from it for the current build options
-                'IKFK_MODES': ', '.join(rt_cst.IKFK_MODES_ALL),
+                'IKFK_MODES': ', '.join(rt_constants.IKFK_MODES_ALL),
                 # Show (longName, niceName, dv); enum derived from IKFK_MODES
-                'IKFK_SWITCH': ', '.join([rt_cst.IKFK_SWITCH[0],
-                                          rt_cst.IKFK_SWITCH[1],
-                                          str(rt_cst.IKFK_SWITCH[3])]),
-                'IKFK_DIVIDER': ', '.join(rt_cst.IKFK_DIVIDER),
-                'STRETCH_DIVIDER': ', '.join(rt_cst.STRETCH_DIVIDER),
-                'ANIM_DIVIDER': ', '.join(rt_cst.ANIM_DIVIDER),
-                'TWIST_DIVIDER': ', '.join(rt_cst.TWIST_DIVIDER),
-                'SCALE_DIVIDER': ', '.join(rt_cst.SCALE_DIVIDER),
+                'IKFK_SWITCH': ', '.join([rt_constants.IKFK_SWITCH[0],
+                                          rt_constants.IKFK_SWITCH[1],
+                                          str(rt_constants.IKFK_SWITCH[3])]),
+                'IKFK_DIVIDER': ', '.join(rt_constants.IKFK_DIVIDER),
+                'STRETCH_DIVIDER': ', '.join(rt_constants.STRETCH_DIVIDER),
+                'ANIM_DIVIDER': ', '.join(rt_constants.ANIM_DIVIDER),
+                'TWIST_DIVIDER': ', '.join(rt_constants.TWIST_DIVIDER),
+                'SCALE_DIVIDER': ', '.join(rt_constants.SCALE_DIVIDER),
             }
         return {}
 
@@ -1389,7 +1389,7 @@ class NamingTemplateEditor(QtWidgets.QDialog):
         if self.section == 'ikfk':
             mode_lines = '\n'.join(
                 f'{mode}: {desc}'
-                for mode, desc in rt_cst.IKFK_MODE_DESCRIPTIONS.items())
+                for mode, desc in rt_constants.IKFK_MODE_DESCRIPTIONS.items())
             return {
                 'IKFK': 'Name template of the per-tail switch attribute '
                         'on the cog control (e.g. tail_ikfk).',
@@ -1446,8 +1446,8 @@ class NamingTemplateEditor(QtWidgets.QDialog):
                 parsed[name] = text
 
         for name, value in parsed.items():
-            setattr(rt_cst, name, value)
-        rt_cst.rebuild_derived()
+            setattr(rt_constants, name, value)
+        rt_constants.rebuild_derived()
         super().accept()
 
 
@@ -1561,7 +1561,7 @@ class ConstantsEditor(QtWidgets.QDialog):
                 continue
 
             checkbox = QtWidgets.QCheckBox('Preserve')
-            checkbox.setChecked(bool(rt_cst.PRESERVE_CTRL.get(keys[0], False)))
+            checkbox.setChecked(bool(rt_constants.PRESERVE_CTRL.get(keys[0], False)))
             checkbox.setToolTip(
                 f"Keep existing shapes for: {', '.join(keys)}.\n"
                 f'{name} is ignored while this is checked.')
@@ -1596,37 +1596,37 @@ class ConstantsEditor(QtWidgets.QDialog):
         '''Return {attr name: current value} for this section.'''
         if self.section == 'num':
             return {
-                'NUM_CTRL_FK': rt_cst.NUM_CTRL_FK,
-                'NUM_CTRL_IK': rt_cst.NUM_CTRL_IK,
+                'NUM_CTRL_FK': rt_constants.NUM_CTRL_FK,
+                'NUM_CTRL_IK': rt_constants.NUM_CTRL_IK,
             }
         elif self.section == 'size':
             return {
-                'ROOT_CTRL_SZ': rt_cst.ROOT_CTRL_SZ,
-                'COG_CTRL_SZ': rt_cst.COG_CTRL_SZ,
-                'BASE_CTRL_SZ': rt_cst.BASE_CTRL_SZ,
-                'VARFK_CTRL_SZ': rt_cst.VARFK_CTRL_SZ,
-                'FK_CTRL_SZ': rt_cst.FK_CTRL_SZ,
-                'IK_CTRL_SZ': rt_cst.IK_CTRL_SZ,
-                'SPLINE_UPV_SZ': rt_cst.SPLINE_UPV_SZ,
-                'SPLINE_BOT_SZ': rt_cst.SPLINE_BOT_SZ,
-                'SPLINE_BOT_SML_SZ': rt_cst.SPLINE_BOT_SML_SZ,
-                'SPLINE_MID_ROT_SZ': rt_cst.SPLINE_MID_ROT_SZ,
-                'SPLINE_MID_SZ': rt_cst.SPLINE_MID_SZ,
-                'SPLINE_TOP_SML_SZ': rt_cst.SPLINE_TOP_SML_SZ,
-                'SPLINE_TOP_SZ': rt_cst.SPLINE_TOP_SZ,
+                'ROOT_CTRL_SZ': rt_constants.ROOT_CTRL_SZ,
+                'COG_CTRL_SZ': rt_constants.COG_CTRL_SZ,
+                'BASE_CTRL_SZ': rt_constants.BASE_CTRL_SZ,
+                'VARFK_CTRL_SZ': rt_constants.VARFK_CTRL_SZ,
+                'FK_CTRL_SZ': rt_constants.FK_CTRL_SZ,
+                'IK_CTRL_SZ': rt_constants.IK_CTRL_SZ,
+                'SPLINE_UPV_SZ': rt_constants.SPLINE_UPV_SZ,
+                'SPLINE_BOT_SZ': rt_constants.SPLINE_BOT_SZ,
+                'SPLINE_BOT_SML_SZ': rt_constants.SPLINE_BOT_SML_SZ,
+                'SPLINE_MID_ROT_SZ': rt_constants.SPLINE_MID_ROT_SZ,
+                'SPLINE_MID_SZ': rt_constants.SPLINE_MID_SZ,
+                'SPLINE_TOP_SML_SZ': rt_constants.SPLINE_TOP_SML_SZ,
+                'SPLINE_TOP_SZ': rt_constants.SPLINE_TOP_SZ,
             }
         return {}
 
     def accept(self):
         '''Commit all spinbox values and Preserve flags to rig_tail_constants.'''
         for name, spinbox in self.fields.items():
-            setattr(rt_cst, name, spinbox.value())
+            setattr(rt_constants, name, spinbox.value())
         # Written into the existing dict so any control type without a
         # size constant of its own keeps its current setting
         for name, checkbox in self.preserve_fields.items():
             for key in self.PRESERVE_KEYS.get(name, []):
-                rt_cst.PRESERVE_CTRL[key] = checkbox.isChecked()
-        rt_cst.rebuild_derived()
+                rt_constants.PRESERVE_CTRL[key] = checkbox.isChecked()
+        rt_constants.rebuild_derived()
         super().accept()
 
 def get_maya_window():
