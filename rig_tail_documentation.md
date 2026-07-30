@@ -783,9 +783,21 @@ copying `rotateOrder`, `preferredAngle` and the display `radius` from the
 nearest surviving neighbour. On a count change a chain whose names all parse against the
 configured template is renumbered sequentially (logged at INFO); one with
 arbitrary names keeps them positionally. The `_ee_` end joint is excluded
-from the chain by `get_joint_chain`, so it is looked up from the tip,
-re-parented and placed along the new final segment at its original distance —
-Setup's end-joint handling depends on it.
+from the chain by `get_joint_chain`, so it is looked up from the tip and
+re-parented onto the new one — Setup's end-joint handling depends on it.
+
+**Where the tail ends.** A chain with an `_ee_` ends *at the `_ee_`*, not at
+its last BN joint, so the `_ee_` is the final point of the resample rather
+than a fixed-length stub dragged along behind the tip. It stays exactly where
+the artist put it at every joint count, and the BN joints are spread over the
+whole length up to it: the last BN joint stops one segment short, so that gap
+narrows as the count rises (30 joints leave a visibly bigger gap than 50 do).
+A chain with no `_ee_` — or one sitting on top of its tip, which would hand
+the resample a zero-length final span — keeps the older rule instead: the
+last BN joint is the end and is pinned there, and any coincident `_ee_` is
+placed at its original distance along the new final segment. The session
+original cache records which of the two applied, so an `_ee_` added or
+deleted between clicks re-baselines rather than resampling a stale length.
 
 **Display radius.** Every joint of a rebuilt chain, `_ee_` included, ends
 up at one radius: the chain's own, capped at `RADIUS_SEGMENT_FRACTION` (0.5)
@@ -910,9 +922,10 @@ What the scene tests pin down:
 - `test_rebuild_count(chain)` — grow, shrink and same-count in one pass.
   The chain **as it stands in the scene**, walked from the root rather
   than read off the return value, is n joints in one parent-to-child
-  line; both endpoints stay where they were; no two joints coincide; and
-  the `_ee_` hangs off the new tip at its original distance, along the new
-  final segment.
+  line; both ends of the *tail* stay where they were (the base, and the
+  `_ee_` where there is one, otherwise the last BN joint); no two joints
+  coincide; the `_ee_` hangs off the new tip; and the last BN joint stops
+  one segment short of it, a gap that narrows as the count rises.
 - `test_names_preserved(chain)` — at `n == N` (what the UI opens on) the
   joints move and nothing else changes: no renumbering, no new nodes, no
   renamed `_ee_`. Uses Power at k=3 so the claim is not vacuous on a chain

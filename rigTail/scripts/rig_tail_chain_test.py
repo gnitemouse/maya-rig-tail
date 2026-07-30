@@ -140,20 +140,6 @@ def _linspace(start, stop, n):
     return [start + h * i for i in range(n)]
 
 
-def _sub3(a, b):
-    return [a[i] - b[i] for i in range(3)]
-
-
-def _angle(a, b):
-    """Angle in degrees between two vectors (0 if either is degenerate)."""
-    la = math.sqrt(sum(x * x for x in a))
-    lb = math.sqrt(sum(x * x for x in b))
-    if la < 1e-9 or lb < 1e-9:
-        return 0.0
-    d = sum(x * y for x, y in zip(a, b)) / (la * lb)
-    return math.degrees(math.acos(max(-1.0, min(1.0, d))))
-
-
 def _max_move(before, after):
     """Largest distance between two lists of positions, pairwise."""
     return max((math.dist(a, b) for a, b in zip(before, after)), default=0.0)
@@ -791,12 +777,18 @@ def test_rebuild_count(rigname=DEFAULT_CHAIN):
         parent-to-child line. A rebuild that returned the right names
         while orphaning a joint or leaving a stale parent passes any check
         that only looks at the return value.
-      Both ends sit where they always did. Resampling pins the endpoints,
-        so no count change may shorten the tail or move its base.
+      Both ends of the TAIL sit where they always did. The base is the root
+        joint; the end is the _ee_ when the chain has one, otherwise the
+        last BN joint. Resampling pins them, so no count change may shorten
+        the tail or move its base.
       No two joints land on top of each other.
-      The _ee_ still hangs off the NEW tip, at its original distance, on
-        the new final segment. Left behind at the old tip it would hand
-        Setup a bogus final aim direction.
+      The _ee_ still hangs off the NEW tip. Left behind at the old tip it
+        would hand Setup a bogus final aim direction.
+      The last BN joint stops ONE SEGMENT short of the _ee_, and that gap
+        narrows as the count rises. The _ee_ is the end of the tail's
+        length, not a fixed-length stub tacked onto whatever the last BN
+        joint happens to be, so 50 joints have to reach closer to it than
+        30 do.
     """
     if not _require_maya('test_rebuild_count'):
         return None
@@ -807,8 +799,10 @@ def test_rebuild_count(rigname=DEFAULT_CHAIN):
 
     state = _snapshot(root)
     start_n = len(bn)
-    ee_distance = (math.dist(state['ee_pos'], state['positions'][-1])
-                   if state['ee_pos'] else None)
+    has_ee = bool(state['ee_pos'])
+    # Where the tail ends: the _ee_ if there is one, the last BN joint if not.
+    tail_end = state['ee_pos'] if has_ee else state['positions'][-1]
+    gaps = {}
     rt_chain_build.clear_cache(root)
     ok = True
     try:
@@ -829,18 +823,23 @@ def test_rebuild_count(rigname=DEFAULT_CHAIN):
                            if broken else '')
 
             positions = _positions(chain)
-            ends = max(math.dist(positions[0], state['positions'][0]),
-                       math.dist(positions[-1], state['positions'][-1]))
-            ok &= _verdict(f'{label} endpoints pinned', ends < POS_TOL_SCENE,
-                           f'max end move={ends:.5f}')
+            moved = math.dist(positions[0], state['positions'][0])
+            ok &= _verdict(f'{label} base pinned', moved < POS_TOL_SCENE,
+                           f'base moved {moved:.5f}')
             segments = [math.dist(positions[i], positions[i + 1])
                         for i in range(len(positions) - 1)]
             ok &= _verdict(f'{label} no coincident joints',
                            min(segments) > rt_chain_spacing.EPS,
                            f'shortest segment={min(segments):.6f}')
 
-            if ee_distance is None:
+            if not has_ee:
+                # No _ee_: the last BN joint IS the end of the tail, so it is
+                # the thing that may not move.
+                moved = math.dist(positions[-1], tail_end)
+                ok &= _verdict(f'{label} tip pinned', moved < POS_TOL_SCENE,
+                               f'tip moved {moved:.5f}')
                 continue
+
             ee = rt_chain_build._end_joint(chain[-1])
             ok &= _verdict(f'{label} _ee_ still on the tip', bool(ee),
                            f'{ee.split("|")[-1]} under {chain[-1]}' if ee
@@ -848,14 +847,26 @@ def test_rebuild_count(rigname=DEFAULT_CHAIN):
             if not ee:
                 continue
             ee_pos = cmds.xform(ee, q=True, ws=True, t=True)
-            got = math.dist(ee_pos, positions[-1])
-            ok &= _verdict(f'{label} _ee_ keeps its distance',
-                           abs(got - ee_distance) < POS_TOL_SCENE,
-                           f'{ee_distance:.5f} -> {got:.5f}')
-            off = _angle(_sub3(positions[-1], positions[-2]),
-                         _sub3(ee_pos, positions[-1]))
-            ok &= _verdict(f'{label} _ee_ on the new final segment',
-                           off < 1.0, f'{off:.3f} deg off the segment')
+            moved = math.dist(ee_pos, tail_end)
+            ok &= _verdict(f'{label} _ee_ pinned', moved < POS_TOL_SCENE,
+                           f'_ee_ moved {moved:.5f}')
+            gap = math.dist(ee_pos, positions[-1])
+            gaps[n] = gap
+            # Uniform spacing runs base to _ee_, so the last gap is just
+            # another segment. The margin is for chord vs arclength on a
+            # curved tail, not for a gap of the wrong order.
+            mean = _mean_segment(positions + [ee_pos])
+            ok &= _verdict(f'{label} last joint one segment short of the _ee_',
+                           abs(gap - mean) < 0.25 * mean,
+                           f'gap={gap:.5f}, mean segment={mean:.5f}')
+
+        if len(gaps) > 1:
+            counts = sorted(gaps)
+            ok &= _verdict('the _ee_ gap narrows as the count rises',
+                           all(gaps[counts[i]] > gaps[counts[i + 1]]
+                               for i in range(len(counts) - 1)),
+                           ', '.join(f'{c} joints: {gaps[c]:.4f}'
+                                     for c in counts))
         return ok
     finally:
         _restore(state, root)
@@ -1164,6 +1175,12 @@ def test_guards():
         # let it through instead of refusing every finished chain.
         ee = cmds.createNode('joint', name=f'{SCRATCH}_ee_jnt')
         cmds.parent(ee, tip)
+        # Out past the tip, where a real _ee_ lives. Left at the origin it
+        # would sit on the base and hand the resample a chain that doubles
+        # back on itself, since the _ee_ is now the end of the length being
+        # re-spaced rather than a stub dragged behind the tip.
+        tip_pos = cmds.xform(tip, q=True, ws=True, t=True)
+        cmds.xform(ee, ws=True, t=[tip_pos[0] + 2.0, tip_pos[1], tip_pos[2]])
         ok &= rebuilds('_ee_ child is not treated as a branch')
 
         # 6. A lone joint is not a chain (_guard_min_length).
@@ -1260,11 +1277,14 @@ def test_cache_no_compounding(rigname=DEFAULT_CHAIN):
         # found. Every one of those rebuilds read it and none rewrote it.
         entry = rt_chain_build._ORIGINALS.get(_long(root), {})
         cached = entry.get('positions') or []
+        # The baseline runs the tail's full length, so it carries one more
+        # point than the chain has BN joints whenever there is an _ee_.
+        want = n + (1 if state['ee_pos'] else 0)
         ok &= _verdict('cached original is the chain as it was found',
-                       len(cached) == n and
+                       len(cached) == want and
                        _max_move(cached, original) < POS_TOL_SCENE,
-                       f'{len(cached)} cached position(s), max difference='
-                       f'{_max_move(cached, original):.6f}')
+                       f'{len(cached)} cached position(s), wanted {want}, '
+                       f'max difference={_max_move(cached, original):.6f}')
 
         # Hand-edited chains re-baseline instead of snapping back.
         chain = _chain_bn(root)

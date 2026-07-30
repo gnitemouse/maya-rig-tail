@@ -330,7 +330,7 @@ def _apply_radius(joints, radius):
 
 # WRITING THE RESULT ====================================================
 
-def _write_chain(joints, positions, rigname, index_offset=0):
+def _write_chain(joints, positions, rigname, index_offset=0, ee_pos=None):
     '''
     Move existing joints to new positions. Handles count changes by
     creating or deleting joints as needed, preserving the _ee_ end joint.
@@ -342,6 +342,10 @@ def _write_chain(joints, positions, rigname, index_offset=0):
         index_offset (int): index the first joint of this span carries in the
             full chain. Non-zero for a rebuild that starts partway down, so
             renumbering continues the run above instead of restarting at 0.
+        ee_pos ([x, y, z]): world position for the _ee_ end joint, which is
+            the resample's own final point when the _ee_ took part in it.
+            None falls back to holding the _ee_'s original distance out along
+            the new final segment.
 
     Return:
         list: new chain joints (BN only, no _ee_)
@@ -359,7 +363,7 @@ def _write_chain(joints, positions, rigname, index_offset=0):
         # would give Setup a bogus final aim direction.
         for j, pos in zip(bn, positions):
             cmds.xform(j, ws=True, t=pos)
-        _place_ee(ee, positions, ee_distance)
+        _place_ee(ee, positions, ee_distance, ee_pos)
         return list(bn)
 
     # Renumber only conventional chains.  Arbitrary artist names are kept
@@ -368,10 +372,10 @@ def _write_chain(joints, positions, rigname, index_offset=0):
         joints = _renumber_chain(joints, rigname, index_offset)
 
     if n < old_n:
-        return _shrink_chain(joints, positions, rigname, ee_distance)
+        return _shrink_chain(joints, positions, rigname, ee_distance, ee_pos)
     else:
         return _grow_chain(joints, positions, rigname, ee_distance,
-                           index_offset)
+                           index_offset, ee_pos)
 
 
 def _renumber_chain(joints, rigname, index_offset=0):
@@ -408,7 +412,7 @@ def _can_renumber(joints, rigname):
         return False
 
 
-def _shrink_chain(joints, positions, rigname, ee_distance):
+def _shrink_chain(joints, positions, rigname, ee_distance, ee_pos=None):
     '''Delete surplus joints, keep first n, reposition.'''
     bn = [j for j in joints if '_ee_' not in j]
     keep = bn[:len(positions)]
@@ -431,11 +435,12 @@ def _shrink_chain(joints, positions, rigname, ee_distance):
             cmds.parent(child, keep[-1] if keep else joints[0])
         cmds.delete(j)
 
-    _place_ee(ee, positions, ee_distance)
+    _place_ee(ee, positions, ee_distance, ee_pos)
     return cmds.ls(keep, type='joint') or keep
 
 
-def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0):
+def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0,
+                ee_pos=None):
     '''Create new joints to reach target count, reposition all.'''
     bn = [j for j in joints if '_ee_' not in j]
     old_n = len(bn)
@@ -460,7 +465,7 @@ def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0):
     ee = _find_ee(joints)
     if ee:
         ee = (cmds.parent(ee, result[-1]) or [ee])[0]
-        _place_ee(ee, positions, ee_distance)
+        _place_ee(ee, positions, ee_distance, ee_pos)
 
     return result
 
@@ -485,10 +490,22 @@ def _copy_joint_attrs(src, dst):
             logger.debug(f'Could not copy {attr} {src} -> {dst}: {exc}')
 
 
-def _place_ee(ee, positions, distance):
-    '''Put the _ee_ end joint on the new final segment's direction, at its
-    original distance from the old tip.'''
-    if not ee or len(positions) < 2:
+def _place_ee(ee, positions, distance, target=None):
+    '''Put the _ee_ end joint where the rebuild wants it.
+
+    `target` is the resample's own final point: the _ee_ marks the end of the
+    tail's length, so it takes part in the resample and lands back exactly
+    where the artist left it, whatever the joint count. Without one -- no
+    _ee_ took part, because it sits on top of the tip -- fall back to the old
+    rule: its original distance out along the new final segment, so it still
+    hands Setup a sane final aim direction.
+    '''
+    if not ee:
+        return
+    if target is not None:
+        cmds.xform(ee, ws=True, t=list(target))
+        return
+    if len(positions) < 2:
         return
     last_dir = _norm_vec(_sub(positions[-1], positions[-2]))
     cmds.xform(ee, ws=True,
@@ -704,6 +721,12 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
 
     Uses the session original cache to avoid compounding distortion.
 
+    Where the chain ends depends on whether it has an _ee_ end joint. With
+    one, the _ee_ is the end: it stays put at every count and the BN joints
+    are spread over the full length up to it, so the last BN joint stops one
+    segment short of the _ee_ and that gap narrows as the count rises.
+    Without one, the last BN joint is the end and is pinned there itself.
+
     Arguments:
         root_joint (str): root joint of the chain
         n (int): target joint count (n >= 2)
@@ -756,6 +779,23 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         key = (cmds.ls(chain[0], long=True) or [chain[0]])[0]
         current_positions = [cmds.xform(j, q=True, ws=True, t=True)
                              for j in chain if '_ee_' not in j]
+        # The _ee_ is where the tail actually ends, so it is the last point of
+        # the resample rather than something dragged along behind the tip.
+        # That pins it in world and spreads the BN joints over the WHOLE
+        # length up to it: the gap between the last BN joint and the _ee_ is
+        # one segment of the new count, so it narrows as the count rises
+        # instead of the tail stopping ever further short of its own end.
+        # Without an _ee_ the last BN joint is the end and is pinned instead.
+        ee = _end_joint(chain[-1])
+        ee_source = cmds.xform(ee, q=True, ws=True, t=True) if ee else None
+        if ee_source and _length_vec(
+                _sub(ee_source, current_positions[-1])) < rt_chain_spacing.EPS:
+            # An _ee_ sitting on top of the tip adds no length and would give
+            # the resample a zero-length final span. Leave it out and let
+            # _place_ee follow the tip the old way.
+            ee_source = None
+        if ee_source:
+            current_positions.append(ee_source)
         rigname = _guess_rigname(root_joint)
         # Read the cascade seed while the chain still stands as it was:
         # re-spacing moves the joints, so its own roll is unreadable after.
@@ -773,15 +813,22 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
                 _length_vec(_sub(current_positions[i], written[i]))
                 for i in range(min(len(current_positions), len(written)))
             ) if written else float('inf')
-            if drift > rt_constants.JOINT_POS_TOLERANCE:
-                # Hand-edited — re-baseline
+            if (drift > rt_constants.JOINT_POS_TOLERANCE or
+                    _ORIGINALS[key].get('has_ee') != bool(ee_source)):
+                # Hand-edited, or the _ee_ came or went since the baseline was
+                # taken — either way the cached source no longer describes the
+                # length being re-spaced. Re-baseline.
                 _ORIGINALS[key]['positions'] = [list(p) for p in current_positions]
                 _ORIGINALS[key]['radius'] = _joint_radius(chain[0])
+                _ORIGINALS[key]['has_ee'] = bool(ee_source)
             source = _ORIGINALS[key]['positions']
         else:
             _ORIGINALS[key] = {
                 'positions': [list(p) for p in current_positions],
                 'written': None,
+                # Whether that baseline runs all the way out to an _ee_, so a
+                # later rebuild can tell a stale source from a live one.
+                'has_ee': bool(ee_source),
                 # The radius as the artist left it, cached for the same
                 # reason the positions are: every later rebuild fits its
                 # radius to this, so raising the count and lowering it again
@@ -790,18 +837,20 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             }
             source = current_positions
 
-        # Resample
+        # Resample.  With an _ee_ in the source the chain needs one more point
+        # than it has BN joints: the last one belongs to the _ee_.
         positions, snapped = rt_chain_spacing.resample(
-            source, n, mode, param=param, invert=invert, snap=snap)
+            source, n + 1 if ee_source else n, mode,
+            param=param, invert=invert, snap=snap)
+        ee_pos = positions.pop() if ee_source else None
 
         # Write.  get_joint_chain stops before the _ee_, so append it here:
-        # _write_chain re-parents and re-places it along the new final
-        # segment.
+        # _write_chain re-parents it onto the new tip and re-places it.
         all_joints = list(chain)
-        ee = _end_joint(chain[-1])
         if ee:
             all_joints.append(ee)
-        result = _write_chain(all_joints, positions, rigname, index_offset)
+        result = _write_chain(all_joints, positions, rigname, index_offset,
+                              ee_pos)
 
         # One radius for the whole span, sized to the spacing it ended up
         # with. Without this a grown chain mixes the artist's radius with
@@ -821,7 +870,11 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         # long DAG path so subsequent edits still use the original source.
         result_key = (cmds.ls(result[0], long=True) or [result[0]])[0]
         entry = _ORIGINALS.pop(key)
-        entry['written'] = [list(p) for p in positions]
+        # Written mirrors current_positions point for point, _ee_ included, so
+        # the next rebuild's drift check notices a hand-moved _ee_ as readily
+        # as a hand-moved joint.
+        entry['written'] = ([list(p) for p in positions] +
+                            ([list(ee_pos)] if ee_pos else []))
         _ORIGINALS[result_key] = entry
 
         span = 'base' if not index_offset else f'joint {index_offset}'
