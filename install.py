@@ -4,8 +4,11 @@ author: Daisy Jane @gnitemouse
 
 Install Rig Tail as a Maya module and add shelf launchers.
 
-Drag this file into Maya, choose an install location, and optionally add the
-Joint Chain Builder launcher. The module registration and install manifest are
+Drag this file into Maya, choose an install location, and tick the shelf
+buttons you want. The Tail Rig Builder is always installed; the Joint Chain
+Builder, Tail Rig Setup and Tail Rig Reload launchers are optional. Installing
+to a folder copies only the files the ticked buttons need -- running in place
+copies nothing at all. The module registration and install manifest are
 written under ~/Documents/maya/modules/. Reinstalling updates files in place.
 
 Requires Maya 2020+ (Python 3).
@@ -47,6 +50,63 @@ SHELF_BUILD_LABEL = 'TailBuild'
 SHELF_SETUP_LABEL = 'TailSetup'
 SHELF_RELOAD_LABEL = 'TailReload'
 SHELF_CHAIN_BUILD_LABEL = 'ChainBuild'
+
+# The four shelf buttons, in the order they appear in the install dialog and
+# on the shelf. BUILD is the tool proper and is never optional.
+CHAIN = 'chain'
+SETUP = 'setup'
+BUILD = 'build'
+RELOAD = 'reload'
+COMPONENTS = (CHAIN, SETUP, BUILD, RELOAD)
+
+SHELF_LABELS = {
+    CHAIN: SHELF_CHAIN_BUILD_LABEL,
+    SETUP: SHELF_SETUP_LABEL,
+    BUILD: SHELF_BUILD_LABEL,
+    RELOAD: SHELF_RELOAD_LABEL,
+}
+
+# Scripts each optional button owns. Anything absent from this table is core
+# -- the Builder's own modules and the shared library beneath them -- and
+# always installs.
+#
+# rig_tail_setup.py appears under BOTH Setup and Chain. It is the Setup phase
+# proper, but Chain's orient option calls rt_setup.aim_frames
+# (rig_tail_chain_build._orient_chain), so Chain needs the file even when the
+# Setup button is not installed. Its UI and tests stay Setup-only.
+#
+# The Builder deliberately owns nothing here: rig_tail.py defers its
+# rig_tail_setup import into setup_tails() so the build never needs a Setup
+# file on disk. Keep it that way -- a top-level import there would make every
+# selection below install rig_tail_setup.py.
+COMPONENT_SCRIPTS = {
+    CHAIN: (
+        'rig_tail_chain_build.py',
+        'rig_tail_chain_build_ui.py',
+        'rig_tail_chain_spacing.py',
+        'rig_tail_chain_test.py',
+        'rig_tail_setup.py',
+    ),
+    SETUP: (
+        'rig_tail_setup.py',
+        'rig_tail_setup_ui.py',
+        'rig_tail_setup_test.py',
+    ),
+}
+
+# Every script owned by at least one optional button. A script outside this
+# set is core and ships regardless of what was ticked.
+OPTIONAL_SCRIPTS = frozenset(
+    name for names in COMPONENT_SCRIPTS.values() for name in names)
+
+# One icon per button. The _200 variants in icons/ are documentation assets
+# and never install, so unlisted icons do not ship.
+COMPONENT_ICONS = {
+    CHAIN: (SHELF_ICON_CHAIN,),
+    SETUP: (SHELF_ICON_SETUP,),
+    BUILD: (SHELF_ICON_BUILD,),
+    RELOAD: (SHELF_ICON_RELOAD,),
+}
 
 # Each launcher pins its selected scripts directory ahead of other installs.
 TOOL_DIR_PREAMBLE = '''import sys
@@ -104,7 +164,11 @@ rt_setup_ui.show_ui()
 # handles bound for interactive use in the Script Editor. Commented lines
 # lay out the full workflow -- setup, build and test -- so the user can
 # uncomment the call they want.
-LAUNCH_RELOAD_COMMAND = '''# Rig Tail -- Reload (load/reload the modules and run commands)
+#
+# Assembled per install by _reload_command(), because a selective install
+# can leave the Chain or Setup modules off disk: importing them
+# unconditionally would make the button raise ImportError on click.
+RELOAD_HEAD = '''# Rig Tail -- Reload (load/reload the modules and run commands)
 #@TOOL_DIR@
 
 # Purge Cache
@@ -131,31 +195,44 @@ import rig_tail_maya as rt_maya
 import rig_tail_naming as rt_naming
 import rig_tail_restpose as rt_rest
 import rig_tail_stretch as rt_stretch
-import rig_tail_setup as rt_setup
+import rig_tail_build_test as rt_build_test
+'''
 
-import rig_tail_chain_build as rt_chain
+# rig_tail_setup ships with Chain as well as Setup, so bind it whenever the
+# file is on disk. Its UI and tests are Setup-only.
+RELOAD_IMPORT_SETUP = 'import rig_tail_setup as rt_setup\n'
+RELOAD_IMPORT_SETUP_TEST = 'import rig_tail_setup_test as rt_setup_test\n'
+RELOAD_IMPORT_CHAIN = '''import rig_tail_chain_build as rt_chain
 import rig_tail_chain_spacing as rt_chain_spacing
 import rig_tail_chain_test as rt_chain_test
-import rig_tail_build_test as rt_build_test
-import rig_tail_setup_test as rt_setup_test
+'''
 
+RELOAD_PHASE_CHAIN = '''
 # --- CHAIN phase (optional; run BEFORE Setup, on raw BN skeleton) ---
 #rt_chain.rebuild_selected(21, 'keep')   # re-space the selected chain(s)
 #rt_chain.rebuild_selected(30, 'power', param=1.7)   # pack joints toward the base
+'''
 
+RELOAD_PHASE_SETUP = '''
 # --- SETUP phase (optional; run BEFORE the build, on raw BN skeleton) ---
 #rt.setup_tails('squid', dry_run=True)   # preview only (orient/mirror), no changes
 #rt.setup_tails('squid')                 # apply orient/mirror, then build
 #rt.main_setup()                         # or open the Setup UI
+'''
 
+RELOAD_PHASE_BUILD = '''
 # --- BUILD ---
 #rt.rig_tail_single('tail', fk=True, ik=True)
 #rt.rig_tail_multiple('squid', fk=True, ik=True)
 #rt.main()                               # or open the Builder UI
 
 # --- TEST / INSPECT ---
-#rt_chain_test.run_math()                                # chain spacing maths (safe)
-#rt_build_test.run_all('squid')                          # full test sweep
+'''
+
+RELOAD_TEST_CHAIN = ('#rt_chain_test.run_math()'
+                     '                                # chain spacing maths (safe)\n')
+
+RELOAD_TEST_BUILD = '''#rt_build_test.run_all('squid')                          # full test sweep
 #rt_build_test.report_bend(rt_constants.RIGPARTS)        # per-chain bend angles
 #rt_build_test.probe('after build', 'C_fintail')         # quick joint probe
 #rt_build_test.measure_rebuild_degradation(rt_constants.RIGPARTS, rebuilds=2)
@@ -174,6 +251,61 @@ def _shelf_command(template, tool_dir):
     '''Embed tool_dir in a shelf command.'''
     preamble = TOOL_DIR_PREAMBLE.format(tool_dir.replace('\\', '/'))
     return template.replace(PREAMBLE_TOKEN, preamble)
+
+
+def _reload_command(selection):
+    '''Build the Reload button command for the installed components.
+
+    Only the modules that were installed are imported, and only the
+    workflow lines that can actually run are offered.
+
+    '''
+    chain = selection.get(CHAIN)
+    setup = selection.get(SETUP)
+
+    parts = [RELOAD_HEAD]
+    if chain or setup:
+        parts.append(RELOAD_IMPORT_SETUP)
+    if setup:
+        parts.append(RELOAD_IMPORT_SETUP_TEST)
+    if chain:
+        parts.append(RELOAD_IMPORT_CHAIN)
+
+    if chain:
+        parts.append(RELOAD_PHASE_CHAIN)
+    if setup:
+        parts.append(RELOAD_PHASE_SETUP)
+    parts.append(RELOAD_PHASE_BUILD)
+    if chain:
+        parts.append(RELOAD_TEST_CHAIN)
+    parts.append(RELOAD_TEST_BUILD)
+    return ''.join(parts)
+
+
+def _install_filter(selection):
+    '''Return a predicate deciding which module files to install.
+
+    It takes a path relative to the module folder ('scripts/rig_tail.py',
+    'icons/octopus_white.png') and answers whether this selection wants it.
+
+    '''
+    scripts = set()
+    icons = set()
+    for key, wanted in selection.items():
+        if not wanted:
+            continue
+        scripts.update(COMPONENT_SCRIPTS.get(key, ()))
+        icons.update(COMPONENT_ICONS.get(key, ()))
+
+    def keep(rel_path):
+        folder, _, name = rel_path.replace('\\', '/').rpartition('/')
+        if folder == 'icons':
+            return name in icons
+        if name in OPTIONAL_SCRIPTS:
+            return name in scripts
+        return True
+
+    return keep
 
 
 def _same_path(a, b):
@@ -216,18 +348,25 @@ def _replace_file(src, dst, attempts=3):
             time.sleep(0.2)
 
 
-def _copy_tree(src, dst):
-    '''Copy src over dst and return files that could not be updated.'''
+def _copy_tree(src, dst, keep):
+    '''Copy the files keep() wants and return those that could not update.'''
     blocked = []
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames[:] = [d for d in dirnames if d != '__pycache__']
         rel = os.path.relpath(dirpath, src)
         target_dir = dst if rel == os.curdir else os.path.join(dst, rel)
+
+        wanted = [name for name in filenames
+                  if not name.endswith('.pyc')
+                  and keep(name if rel == os.curdir
+                           else os.path.join(rel, name))]
+        # A folder nothing was selected from is not created at all.
+        if not wanted:
+            continue
         if not os.path.isdir(target_dir):
             os.makedirs(target_dir)
-        for name in filenames:
-            if name.endswith('.pyc'):
-                continue
+
+        for name in wanted:
             try:
                 _replace_file(os.path.join(dirpath, name),
                               os.path.join(target_dir, name))
@@ -236,8 +375,14 @@ def _copy_tree(src, dst):
     return blocked
 
 
-def _prune_stale(src, dst):
-    '''Remove stale destination files after an update.'''
+def _prune_stale(src, dst, keep):
+    '''Remove destination files this install no longer covers.
+
+    That means files dropped from the source AND files belonging to a shelf
+    button left unticked this time, so re-installing over an older install
+    with fewer buttons clears what was dropped instead of orphaning it.
+
+    '''
     for dirpath, dirnames, filenames in os.walk(dst):
         if os.path.basename(dirpath) == '__pycache__':
             shutil.rmtree(dirpath, ignore_errors=True)
@@ -246,23 +391,27 @@ def _prune_stale(src, dst):
         rel = os.path.relpath(dirpath, dst)
         source_dir = src if rel == os.curdir else os.path.join(src, rel)
         for name in filenames:
-            if not os.path.isfile(os.path.join(source_dir, name)):
-                try:
-                    os.remove(os.path.join(dirpath, name))
-                except (IOError, OSError):
-                    pass
+            rel_path = name if rel == os.curdir else os.path.join(rel, name)
+            if os.path.isfile(os.path.join(source_dir, name)) and keep(rel_path):
+                continue
+            try:
+                os.remove(os.path.join(dirpath, name))
+            except (IOError, OSError):
+                pass
 
 
 def _choose_destination(src_dir, modules_dir):
-    '''Ask where to install and whether to add Joint Chain Builder.
+    '''Ask where to install and which shelf buttons to add.
 
-    Returns (folder to hold rigTail/, install_chain_build), or
-    (None, False) if the user cancelled.
+    Returns (folder to hold rigTail/, selection), where selection maps each
+    component to a bool. Returns (None, None) if the user cancelled.
 
     '''
     default_label = 'Default (maya/modules)'
     current_label = 'Current (this folder)'
     other_label = 'Other...'
+    cancelled = 'Cancel|' + '|'.join('0' for _ in COMPONENTS)
+
     def _dialog_ui():
         cmds.columnLayout(adjustableColumn=True, rowSpacing=6)
         cmds.text(label='Where should Rig Tail be installed?', align='left')
@@ -276,36 +425,62 @@ def _choose_destination(src_dir, modules_dir):
                                        os.path.join(src_dir, MODULE_NAME)))
         cmds.radioButton(label=other_label)
         cmds.separator(style='in', height=10)
-        chain_checkbox = cmds.checkBox(
+
+        cmds.text(label='Which shelf buttons should be installed?', align='left')
+        boxes = {}
+        boxes[CHAIN] = cmds.checkBox(
             label='Add a "Joint Chain Builder" shelf button', value=True)
         cmds.text(
             label='Opens the Chain Build UI to create and re-space joint chains.',
+            align='left')
+        boxes[SETUP] = cmds.checkBox(
+            label='Add a "Tail Rig Setup" shelf button', value=True)
+        cmds.text(
+            label='Opens the Setup UI to orient and mirror the raw skeleton.',
+            align='left')
+        # Ticked and greyed out: the Builder is the tool itself, so the user
+        # can see it is going in rather than wonder where its option went.
+        boxes[BUILD] = cmds.checkBox(
+            label='Add a "Tail Rig Builder" shelf button', value=True,
+            enable=False)
+        cmds.text(label='The main tool -- always installed.', align='left')
+        boxes[RELOAD] = cmds.checkBox(
+            label='Add a "Tail Rig Reload" shelf button', value=True)
+        cmds.text(
+            label='Reloads every module and lays the workflow out in the '
+                  'Script Editor.',
             align='left')
         cmds.separator(style='in', height=10)
         cmds.rowLayout(numberOfColumns=2, adjustableColumn=1,
                        columnAttach=(1, 'both', 0))
 
         def _dismiss(choice):
-            val = cmds.checkBox(chain_checkbox, query=True, value=True)
-            install_chain_build = 1 if val else 0
-            cmds.layoutDialog(
-                dismiss='{0}|{1}'.format(choice, install_chain_build))
+            flags = '|'.join(
+                '1' if cmds.checkBox(boxes[key], query=True, value=True) else '0'
+                for key in COMPONENTS)
+            cmds.layoutDialog(dismiss='{0}|{1}'.format(choice, flags))
 
         cmds.button(label='Install', command=lambda *_: _dismiss(
             default_label if cmds.radioButton(default_radio, query=True, select=True)
             else current_label if cmds.radioButton(current_radio, query=True, select=True)
             else other_label))
-        cmds.button(label='Cancel', command=lambda *_: cmds.layoutDialog(
-            dismiss='Cancel|0'))
+        cmds.button(label='Cancel',
+                    command=lambda *_: cmds.layoutDialog(dismiss=cancelled))
 
     response = cmds.layoutDialog(ui=_dialog_ui, title='Install Rig Tail')
-    choice, _, checked = response.partition('|')
-    install_chain_build = checked == '1'
+    # Closing the window rather than pressing a button yields a bare
+    # 'dismiss', so read the flags defensively.
+    parts = (response or '').split('|')
+    choice = parts[0]
+    flags = parts[1:]
+    selection = {key: (flags[i] == '1' if i < len(flags) else False)
+                 for i, key in enumerate(COMPONENTS)}
+    selection[BUILD] = True     # the Builder is never optional
 
     if choice == default_label:
-        return modules_dir, install_chain_build
+        return modules_dir, selection
     if choice == current_label:
-        return src_dir, install_chain_build
+        return src_dir, selection
     if choice == other_label:
         picked = cmds.fileDialog2(
             fileMode=3,                 # 3 = existing directory
@@ -315,12 +490,12 @@ def _choose_destination(src_dir, modules_dir):
             startingDirectory=src_dir) or []
         # Cancelling the folder picker cancels the install rather than
         # silently falling back to a location the user did not choose.
-        return (picked[0], install_chain_build) if picked else (None, False)
-    return None, False
+        return (picked[0], selection) if picked else (None, None)
+    return None, None
 
 
-def _install_module(src_dir, dest_parent):
-    '''Install the module tree and return (module_dir, copied).'''
+def _install_module(src_dir, dest_parent, selection):
+    '''Install the selected module files and return (module_dir, copied).'''
     src_module = os.path.join(src_dir, MODULE_NAME)
     if not os.path.isdir(os.path.join(src_module, 'scripts')):
         raise RuntimeError(
@@ -329,14 +504,20 @@ def _install_module(src_dir, dest_parent):
             'in.'.format(MODULE_NAME, src_dir))
 
     dst_module = os.path.join(dest_parent, MODULE_NAME)
+    # Running in place: the source folder IS the install, so return before
+    # any copy or prune. This is what keeps a git checkout intact when the
+    # user installs fewer buttons than the repo holds -- selection then
+    # only decides which shelf buttons get made, never which files survive.
+    # Do not move filtering above this check.
     if _same_path(src_module, dst_module):
         return src_module, False
 
     if not os.path.isdir(dest_parent):
         os.makedirs(dest_parent)
 
+    keep = _install_filter(selection)
     _release_cwd(dst_module)
-    blocked = _copy_tree(src_module, dst_module)
+    blocked = _copy_tree(src_module, dst_module, keep)
     if blocked:
         raise RuntimeError(
             'Could not overwrite {0} file(s) in\n{1}\n\n{2}\n\n'
@@ -346,7 +527,7 @@ def _install_module(src_dir, dest_parent):
                 len(blocked), dst_module,
                 '\n'.join('{0}\n    {1}'.format(path, exc)
                           for path, exc in blocked[:5])))
-    _prune_stale(src_module, dst_module)
+    _prune_stale(src_module, dst_module, keep)
     return dst_module, True
 
 
@@ -367,14 +548,21 @@ def _write_mod(modules_dir, module_dir):
     return mod_path
 
 
-def _write_manifest(modules_dir, module_dir, tool_dir, copied):
-    '''Write the install record used by uninstall.py.'''
+def _write_manifest(modules_dir, module_dir, tool_dir, copied, selection):
+    '''Write the install record used by uninstall.py.
+
+    'buttons' records what was ticked. The uninstaller does not need it --
+    it sweeps every Rig Tail label off the shelves by name -- but it makes
+    one install diffable against the next.
+
+    '''
     manifest_path = os.path.join(modules_dir, MANIFEST_FILE)
     with open(manifest_path, 'w') as handle:
         json.dump({
             'module_dir': os.path.abspath(module_dir),
             'tool_dir': os.path.abspath(tool_dir),
             'copied': bool(copied),
+            'buttons': [key for key in COMPONENTS if selection.get(key)],
         }, handle, indent=4)
     return manifest_path
 
@@ -416,61 +604,68 @@ def _icon_path(icons_dir, name):
     return path if os.path.isfile(path) else name
 
 
-def _add_shelf_buttons(icons_dir, tool_dir, install_chain_build):
-    '''Refresh the optional chain, setup, build, and reload launchers.'''
+def _add_shelf_buttons(icons_dir, tool_dir, selection):
+    '''Refresh the selected chain, setup, build, and reload launchers.
+
+    Every Rig Tail button is removed first, so a component left unticked
+    loses the button an earlier install made for it.
+
+    '''
     shelf = _current_shelf()
-    for label in ((SHELF_CHAIN_BUILD_LABEL, SHELF_SETUP_LABEL, SHELF_BUILD_LABEL,
-                   SHELF_RELOAD_LABEL)):
+    for label in SHELF_LABELS.values():
         _remove_existing_button(shelf, label)
 
-    icon_chain_build = _icon_path(icons_dir, SHELF_ICON_CHAIN)
-    icon_setup = _icon_path(icons_dir, SHELF_ICON_SETUP)
-    icon_build = _icon_path(icons_dir, SHELF_ICON_BUILD)
-    icon_reload = _icon_path(icons_dir, SHELF_ICON_RELOAD)
-
-    if install_chain_build:
+    if selection.get(CHAIN):
+        icon = _icon_path(icons_dir, SHELF_ICON_CHAIN)
         cmds.shelfButton(
             parent=shelf,
             label=SHELF_CHAIN_BUILD_LABEL,
             annotation='Open the Joint Chain Builder (Chain Build UI) to create and re-space joint chains.',
-            image=icon_chain_build,
-            image1=icon_chain_build,
+            image=icon,
+            image1=icon,
             imageOverlayLabel=SHELF_ICON_LABEL_CHAIN_BUILD,
             sourceType='python',
             command=_shelf_command(LAUNCH_CHAIN_COMMAND, tool_dir),
         )
 
-    cmds.shelfButton(
-        parent=shelf,
-        label=SHELF_SETUP_LABEL,
-        annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
-        image=icon_setup,
-        image1=icon_setup,
-        imageOverlayLabel=SHELF_ICON_LABEL_SETUP,
-        sourceType='python',
-        command=_shelf_command(LAUNCH_SETUP_COMMAND, tool_dir),
-    )
+    if selection.get(SETUP):
+        icon = _icon_path(icons_dir, SHELF_ICON_SETUP)
+        cmds.shelfButton(
+            parent=shelf,
+            label=SHELF_SETUP_LABEL,
+            annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
+            image=icon,
+            image1=icon,
+            imageOverlayLabel=SHELF_ICON_LABEL_SETUP,
+            sourceType='python',
+            command=_shelf_command(LAUNCH_SETUP_COMMAND, tool_dir),
+        )
+
+    icon = _icon_path(icons_dir, SHELF_ICON_BUILD)
     cmds.shelfButton(
         parent=shelf,
         label=SHELF_BUILD_LABEL,
         annotation='Launch the Rig Tail Builder UI',
-        image=icon_build,
-        image1=icon_build,
+        image=icon,
+        image1=icon,
         imageOverlayLabel=SHELF_ICON_LABEL_BUILD,
         sourceType='python',
         command=_shelf_command(LAUNCH_BUILD_COMMAND, tool_dir),
     )
-    cmds.shelfButton(
-        parent=shelf,
-        label=SHELF_RELOAD_LABEL,
-        annotation='Rig Tail Reload: load/reload every module fresh, with '
-                   'build / setup / test commands ready in the Script Editor',
-        image=icon_reload,
-        image1=icon_reload,
-        imageOverlayLabel=SHELF_ICON_LABEL_RELOAD,
-        sourceType='python',
-        command=_shelf_command(LAUNCH_RELOAD_COMMAND, tool_dir),
-    )
+
+    if selection.get(RELOAD):
+        icon = _icon_path(icons_dir, SHELF_ICON_RELOAD)
+        cmds.shelfButton(
+            parent=shelf,
+            label=SHELF_RELOAD_LABEL,
+            annotation='Rig Tail Reload: load/reload every module fresh, with '
+                       'build / setup / test commands ready in the Script Editor',
+            image=icon,
+            image1=icon,
+            imageOverlayLabel=SHELF_ICON_LABEL_RELOAD,
+            sourceType='python',
+            command=_shelf_command(_reload_command(selection), tool_dir),
+        )
     return shelf
 
 
@@ -479,19 +674,19 @@ def onMayaDroppedPythonFile(*args):
     src_dir = _source_dir()
     modules_dir = os.path.join(cmds.internalVar(userAppDir=True), 'modules')
 
-    dest_parent, install_chain_build = _choose_destination(src_dir, modules_dir)
+    dest_parent, selection = _choose_destination(src_dir, modules_dir)
     if dest_parent is None:
         print('# Rig Tail: install cancelled')
         return
 
     try:
-        module_dir, copied = _install_module(src_dir, dest_parent)
+        module_dir, copied = _install_module(src_dir, dest_parent, selection)
         tool_dir = os.path.join(module_dir, 'scripts')
         mod_path = _write_mod(modules_dir, module_dir)
-        _write_manifest(modules_dir, module_dir, tool_dir, copied)
+        _write_manifest(modules_dir, module_dir, tool_dir, copied, selection)
         _activate_for_session(module_dir)
         shelf = _add_shelf_buttons(os.path.join(module_dir, 'icons'), tool_dir,
-                                   install_chain_build)
+                                   selection)
     except Exception as exc:  # surface a readable error to the user
         cmds.confirmDialog(
             title='Rig Tail install failed',
@@ -500,9 +695,7 @@ def onMayaDroppedPythonFile(*args):
             icon='critical')
         raise
 
-    labels = [SHELF_SETUP_LABEL, SHELF_BUILD_LABEL, SHELF_RELOAD_LABEL]
-    if install_chain_build:
-        labels.insert(0, SHELF_CHAIN_BUILD_LABEL)
+    labels = [SHELF_LABELS[key] for key in COMPONENTS if selection.get(key)]
     cmds.inViewMessage(
         amg='<hl>Rig Tail installed</hl> - see the {0} buttons on the "{1}" '
             'shelf'.format(', '.join('"{0}"'.format(label) for label in labels),

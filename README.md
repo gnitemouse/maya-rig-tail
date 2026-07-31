@@ -50,9 +50,10 @@ rigTail/
 **Drag-and-drop (recommended)**
 
 Drag `install.py` from a file browser into the Maya viewport. It asks where
-to install and whether to add the optional Chain Builder button, then adds
-its shelf buttons to the active shelf: **ChainBuild**, **TailSetup**,
-**TailBuild** and **TailReload**. Works immediately, with no restart and no
+to install and which shelf buttons to add, then puts them on the active
+shelf: **ChainBuild**, **TailSetup**, **TailBuild** and **TailReload**. All
+four are ticked by default; **TailBuild** is the tool itself, so its tick is
+greyed out and always installs. Works immediately, with no restart and no
 `userSetup.py` edits. Keep `install.py` next to `rigTail/` when you drag it.
 
 | Choice | What it does |
@@ -60,6 +61,12 @@ its shelf buttons to the active shelf: **ChainBuild**, **TailSetup**,
 | **Default (maya/modules)** | Copies `rigTail/` into `~/Documents/maya/modules/`. Self-contained - this folder can then be moved or deleted. |
 | **Current (this folder)** | Copies nothing; runs from where it already is, so a `git pull` takes effect on the next click. Moving the folder breaks it. |
 | **Other...** | Pick a folder in a file browser; `rigTail/` is copied into it - for a shared network location or a per-project tools folder. |
+
+The two copying choices install only the files the ticked buttons need, so
+unticking Chain Builder leaves the `rig_tail_chain_*` modules behind, and
+re-running with fewer buttons removes the ones dropped. **Current (this
+folder)** never copies or deletes anything - a clone keeps every file it has
+and only the shelf buttons follow the ticks.
 
 Whichever is chosen, one resolved path drives everything:
 
