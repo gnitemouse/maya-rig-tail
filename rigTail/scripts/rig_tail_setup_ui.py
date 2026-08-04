@@ -437,7 +437,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         main_layout.addWidget(roll_group)
         main_layout.addSpacing(8)
 
-        # Action buttons
+        # Buttons --------------------------------------------------------
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.setSpacing(10)
         self.btn_cancel = QtWidgets.QPushButton('Cancel')
@@ -482,7 +482,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         row.addWidget(widget)
         return row
 
-    # STYLING (mirrors rig_tail_ui) ====================================
+    # STYLING ==========================================================
 
     def create_group_box(self, title):
         group = QtWidgets.QGroupBox(title)

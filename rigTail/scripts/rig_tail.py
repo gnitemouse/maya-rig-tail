@@ -256,6 +256,7 @@ def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
     rt_constants.RIGPARTS = [root]
     # Named outright, so build it even if the roster had it excluded
     rt_cache.include_parts([root])
+    guard_unique_rigparts([root])
     # build_performance_scope: viewport refresh suspended, evaluation
     # manager in DG mode, one undo chunk -- the build runs much faster
     # with no behaviour change (see rig_tail_maya)
@@ -282,6 +283,7 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
         fk (bool): Build FK components
         ik (bool): Build IK components
     '''
+    guard_unique_rigparts()
     # See rig_tail_single for the performance scope and timer rationale
     with rt_maya.build_performance_scope(), \
             rt_maya.build_timer('rig_tail_multiple') as timer:
@@ -306,6 +308,12 @@ def rig_tail_selected(root=None, fk=True, ik=True):
     if not selected:
         abort_build(logger, 'Select joint to rig tail')
 
+    # The roster is discovered from the selection below, so the check is on
+    # the rig parts those joints name.
+    guard_unique_rigparts(
+        [r for r in (rt_naming.get_rigname(j, rt_constants.JOINT)
+                     for j in selected if cmds.objectType(j, i='joint')) if r])
+
     # See rig_tail_single for the performance scope and timer rationale
     with rt_maya.build_performance_scope(), \
             rt_maya.build_timer('rig_tail_selected') as timer:
@@ -326,6 +334,38 @@ def rig_tail_selected(root=None, fk=True, ik=True):
             build_rig_tail(fk, ik)
         with timer.phase('connect'):
             rt_connect.connect_rig_tail(fk, ik)
+
+def guard_unique_rigparts(rignames=None):
+    '''
+    Abort the build when a rig part name is carried by more than one joint
+    chain in the scene.
+
+    Every node a build creates is named after its rig part - controls,
+    curves, groups, the FK and IK skeletons - so two chains answering to one
+    rig part have the build wiring a single rig out of both, and there is no
+    correct guess to make. Joint Chain Builder and Setup can carry on (the
+    first works off the viewport selection, the second picks the chain under
+    ROOT and says which), which is what makes it safe to keep a replacement
+    tail in the scene alongside the one it replaces - right up to the build.
+
+    Runs BEFORE cleanup, which tears the existing rig down: aborting after
+    that would leave the scene stripped and unbuilt.
+
+    Arguments
+        rignames (list): rig parts to check, or None for RIGPARTS
+    '''
+    duplicates = rt_cleanup.duplicate_rigparts(rignames)
+    if not duplicates:
+        return
+    detail = '; '.join(
+        f"{rigname}: {', '.join(paths)}" for rigname, paths in
+        sorted(duplicates.items()))
+    abort_build(logger,
+        f'{len(duplicates)} rig part name(s) are carried by more than one '
+        f'joint chain - {detail}. Give each chain its own rig part name '
+        '(Joint Chain Builder can rename one), or remove the extra chain, '
+        'then build again.')
+
 
 # SETUP: TAIL SKELETON =================================================
 

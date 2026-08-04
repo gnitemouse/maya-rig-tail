@@ -14,9 +14,15 @@ Functions:
     build_new: create a new chain between two transforms
     rebuild: re-space an existing chain at a different joint count
     rebuild_selected: rebuild the chain(s) in the current selection
+    rename_chain: move ONE chain onto a different rig part name
     resolve_selection: interpret viewport selection as chain spec(s)
     chain_root: the root of the chain a joint belongs to
     clear_cache: forget session original cache for one or all chains
+
+Joints are addressed by full DAG path throughout. A scene may hold two
+chains with the same joint names - a replacement tail built alongside the
+one it will replace - and a short name cannot say which is meant; Maya
+answers an ambiguous one with 'More than one object matches name'.
 
 Settings deliberately live nowhere: every option is a UI widget read at
 click time. No config file, no preferences — the tool is a handful of
@@ -24,6 +30,7 @@ controls and each click is a single undo.
 """
 
 import math
+import re
 
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
@@ -85,7 +92,10 @@ def resolve_selection():
         - Many joints: resolve each to its root, deduplicate.
         - Nothing / non-transforms: abort.
     """
-    sel = cmds.ls(selection=True, transforms=True)
+    # Full paths: the selection is the ONE place the tool learns which of
+    # two identically named chains the artist means, so the answer must
+    # survive being written down.
+    sel = cmds.ls(selection=True, transforms=True, long=True)
     if not sel:
         abort_build(logger, 'Nothing selected. Select joints or transforms '
                            'to build or rebuild a chain.')
@@ -133,7 +143,8 @@ def chain_root(joint):
     Return:
         str: the chain's root joint, or None if the node is not a joint
     """
-    if not cmds.objExists(joint) or cmds.nodeType(joint) != 'joint':
+    joint = rt_maya.unique_path(joint)
+    if not joint or cmds.nodeType(joint) != 'joint':
         return None
     return _walk_to_root(joint)
 
@@ -147,13 +158,20 @@ def _walk_to_root(joint):
     reporting a spine joint as its base: the spine has one child, is a
     joint, and would otherwise be walked straight through, putting spine
     joints inside the chain a rebuild re-spaces.
+
+    Works in full DAG paths, so a chain whose joint names are duplicated
+    elsewhere in the scene still walks to ITS OWN root.
     '''
-    j = joint
+    j = rt_maya.unique_path(joint)
+    if not j:
+        return None
     while True:
-        parent = cmds.listRelatives(j, parent=True, typ='joint')
+        parent = cmds.listRelatives(j, parent=True, typ='joint',
+                                    fullPath=True)
         if not parent:
             return j
-        siblings = cmds.listRelatives(parent[0], children=True, typ='joint') or []
+        siblings = cmds.listRelatives(parent[0], children=True, typ='joint',
+                                      fullPath=True) or []
         if len(siblings) > 1:
             return j
         here, above = _guess_rigname(j), _guess_rigname(parent[0])
@@ -179,16 +197,22 @@ def _guess_rigname(joint):
             return rigname
     except Exception:
         pass
-    # Fallback: strip trailing _## suffix (the index) and _BN / _jnt
-    name = joint.split('|')[-1]
+    # Fallback: strip the type tags and the index off the joint's own name.
+    types = (rt_constants.TYPE_BN, rt_constants.TYPE_IK, rt_constants.TYPE_FK,
+             rt_constants.TYPE_FX)
+    name = rt_maya.leaf(joint)
     parts = name.split('_')
     # Remove known trailing type tags
-    while parts and parts[-1] in (rt_constants.JNT, rt_constants.TYPE_BN, rt_constants.TYPE_IK,
-                                  rt_constants.TYPE_FK):
+    while parts and parts[-1] in (rt_constants.JNT,) + types:
         parts.pop()
     # Remove trailing digits (index)
     while parts and parts[-1].isdigit():
         parts.pop()
+    # And the LEADING type tag. Without this a joint whose name the template
+    # cannot parse yields 'BN_R_fintail' rather than 'R_fintail', and the
+    # rebuild goes on to name its new joints 'BN_BN_R_fintail_00_jnt'.
+    while len(parts) > 1 and parts[0] in types:
+        parts.pop(0)
     return '_'.join(parts) if parts else name
 
 
@@ -201,10 +225,14 @@ def _guard_chain(joints):
     branching children, locked translates.
     '''
     for j in joints:
+        # Joints arrive as full DAG paths (see rt_joint.get_joint_chain).
+        # Messages name the leaf, which is what the artist sees in the
+        # Outliner, but every cmds call keeps the path.
+        name = rt_maya.leaf(j)
         skin = _find_influence_skin(j)
         if skin:
             abort_build(logger,
-                f'Joint {j} is an influence of skinCluster "{skin}". '
+                f'Joint {name} is an influence of skinCluster "{skin}". '
                 'Unbind before re-spacing the chain.')
         # Check incoming translate connections (driven by rig)
         for attr in ('translate', 'translateX', 'translateY', 'translateZ',
@@ -213,25 +241,26 @@ def _guard_chain(joints):
                                          destination=False, plugs=True) or []
             if conns:
                 abort_build(logger,
-                    f'Joint {j}.{attr} has incoming connections — it is '
+                    f'Joint {name}.{attr} has incoming connections — it is '
                     'being driven by a built rig. Remove the rig first.')
         # Locked translates
         for attr in ('translateX', 'translateY', 'translateZ'):
             if cmds.getAttr(f'{j}.{attr}', lock=True):
                 abort_build(logger,
-                    f'Joint {j}.{attr} is locked. Unlock it first.')
+                    f'Joint {name}.{attr} is locked. Unlock it first.')
 
     # Any branch can be orphaned by shrinking, not just one at the tip.
     for index, joint in enumerate(joints):
-        children = cmds.listRelatives(joint, children=True, typ='joint') or []
+        children = cmds.listRelatives(joint, children=True, typ='joint',
+                                      fullPath=True) or []
         continuation = joints[index + 1] if index + 1 < len(joints) else None
         extras = [child for child in children
-                  if child != continuation and '_ee_' not in child]
+                  if child != continuation and not rt_maya.is_end_joint(child)]
         if extras:
             abort_build(logger,
-                f'Joint {joint} has branch children ({", ".join(extras)}) '
-                'that would be orphaned. Remove or re-parent them before '
-                're-spacing.')
+                f'Joint {rt_maya.leaf(joint)} has branch children '
+                f'({", ".join(rt_maya.leaf(e) for e in extras)}) that would '
+                'be orphaned. Remove or re-parent them before re-spacing.')
 
 
 def _find_influence_skin(joint):
@@ -330,91 +359,204 @@ def _apply_radius(joints, radius):
 
 # WRITING THE RESULT ====================================================
 
-def _write_chain(joints, positions, rigname, index_offset=0, ee_pos=None):
+def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
+                 reserved=None):
     '''
     Move existing joints to new positions. Handles count changes by
     creating or deleting joints as needed, preserving the _ee_ end joint.
 
+    Every write ends with the span's indices running start_index,
+    start_index+1, ... down the chain, whatever the count did. Numbering is
+    part of what the tool guarantees, not a side effect of adding or
+    removing joints: a chain that was mis-numbered before a same-count
+    re-space used to stay mis-numbered, because there was no rename pass to
+    ride along with.
+
     Arguments:
-        joints (list): current chain joints (including _ee_ if present)
+        joints (list): current chain joints as full DAG paths (including
+            _ee_ if present)
         positions (list of [x, y, z]): target positions for BN joints
         rigname (str): rig part name for naming new joints
-        index_offset (int): index the first joint of this span carries in the
-            full chain. Non-zero for a rebuild that starts partway down, so
-            renumbering continues the run above instead of restarting at 0.
+        start_index (int): the index the span's FIRST joint carries. 0 for a
+            rebuild from the base; the selected joint's own index for one
+            that starts partway down, so the run continues the numbering
+            above it instead of restarting.
         ee_pos ([x, y, z]): world position for the _ee_ end joint, which is
             the resample's own final point when the _ee_ took part in it.
             None falls back to holding the _ee_'s original distance out along
             the new final segment.
+        reserved (set): leaf names held by joints ABOVE the span, which the
+            renumber must not collide with. See _renumber_chain.
 
     Return:
-        list: new chain joints (BN only, no _ee_)
+        list: new chain joints as full DAG paths (BN only, no _ee_)
     '''
     n = len(positions)
-    bn = [j for j in joints if '_ee_' not in j]
+    bn = [j for j in joints if not rt_maya.is_end_joint(j)]
     old_n = len(bn)
     ee = _find_ee(joints)
     ee_distance = rt_math.get_vec_length(ee, bn[-1]) if ee else 0.0
 
+    # Renumber BEFORE the count changes, so the rename pass only ever sees
+    # joints that already exist; _grow_chain names what it creates itself.
+    joints = _renumber_chain(joints, rigname, start_index, reserved)
+
     if n == old_n:
-        # Names and hierarchy stay exactly as they are; only positions move.
-        # The _ee_ still has to follow the tip: a same-count re-space (say
-        # Keep -> Uniform) moves the last joint, and an _ee_ left behind
-        # would give Setup a bogus final aim direction.
+        # Hierarchy stays exactly as it is; only positions move. The _ee_
+        # still has to follow the tip: a same-count re-space (say Keep ->
+        # Uniform) moves the last joint, and an _ee_ left behind would give
+        # Setup a bogus final aim direction.
+        bn = [j for j in joints if not rt_maya.is_end_joint(j)]
         for j, pos in zip(bn, positions):
             cmds.xform(j, ws=True, t=pos)
-        _place_ee(ee, positions, ee_distance, ee_pos)
+        _place_ee(_find_ee(joints), positions, ee_distance, ee_pos)
         return list(bn)
-
-    # Renumber only conventional chains.  Arbitrary artist names are kept
-    # positionally; a count change must never silently replace them.
-    if n != old_n and _can_renumber(joints, rigname):
-        joints = _renumber_chain(joints, rigname, index_offset)
 
     if n < old_n:
         return _shrink_chain(joints, positions, rigname, ee_distance, ee_pos)
     else:
         return _grow_chain(joints, positions, rigname, ee_distance,
-                           index_offset, ee_pos)
+                           start_index, ee_pos)
 
 
-def _renumber_chain(joints, rigname, index_offset=0):
-    '''Renumber the chain's BN joints sequentially from the naming template.'''
-    bn_joints = [j for j in joints if '_ee_' not in j]
-    targets = [rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
-                              index_offset + i)
-               for i in range(len(bn_joints))]
-    # Maya cannot swap names in-place.  Move every changing name through a
-    # unique temporary name first, then assign the final sequence.
-    renamed = []
-    for i, (joint, target) in enumerate(zip(bn_joints, targets)):
-        if joint != target:
-            joint = cmds.rename(joint, f'__tailChainTmp_{i}__')
-        renamed.append(joint)
-    final_bn = []
-    for joint, target in zip(renamed, targets):
-        if joint != target:
-            logger.info(f'Renaming {joint} -> {target}')
-            joint = cmds.rename(joint, target)
-        final_bn.append(joint)
+def _renumber_chain(joints, rigname, start_index=0, reserved=None):
+    '''
+    Rewrite the span's joint indices so they increment by one from
+    start_index, and return the span with its joints re-resolved.
+
+    Two naming modes, chosen for the span as a whole by _index_targets: a
+    conventional chain is rebuilt from the naming template, an
+    unconventional one keeps its own names and has only its index token
+    rewritten. Deciding per chain rather than per joint is what stops a span
+    coming out half template-named and half artist-named; it costs nothing,
+    because rewriting the index of an already-conventional name produces
+    exactly the template name anyway.
+
+    Arguments:
+        joints (list): span joints as full DAG paths, _ee_ included
+        rigname (str): rig part name
+        start_index (int): index for the span's first joint
+        reserved (set): leaf names held by joints ABOVE the span. A
+            from-selected rebuild leaves those untouched, so a target that
+            lands on one would create a second joint of that name in the
+            same chain - reported rather than prevented, since the fix is to
+            renumber the run above and that is not this rebuild's to do.
+
+    Return:
+        list: the span's joints, full DAG paths, _ee_ last if there is one
+    '''
+    bn_joints = [j for j in joints if not rt_maya.is_end_joint(j)]
     ee = _find_ee(joints)
+    if not bn_joints:
+        return list(joints)
+
+    targets, mode = _index_targets(bn_joints, rigname, start_index)
+    if not targets:
+        return list(joints)
+
+    clashes = sorted(set(targets) & set(reserved or ()))
+    if clashes:
+        logger.warning(
+            f'Renumbering from {start_index} reuses {len(clashes)} name(s) '
+            f'already held further up the chain ({", ".join(clashes[:3])}). '
+            'The joints above the rebuilt span are numbered inconsistently; '
+            'rebuild from the base joint to renumber the whole chain.')
+
+    # UUIDs survive renames, and the path is re-resolved from one at every
+    # step: renaming a joint invalidates the stored paths of everything
+    # below it, so the list this started with goes stale immediately. The
+    # _ee_ is tracked the same way even when its own name does not change -
+    # it sits at the bottom of the chain, so EVERY rename above it moves it,
+    # and looking a stale path up again by name is what the whole change is
+    # here to stop.
+    uuids = [(cmds.ls(j, uuid=True) or [None])[0] for j in bn_joints]
+    originals = [rt_maya.leaf(j) for j in bn_joints]
+    ee_uuid = (cmds.ls(ee, uuid=True) or [None])[0] if ee else None
+
+    # Maya cannot swap names in-place, and the span's targets overlap its
+    # current names whenever the run shifts by anything but zero. EVERY
+    # joint goes through a unique temporary name first - not just the ones
+    # whose name changes - so no target can collide with a name the pass has
+    # not moved out of the way yet.
+    for i, uuid in enumerate(uuids):
+        current = cmds.ls(uuid, long=True) if uuid else None
+        if current:
+            cmds.rename(current[0], f'__tailChainTmp_{i}__')
+
+    final_bn = []
+    renamed = 0
+    for uuid, target, before in zip(uuids, targets, originals):
+        current = cmds.ls(uuid, long=True) if uuid else None
+        if not current:
+            continue
+        cmds.rename(current[0], target)
+        if before != target:
+            logger.debug(f'Renaming {before} -> {target}')
+            renamed += 1
+        final_bn.append((cmds.ls(uuid, long=True) or [None])[0])
+
+    # The end joint is part of the convention too. Only template mode knows
+    # what to call it; in-place mode leaves the artist's name alone.
+    if ee_uuid and mode == 'template':
+        ee_target = rt_naming.fstr(rigname, rt_constants.JOINT,
+                                   rt_constants.TYPE_BN, 'ee')
+        current = cmds.ls(ee_uuid, long=True)
+        if current and rt_maya.leaf(current[0]) != ee_target:
+            logger.debug(f'Renaming {rt_maya.leaf(current[0])} -> {ee_target}')
+            cmds.rename(current[0], ee_target)
+            renamed += 1
+
+    if renamed:
+        logger.info(f'Renumbered {renamed} joint(s) from {start_index} '
+                    f'({mode} naming).')
+    # Read every path back off its UUID: the renames above moved all of them.
+    final_bn = [p for p in final_bn if p]
+    ee = (cmds.ls(ee_uuid, long=True) or [None])[0] if ee_uuid else None
     return final_bn + ([ee] if ee else [])
 
 
-def _can_renumber(joints, rigname):
-    """Whether every BN joint follows one consistent configured template."""
-    bn_joints = [j for j in joints if '_ee_' not in j]
+def _index_targets(bn_joints, rigname, start_index=0):
+    """
+    The target leaf name for every BN joint of a span, indices incrementing
+    by one from start_index.
+
+    Return:
+        tuple: (targets, mode). mode is 'template' when every joint parses
+        under the configured naming template as ONE rig part, so the names
+        are rebuilt from it; 'in-place' otherwise, where each joint keeps its
+        own name and only its index token is rewritten. A joint with no
+        index token at all keeps its name unchanged and the run counts on
+        past it. (None, None) when the names cannot be read at all.
+
+    The test is that the chain parses consistently, not that it already
+    carries `rigname`: a rename moves a conventional chain onto a NEW rig
+    part name, and it is still the template that says what the joints are
+    then called.
+    """
     try:
-        return all(rt_naming.get_rigname(j, rt_constants.JOINT) == rigname and
-                   isinstance(rt_naming.get_index_from_name(j), int)
-                   for j in bn_joints)
-    except Exception:
-        return False
+        parsed = {rt_naming.get_rigname(j, rt_constants.JOINT)
+                  for j in bn_joints}
+        conventional = (
+            len(parsed) == 1 and None not in parsed and
+            all(isinstance(rt_naming.get_index_from_name(j), int)
+                for j in bn_joints))
+
+        if conventional:
+            return [rt_naming.fstr(rigname, rt_constants.JOINT,
+                                   rt_constants.TYPE_BN, start_index + i)
+                    for i in range(len(bn_joints))], 'template'
+
+        return [rt_naming.replace_index_in_name(j, start_index + i)
+                for i, j in enumerate(bn_joints)], 'in-place'
+    except Exception as exc:
+        logger.warning(f'Could not work out joint names to renumber to: '
+                       f'{exc}. Names left as they are.')
+        return None, None
 
 
 def _shrink_chain(joints, positions, rigname, ee_distance, ee_pos=None):
     '''Delete surplus joints, keep first n, reposition.'''
-    bn = [j for j in joints if '_ee_' not in j]
+    bn = [j for j in joints if not rt_maya.is_end_joint(j)]
     keep = bn[:len(positions)]
     delete = bn[len(positions):]
 
@@ -423,40 +565,47 @@ def _shrink_chain(joints, positions, rigname, ee_distance, ee_pos=None):
         cmds.xform(j, ws=True, t=pos)
 
     # Reparent the _ee_ to the new last joint BEFORE deleting the surplus —
-    # its old parent is among them. cmds.parent returns the node's new name,
-    # which is what _place_ee has to move.
+    # its old parent is among them. cmds.parent returns a short name, so the
+    # result is re-resolved: that name may well match a joint of another
+    # chain, and _place_ee has to move THIS one.
+    anchor = keep[-1] if keep else joints[0]
     ee = _find_ee(joints)
     if ee:
-        ee = (cmds.parent(ee, keep[-1] if keep else joints[0]) or [ee])[0]
+        ee = _reparent(ee, anchor)
 
     for j in delete:
-        children = cmds.listRelatives(j, children=True, typ='joint') or []
+        children = cmds.listRelatives(j, children=True, typ='joint',
+                                      fullPath=True) or []
         for child in children:
-            cmds.parent(child, keep[-1] if keep else joints[0])
+            _reparent(child, anchor)
         cmds.delete(j)
 
     _place_ee(ee, positions, ee_distance, ee_pos)
-    return cmds.ls(keep, type='joint') or keep
+    return [(cmds.ls(j, long=True) or [j])[0] for j in keep]
 
 
-def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0,
+def _grow_chain(joints, positions, rigname, ee_distance, start_index=0,
                 ee_pos=None):
     '''Create new joints to reach target count, reposition all.'''
-    bn = [j for j in joints if '_ee_' not in j]
+    bn = [j for j in joints if not rt_maya.is_end_joint(j)]
     old_n = len(bn)
 
     # Move existing
     for j, pos in zip(bn, positions[:old_n]):
         cmds.xform(j, ws=True, t=pos)
 
+    # What to call the joints about to be created. The span's naming mode is
+    # settled once, here, rather than per joint: a chain whose names the
+    # template cannot parse grows joints that continue ITS naming instead of
+    # reverting to the template halfway down.
+    _, mode = _index_targets(bn, rigname, start_index)
+
     # Create new joints
     result = list(bn)
     for i in range(old_n, len(positions)):
         parent = result[-1]
-        new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
-                                  index_offset + i)
-        j = cmds.createNode('joint', name=new_name)
-        cmds.parent(j, parent)
+        new_name = _grown_name(bn, rigname, mode, start_index, i)
+        j = _create_joint(new_name, parent)
         cmds.xform(j, ws=True, t=positions[i])
         _copy_joint_attrs(parent, j)
         result.append(j)
@@ -464,10 +613,68 @@ def _grow_chain(joints, positions, rigname, ee_distance, index_offset=0,
     # Move the _ee_ onto the new tip and out along the new final segment.
     ee = _find_ee(joints)
     if ee:
-        ee = (cmds.parent(ee, result[-1]) or [ee])[0]
+        ee = _reparent(ee, result[-1])
         _place_ee(ee, positions, ee_distance, ee_pos)
 
-    return result
+    return [(cmds.ls(j, long=True) or [j])[0] for j in result]
+
+
+def _grown_name(bn, rigname, mode, start_index, index):
+    '''
+    What to call a joint the rebuild is about to create, at chain position
+    `index`.
+
+    Follows the span's own naming: the template when the existing joints
+    parse as this rig part, otherwise the last existing joint's name with
+    its index token rewritten. Without the second case a chain with artist
+    names grows joints named from the template, so raising the count leaves
+    it named two different ways down its length. A last joint with no index
+    token to rewrite has no stem to follow, so the template is the only
+    answer left.
+    '''
+    if mode == 'in-place' and bn:
+        grown = rt_naming.replace_index_in_name(bn[-1], start_index + index)
+        if grown != rt_maya.leaf(bn[-1]):
+            return grown
+    return rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
+                          start_index + index)
+
+
+def _create_joint(name, parent=None):
+    '''
+    Create a joint under `parent` and return its full DAG path.
+
+    Created parented rather than created-then-parented, because the name
+    cmds.createNode answers with is not safe to hand back to cmds.parent: a
+    chain being grown to 50 joints creates 'BN_R_fintail_17_jnt' while the
+    chain it is replacing still has one, and the very next call is given a
+    name that now matches two nodes.
+
+    The path is built from the name Maya actually used, which is not always
+    the name asked for - a clash under one parent gets uniquified.
+    '''
+    made = cmds.createNode('joint', name=name, parent=parent) if parent \
+        else cmds.createNode('joint', name=name)
+    leaf = rt_maya.leaf(made)
+    if parent:
+        parent_path = (cmds.ls(parent, long=True) or [parent])[0]
+        return f'{parent_path}|{leaf}'
+    return f'|{leaf}'
+
+
+def _reparent(node, parent):
+    '''
+    Parent a node and return its new full DAG path.
+
+    cmds.parent answers with a short name, which is exactly the name that is
+    not safe to keep hold of: the scene may well hold another joint called
+    the same thing in the chain this one is replacing.
+    '''
+    moved = cmds.parent(node, parent)
+    if not moved:
+        return (cmds.ls(node, long=True) or [node])[0]
+    parent_path = (cmds.ls(parent, long=True) or [parent])[0]
+    return f'{parent_path}|{rt_maya.leaf(moved[0])}'
 
 
 def _copy_joint_attrs(src, dst):
@@ -515,7 +722,7 @@ def _place_ee(ee, positions, distance, target=None):
 def _find_ee(joints):
     '''Return the _ee_ joint among the list, if any.'''
     for j in joints:
-        if '_ee_' in j:
+        if rt_maya.is_end_joint(j):
             return j
     return None
 
@@ -531,8 +738,9 @@ def _end_joint(last_bn):
     '''
     if not last_bn:
         return None
-    for child in cmds.listRelatives(last_bn, children=True, typ='joint') or []:
-        if '_ee_' in child:
+    for child in cmds.listRelatives(last_bn, children=True, typ='joint',
+                                    fullPath=True) or []:
+        if rt_maya.is_end_joint(child):
             return child
     return None
 
@@ -608,16 +816,18 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
         positions, _ = rt_chain_spacing.resample(
             [start_pos, end_pos], n, mode, param=param, invert=invert, snap=False)
 
-        # Create joints
+        # Create joints. A new chain is numbered from 00 by definition, and
+        # the joints are tracked by full DAG path from the moment they are
+        # parented - cmds.createNode and cmds.parent both answer with short
+        # names, which say nothing about WHICH node they mean once the scene
+        # holds a second chain named the same way.
         joints = []
-        parent = cmds.listRelatives(start, parent=True) or None
+        parent = cmds.listRelatives(start, parent=True, fullPath=True) or None
         for i, pos in enumerate(positions):
-            j = cmds.createNode('joint', name=rt_naming.fstr(
-                rigname, rt_constants.JOINT, rt_constants.TYPE_BN, i))
-            if joints:
-                cmds.parent(j, joints[-1])
-            elif parent:
-                cmds.parent(j, parent[0])
+            name = rt_naming.fstr(rigname, rt_constants.JOINT,
+                                  rt_constants.TYPE_BN, i)
+            j = _create_joint(name, joints[-1] if joints else
+                              (parent[0] if parent else None))
             cmds.xform(j, ws=True, t=pos)
             joints.append(j)
 
@@ -744,8 +954,14 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             never moves — it is an endpoint of the resample — so the joint
             above it keeps aiming at exactly where it was.
 
+    Numbering: the rebuilt span always comes out with its indices
+    incrementing by one down the chain. From the base that run starts at 00;
+    from a start_joint it starts at that joint's OWN index, so it continues
+    the numbering of the untouched run above rather than restarting under it.
+
     Return:
-        list: BN joints after rebuild, the span's own joints only
+        list: BN joints after rebuild, the span's own joints only, as full
+        DAG paths
     """
     if n < 2:
         abort_build(logger, 'Joint count must be at least 2.')
@@ -755,30 +971,55 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
     # never read or written, so a skinned joint up there is not this
     # rebuild's problem.
     full_chain = rt_joint.get_joint_chain(root_joint)
-    index_offset = 0
+    if not full_chain:
+        abort_build(logger, f'No chain found from {root_joint}. If the name '
+                            'is shared by more than one joint, select the '
+                            'chain in the viewport instead of typing a name.')
+    # Where the rebuilt span begins, as a position in the chain...
+    span_at = 0
     if start_joint:
-        resolved = (cmds.ls(start_joint, long=True) or [start_joint])[0]
-        long_chain = [(cmds.ls(j, long=True) or [j])[0] for j in full_chain]
-        if resolved in long_chain:
-            index_offset = long_chain.index(resolved)
+        resolved = rt_maya.unique_path(start_joint)
+        if resolved and resolved in full_chain:
+            span_at = full_chain.index(resolved)
         else:
-            logger.warning(f'{start_joint} is not in the chain under '
-                           f'{root_joint}; rebuilding from the base instead.')
-    chain = full_chain[index_offset:]
+            logger.warning(f'{rt_maya.leaf(start_joint)} is not in the chain '
+                           f'under {rt_maya.leaf(root_joint)}; rebuilding '
+                           'from the base instead.')
+    chain = full_chain[span_at:]
     if len(chain) < 2:
         abort_build(logger,
-            f'Nothing to rebuild from {start_joint}: it is the last joint of '
-            'the chain. Pick a joint further up, or build from the base.')
+            f'Nothing to rebuild from {rt_maya.leaf(start_joint)}: it is the '
+            'last joint of the chain. Pick a joint further up, or build from '
+            'the base.')
+
+    # ...and the index its first joint is NUMBERED with, which is not the
+    # same thing. A from-selected rebuild leaves the run above untouched, so
+    # the span has to continue THAT run's numbering: taking the position
+    # instead renumbers a span picked at '_05_jnt' of a chain numbered from
+    # 01 as if it started at 04, colliding with the joint above it and
+    # leaving two joints of that name in one chain. From the base the answer
+    # is 0 by definition - that is what 'base joint starts at 00' means.
+    start_index = 0
+    if span_at:
+        named = rt_naming.get_index_from_name(chain[0])
+        start_index = named if isinstance(named, int) else span_at
+        if not isinstance(named, int):
+            logger.debug(f'{rt_maya.leaf(chain[0])} carries no index to '
+                         f'continue from; numbering the span from {span_at}.')
+    # The names the run above holds, so the renumber can report a collision
+    # rather than quietly making a duplicate.
+    reserved = {rt_maya.leaf(j) for j in full_chain[:span_at]}
     _guard_chain(chain)
     _guard_min_length(chain)
 
     with rt_maya.build_performance_scope(name='Joint Chain Builder'):
         # Keyed on the span's own first joint, so a from-the-base rebuild and
         # a from-partway one keep separate baselines instead of resampling
-        # each other's positions.
-        key = (cmds.ls(chain[0], long=True) or [chain[0]])[0]
+        # each other's positions. Already a full DAG path, which is what
+        # makes the key tell two identically named chains apart.
+        key = chain[0]
         current_positions = [cmds.xform(j, q=True, ws=True, t=True)
-                             for j in chain if '_ee_' not in j]
+                             for j in chain if not rt_maya.is_end_joint(j)]
         # The _ee_ is where the tail actually ends, so it is the last point of
         # the resample rather than something dragged along behind the tip.
         # That pins it in world and spreads the BN joints over the WHOLE
@@ -849,8 +1090,8 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         all_joints = list(chain)
         if ee:
             all_joints.append(ee)
-        result = _write_chain(all_joints, positions, rigname, index_offset,
-                              ee_pos)
+        result = _write_chain(all_joints, positions, rigname, start_index,
+                              ee_pos, reserved)
 
         # One radius for the whole span, sized to the spacing it ended up
         # with. Without this a grown chain mixes the artist's radius with
@@ -877,9 +1118,11 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
                             ([list(ee_pos)] if ee_pos else []))
         _ORIGINALS[result_key] = entry
 
-        span = 'base' if not index_offset else f'joint {index_offset}'
+        # result[0] rather than chain[0]: the renumber may have renamed it.
+        span = 'base' if not span_at else f'joint {rt_maya.leaf(result[0])}'
         logger.info(f'Rebuilt chain {rigname} from {span}: {len(chain)} -> '
-                    f'{n} joints{", oriented" if orient else ""}.')
+                    f'{n} joints, numbered from {start_index}'
+                    f'{", oriented" if orient else ""}.')
         return result
 
 
@@ -912,6 +1155,81 @@ def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
                                    orient,
                                    spec.selected if from_selected else None))
     return results
+
+
+def rename_chain(root_joint, rigname):
+    """
+    Rename ONE chain's joints onto a new rig part name, in place.
+
+    Scoped to the chain given, which is what makes it usable while a second
+    chain still answers to the old rig part name: rt_cleanup.rename_rigpart
+    sweeps the whole scene by name token, so it would rename both chains and
+    leave the collision exactly as it was. Here the chain is addressed by
+    DAG path, so the one that was picked in the viewport is the one that
+    moves.
+
+    The point of it is to park a chain out of the roster without deleting
+    it. A rig part name that RIGPARTS does not list is ignored by Setup and
+    by the build, so the old tail can sit in the scene, skin and all, while
+    its replacement takes over the name.
+
+    Joints are renumbered from 00 as they are renamed, so the parked chain
+    comes out conventional whatever it was before.
+
+    Arguments:
+        root_joint (str): any joint of the chain (a DAG path when the name
+            is shared)
+        rigname (str): the new rig part name, e.g. 'R_fintailOld'
+
+    Return:
+        list: the chain's joints after renaming, as full DAG paths
+
+    Raises:
+        RuntimeError: via abort_build, when the chain cannot be resolved or
+        the new name is already carried by joints outside this chain.
+    """
+    rigname = (rigname or '').strip()
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', rigname):
+        abort_build(logger, f'Invalid rig part name "{rigname}". Use letters, '
+                            'digits and underscores; do not start with a '
+                            'digit.')
+
+    root = chain_root(root_joint)
+    if not root:
+        abort_build(logger, f'No chain found from {rt_maya.leaf(root_joint)}. '
+                            'Select a joint of the chain to rename.')
+    chain = rt_joint.get_joint_chain(root)
+    if not chain:
+        abort_build(logger, f'No chain found from {rt_maya.leaf(root)}.')
+    ee = _end_joint(chain[-1])
+    span = list(chain) + ([ee] if ee else [])
+
+    # Refuse to rename INTO a collision. Joints of this chain are excluded:
+    # renaming a chain onto the name it already has is a renumber, not a
+    # clash.
+    mine = set(span)
+    taken = []
+    for i in range(len(chain)):
+        target = rt_naming.fstr(rigname, rt_constants.JOINT,
+                                rt_constants.TYPE_BN, i)
+        taken += [m for m in (cmds.ls(target, long=True) or [])
+                  if m not in mine]
+    if taken:
+        abort_build(logger,
+            f'"{rigname}" is already used by {len(taken)} joint(s) elsewhere '
+            f'({", ".join(taken[:3])}). Pick a name no other chain uses.')
+
+    with rt_maya.build_performance_scope(name='Joint Chain Builder'):
+        renamed = _renumber_chain(span, rigname, 0, reserved=None)
+        # The cache is keyed on the root's path, which the rename just
+        # changed. Carry the entry across so the chain does not lose its
+        # baseline shape by being renamed.
+        old_key, new_key = chain[0], renamed[0] if renamed else None
+        if old_key in _ORIGINALS and new_key:
+            _ORIGINALS[new_key] = _ORIGINALS.pop(old_key)
+        logger.info(f'Renamed chain to rig part "{rigname}" '
+                    f'({len(chain)} joints, numbered from 0).')
+        return [j for j in renamed if not rt_maya.is_end_joint(j)]
 
 
 def clear_cache(root=None):

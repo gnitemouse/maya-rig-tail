@@ -36,6 +36,8 @@ Functions:
     set_joints_auto: detect and (re)build BN/FK/IK chains for RIGPARTS
     set_joints: detect/build the chains for one rig part
     _bn_start_finder: BN start-joint lookup sharing one scene scan
+    bn_start_candidates: every BN chain start per rig part, for duplicates
+    duplicate_rigparts: rig parts matched by more than one chain
     detect_joints_bn: fill JOINTS_BN by chain detection only (Setup phase)
     create_rename_joints: rename BN in place, duplicate FK/IK from it
     rigpart_has_joints: does the scene hold BN joints for a rig part
@@ -373,12 +375,10 @@ def unique_path(node):
     '''
     Resolve a node name to its one full DAG path.
 
-    Short names are only usable while they are unique. A scene that holds
-    two nodes called 'rivets' under different parents answers every command
-    given the short name with 'More than one object matches name: rivets' -
-    a RuntimeError from some commands and a ValueError from others, which is
-    why the teardown resolves names to full paths up front instead of
-    catching that error everywhere.
+    Alias of rt_maya.unique_path, which is the canonical implementation -
+    the joint traversal in rig_tail_joint needs it too and cannot import
+    this module (cleanup imports joint, not the other way round). Kept here
+    under its original name for the teardown code that already calls it.
 
     Arguments
         node (str): Node name or DAG path (None/'' is accepted)
@@ -387,17 +387,7 @@ def unique_path(node):
         str or None: full path, or None when the name is missing or
         matches more than one node (both are logged)
     '''
-    if not node:
-        return None
-    matches = cmds.ls(node, long=True) or []
-    if not matches:
-        return None
-    if len(matches) > 1:
-        logger.warning(f"'{node}' matches {len(matches)} nodes "
-                       f"({', '.join(matches[:3])}); skipped. Rename the "
-                       f"duplicates so the name is unique.")
-        return None
-    return matches[0]
+    return rt_maya.unique_path(node)
 
 
 def _rescue_from_root(root_grp):
@@ -1218,50 +1208,135 @@ def _bn_start_finder():
     '''
     Build a BN start-joint lookup that shares one scene scan across parts.
 
-    Detection is unchanged (see _find_bn_start), but the fallback's scene
-    scan is what got expensive: it used to run per rig part, and resolve
-    every joint's rigname through the naming template inside that loop, so
-    a roster of N tails cost N joint listings and N x (joints) template
-    matches. Here the exact name is still tried first - so a
-    conventionally named roster never scans at all - and the scan happens
-    at most once, on the first part that needs the fallback.
+    One scene scan answers the whole roster: resolving every joint's rigname
+    through the naming template used to run per rig part, so N tails cost N
+    joint listings and N x (joints) template matches.
+
+    The scan is no longer optional. Building the start joint's name from the
+    template and testing cmds.objExists was cheaper still, but it answers
+    True for an ambiguous name and hands back a short one - and it cannot
+    see a SECOND chain carrying the same rig part name, which is the thing
+    the caller most needs told about.
+
+    Start joints are returned as full DAG paths, and a rig part matched by
+    more than one chain resolves to the one under rt_constants.ROOT (see
+    bn_start_candidates). Detection has to answer with a path either way: a
+    short name that two chains share is exactly what the traversal below it
+    cannot use.
 
     Return
-        callable: find(rigname) -> start joint name, or None
+        callable: find(rigname) -> start joint DAG path, or None
     '''
     index = None
 
     def find(rigname):
         nonlocal index
-        start_jnt = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, NN=0)
-        if cmds.objExists(start_jnt):
-            return start_jnt
         if index is None:
-            index = _bn_joints_by_rigname()
-        found = index.get(rigname)
-        if found:
-            logger.debug(f"{rigname}: Found start joint '{found}'")
-        return found
+            index = bn_start_candidates()
+        found = index.get(rigname) or []
+        if not found:
+            return None
+        if len(found) > 1:
+            chosen = _prefer_under_root(found)
+            logger.warning(
+                f"{rigname}: {len(found)} joint chains carry this rig part "
+                f"name ({', '.join(found[:3])}). Using {chosen}. Rename the "
+                f"others so each chain has its own rig part name - Tail Build "
+                f"will not run until they do.")
+            return chosen
+        logger.debug(f"{rigname}: Found start joint '{found[0]}'")
+        return found[0]
 
     return find
 
-def _bn_joints_by_rigname():
+
+def bn_start_candidates():
     '''
-    Map each rig part to the first BN joint in the scene whose name
+    Map each rig part to EVERY BN chain start joint in the scene whose name
     resolves to exactly that rigname via the naming template, so 'tail'
     never grabs 'BN_R_tail_00_jnt' (that belongs to 'R_tail').
 
+    Every candidate is kept, not just the first. A scene legitimately holds
+    two chains for one rig part while a replacement tail is being built
+    alongside the one it will replace, and the difference between picking
+    one and knowing there are two is the difference between Setup mirroring
+    the chain the artist meant and silently overwriting the other side from
+    the wrong source.
+
+    A start joint is a BN joint whose parent is not a BN joint of the same
+    rig part, which is what stops every joint of a chain being listed as a
+    candidate for it. Parenthood is read off the DAG path rather than asked
+    for per joint: one scene listing answers the whole roster, where a
+    listRelatives per BN joint would be one Maya call per joint in the rig.
+
     Return
-        dict: {rigname: joint name}
+        dict: {rigname: [joint DAG path, ...]} in scene order
     '''
     found = {}
-    for j in cmds.ls(type='joint') or []:
-        if rt_constants.TYPE_BN not in j:
+    for j in cmds.ls(type='joint', long=True) or []:
+        parts = j.split('|')
+        leaf = parts[-1]
+        if rt_constants.TYPE_BN not in leaf:
             continue
-        rigname = rt_naming.get_rigname(j.split('|')[-1], rt_constants.JOINT)
-        if rigname:
-            found.setdefault(rigname, j)
+        rigname = rt_naming.get_rigname(leaf, rt_constants.JOINT)
+        if not rigname:
+            continue
+        # parts[0] is '' (paths are absolute), so a world-root node has no
+        # parent component to read.
+        parent_leaf = parts[-2] if len(parts) > 2 else ''
+        if parent_leaf and rt_naming.get_rigname(
+                parent_leaf, rt_constants.JOINT) == rigname:
+            continue
+        found.setdefault(rigname, []).append(j)
     return found
+
+
+def duplicate_rigparts(rignames=None):
+    '''
+    Rig parts that more than one joint chain in the scene answers to.
+
+    Two chains may share a rig part name while a replacement tail is being
+    built alongside the one it will replace - Joint Chain Builder works off
+    the viewport selection, so it can tell them apart, and Setup picks the
+    one under ROOT and says so. A build cannot: every node it creates is
+    named after the rig part, so two chains would have it wire one rig out
+    of both. Tail Build calls this and refuses rather than guess.
+
+    Arguments
+        rignames (list): rig parts to check, or None for RIGPARTS
+
+    Return
+        dict: {rigname: [joint DAG path, ...]} for the parts with more than
+        one chain, empty when every part resolves to one
+    '''
+    wanted = set(rignames if rignames is not None else rt_constants.RIGPARTS)
+    candidates = bn_start_candidates()
+    return {rigname: paths for rigname, paths in candidates.items()
+            if rigname in wanted and len(paths) > 1}
+
+
+def _prefer_under_root(candidates):
+    '''
+    Pick the chain under the rig root group when a rig part name matches
+    more than one.
+
+    The chain wired into the rig is the one the rig means; a loose chain at
+    the scene root is work in progress. A guess either way, so the caller
+    says out loud which it took - and Tail Build refuses to guess at all.
+
+    Arguments
+        candidates (list): joint DAG paths
+
+    Return
+        str: the chosen path (the first candidate when none is under ROOT,
+        or when several are)
+    '''
+    root = unique_path(rt_constants.ROOT)
+    if root:
+        under = [c for c in candidates if c.startswith(f'{root}|')]
+        if under:
+            return under[0]
+    return candidates[0]
 
 def _find_bn_start(rigname):
     '''
@@ -1376,6 +1451,14 @@ def create_rename_joints(rigname, joints, typ):
         - duplicate BN root once
         - delete existing target chain
         - rename duplicated joints
+
+    Joints come in as full DAG paths (rt_joint.get_joint_chain) and go out
+    as short names, which is what the rest of the build works in. That is
+    safe here and only here: rig_tail.guard_unique_rigparts has already
+    refused the build if any rig part is carried by more than one chain, so
+    within a build every one of these names picks out exactly one node. The
+    pre-build tools have no such guarantee - two chains may share a rig part
+    name right up until the build - which is why they work in paths.
     '''
     logger.trace(f"rigname:'{rigname}' joints:'{typ}'")
 
@@ -1385,11 +1468,14 @@ def create_rename_joints(rigname, joints, typ):
         for jnt in joints:
             NN = rt_naming.get_index_from_name(jnt)
             new_name = rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN, NN)
-            if jnt != new_name:
-                jnt = cmds.rename(jnt, new_name)
+            # Compare leaf to leaf: a path never equals a name, so comparing
+            # them whole renames every joint in the chain to the name it
+            # already has.
+            if jnt.split('|')[-1] != new_name:
+                cmds.rename(jnt, new_name)
             if NN == 'ee':
                 break
-            out.append(jnt)
+            out.append(new_name)
         return out
 
     # FK/IK: duplicate BN hierarchy

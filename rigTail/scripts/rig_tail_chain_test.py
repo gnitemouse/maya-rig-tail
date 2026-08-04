@@ -576,8 +576,14 @@ def _resolve_root(name):
 
 
 def _chain_bn(root):
-    """The chain's BN joints, root first. get_joint_chain stops before _ee_."""
-    return [j for j in rt_joint.get_joint_chain(root) if '_ee_' not in j]
+    """The chain's BN joints, root first. get_joint_chain stops before _ee_.
+
+    The filter tests the joint's own name, not its DAG path: get_joint_chain
+    returns full paths, and a chain parented under an '_ee_' joint would
+    otherwise filter itself away entirely.
+    """
+    return [j for j in rt_joint.get_joint_chain(root)
+            if '_ee_' not in j.split('|')[-1]]
 
 
 def _positions(joints):

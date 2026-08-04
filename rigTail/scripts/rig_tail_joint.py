@@ -16,6 +16,7 @@ Functions:
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_math as rt_math
+import rig_tail_maya as rt_maya
 
 logger = logger_setup(__name__)
 
@@ -25,21 +26,38 @@ def get_joint_chain(start, end=None):
     Get joint chain from start joint to optional end joint.
     Follows first child at each level.
 
+    Joints are returned as full DAG paths. A scene may legitimately hold two
+    chains with the same joint names - a replacement tail built alongside the
+    one it will replace, an imported second skeleton - and a short name is
+    only usable while it is unique: walking down with cmds.listRelatives()
+    default (short) names hands Maya 'BN_R_fintail_01_jnt' and gets 'More
+    than one object matches name' back. Paths also mean a caller can tell
+    the two chains apart, which is the whole point of allowing both.
+
     Arguments:
-        start (str): Starting joint name
-        end (str): Optional ending joint name (stops when reached)
+        start (str): Starting joint name or DAG path
+        end (str): Optional ending joint (name or path; stops when reached)
 
     Return:
-        list: List of joint names in chain order
+        list: List of joint DAG paths in chain order, empty when start does
+        not resolve to exactly one node
     """
+    start = rt_maya.unique_path(start)
+    if not start:
+        return []
+    end = rt_maya.unique_path(end) if end else None
+
     chain = [start]
     j = start
     while True:
-        children = cmds.listRelatives(j, typ='joint', c=True) or []
+        children = cmds.listRelatives(j, typ='joint', c=True,
+                                      fullPath=True) or []
         if not children:
             break
         j = children[0]
-        if '_ee_' in j:
+        # The marker is the joint's OWN name: testing the path would make
+        # every descendant of an '_ee_' joint read as an end joint too.
+        if rt_maya.is_end_joint(j):
             return chain
         chain.append(j)
         if j == end:
@@ -51,20 +69,28 @@ def get_joint_hierarchy(start_jnt, end_jnt=None):
     """
     Return joints in deterministic DAG order (parent before child).
 
+    Joints are returned as full DAG paths, for the reasons in
+    get_joint_chain.
+
     Arguments:
-        start_jnt (str): Starting joint name
-        end_jnt (str): Optional ending joint name
+        start_jnt (str): Starting joint name or DAG path
+        end_jnt (str): Optional ending joint (name or path)
 
     Return:
-        list: List of joint names in DAG order
+        list: List of joint DAG paths in DAG order
     """
-    dag = cmds.ls(start_jnt, dag=True, type='joint')
+    start_jnt = rt_maya.unique_path(start_jnt)
+    if not start_jnt:
+        return []
+    end_jnt = rt_maya.unique_path(end_jnt) if end_jnt else None
+
+    dag = cmds.ls(start_jnt, dag=True, type='joint', long=True)
     if not dag:
         return []
 
     joints = []
     for j in dag:
-        if '_ee_' in j:
+        if rt_maya.is_end_joint(j):
             break
         joints.append(j)
         if end_jnt and j == end_jnt:

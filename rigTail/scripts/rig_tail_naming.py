@@ -11,6 +11,7 @@ Functions:
     compile_template_to_regex: Compile naming template to regex
     parse_placeholder: Parse placeholder content from template
     get_index_from_name: Extract numerical index from node name
+    replace_index_in_name: Rewrite a name's index token, keeping the name
     strip_group_suffix: Strip trailing group label from a name
     titlecase: Convert text to title case
     name_contains_rigname_terms: Check if name matches rigname terms
@@ -32,6 +33,17 @@ logger = logger_setup(__name__)
 # sees the caller's live values. Bounded by the number of templates in
 # rig_tail_constants, so it needs no eviction.
 _TEMPLATE_CODE = {}
+
+# The index token in a node's own name: digits, or the 'ee' end-joint
+# marker. Shared by get_index_from_name and replace_index_in_name so the
+# token that is read is exactly the token that gets written.
+_INDEX_PATTERN = (
+    r'(?:(?<=\s)(?:\d+|ee)|'
+    r'(?<=_)(?:\d+|ee)|'
+    r'(?<=-)(?:\d+|ee)|'
+    r'^(?:\d+|ee))'
+)
+_INDEX_PATTERN_ANY = r'(?:\d+|ee)'
 
 
 def _template_code(template):
@@ -101,13 +113,19 @@ def get_rigname(node, template):
     Get rigname from node, provided a naming template.
     Node name must follow the naming convention from template.
 
+    A DAG path is reduced to its leaf first: the template describes a node's
+    OWN name, and the pattern is anchored at both ends, so a full path such
+    as '|squid|skeleton|BN_L_tail3_00_jnt' would match nothing and silently
+    report no rigname. Callers that carry full paths (joint chains do, so
+    duplicate short names stay usable) rely on this.
+
     Example:
         jnt = 'FK_L_tail3_00_jnt'
         template = '{TYPE}{rigname}_{NN:02d}{JNT}'
         get_rigname(jnt, template) = 'L_tail3'
 
     Arguments:
-        node (str): Node name to extract rigname from
+        node (str): Node name or DAG path to extract rigname from
         template (str): Naming template with {rigname} placeholder
 
     Return:
@@ -116,9 +134,11 @@ def get_rigname(node, template):
     if '{rigname}' not in template:
         logger.warning('Invalid naming template. Ensure template includes {rigname}.')
         return None
+    if not node:
+        return None
 
     regex = compile_template_to_regex(template)
-    m = regex.match(node)
+    m = regex.match(node.split('|')[-1])
     return m.group('rigname') if m else None
 
 
@@ -218,8 +238,12 @@ def get_index_from_name(node, first=False, underscore=True):
     """
     Extract a numerical index (int) from a node name.
 
+    A DAG path is reduced to its leaf first: the index belongs to the node's
+    own name, and reading it off the path would let an ancestor's index
+    stand in for a joint that has none of its own.
+
     Arguments:
-        node (str): Node name
+        node (str): Node name or DAG path
         first (bool): If True, return first valid index; else return last
         underscore (bool): If True, index must be preceded by whitespace/underscore/dash
 
@@ -231,15 +255,11 @@ def get_index_from_name(node, first=False, underscore=True):
         '01_tail_jnt' -> 1 (start of string)
         'Rtail01_jnt' -> None (underscore=True, preceded by 'l')
     """
-    if underscore:
-        pattern = (
-            r'(?:(?<=\s)(?:\d+|ee)|'
-            r'(?<=_)(?:\d+|ee)|'
-            r'(?<=-)(?:\d+|ee)|'
-            r'^(?:\d+|ee))'
-        )
-    else:
-        pattern = r'(?:\d+|ee)'
+    if not node:
+        return None
+    node = node.split('|')[-1]
+
+    pattern = _INDEX_PATTERN if underscore else _INDEX_PATTERN_ANY
 
     if first:
         m = re.search(pattern, node)
@@ -253,6 +273,51 @@ def get_index_from_name(node, first=False, underscore=True):
         return None
     token = matches[-1]
     return token if token == 'ee' else int(token)
+
+
+def replace_index_in_name(node, index, underscore=True):
+    """
+    Rewrite a name's own numeric index token to `index`, keeping the rest of
+    the name exactly as it is.
+
+    The inverse of get_index_from_name, and deliberately sharing its pattern
+    so the token read is the token written. Used to keep indices
+    incrementing down a chain whose joint names do NOT follow the configured
+    template: the artist's naming is theirs to keep, but the numbering still
+    has to run in order.
+
+    The LAST numeric token is the one rewritten, matching
+    get_index_from_name's default. An 'ee' token is not an index and is
+    never touched, so an end joint keeps its marker.
+
+    Arguments:
+        node (str): Node name or DAG path
+        index (int): New index, formatted with rt_constants.DFORMAT
+        underscore (bool): If True, index must be preceded by
+            whitespace/underscore/dash
+
+    Return:
+        str: The leaf name with its index rewritten, unchanged when it has
+        no numeric index token to rewrite
+
+    Examples:
+        replace_index_in_name('R_tail_01_jnt', 7) -> 'R_tail_07_jnt'
+        replace_index_in_name('spine_ctrl', 7)    -> 'spine_ctrl'
+        replace_index_in_name('R_tail_ee_jnt', 7) -> 'R_tail_ee_jnt'
+    """
+    if not node:
+        return node
+    leaf = node.split('|')[-1]
+    pattern = _INDEX_PATTERN if underscore else _INDEX_PATTERN_ANY
+
+    last = None
+    for m in re.finditer(pattern, leaf):
+        if m.group() != 'ee':
+            last = m
+    if last is None:
+        return leaf
+    return (leaf[:last.start()] + rt_constants.DFORMAT.format(int(index)) +
+            leaf[last.end():])
 
 
 def strip_group_suffix(name):

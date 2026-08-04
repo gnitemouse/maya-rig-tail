@@ -9,6 +9,9 @@ Functions:
     timed: Time one step of the build in progress (see build_timer)
     build_timer: Time each build phase and report them in one line
     obj_exists: Check if object exists
+    unique_path: Resolve a name to one unambiguous full DAG path
+    leaf: The short name at the end of a DAG path
+    is_end_joint: Whether a node is a chain's '_ee_' end joint
     remove: Delete object safely
     remove_nodes: remove() for a list of nodes, in a handful of commands
     set_channel_flags: keyable/channel-box/lock flags via the API
@@ -308,6 +311,72 @@ def obj_exists(node):
         bool: True if object exists
     """
     return cmds.objExists(node)
+
+
+def unique_path(node):
+    '''
+    Resolve a node name to its one full DAG path.
+
+    Short names are only usable while they are unique. A scene that holds
+    two nodes called 'rivets' under different parents answers every command
+    given the short name with 'More than one object matches name: rivets' -
+    a RuntimeError from some commands and a ValueError from others, which is
+    why callers resolve names to full paths up front instead of catching
+    that error everywhere.
+
+    This is the canonical implementation; rig_tail_cleanup.unique_path is a
+    thin alias kept for the teardown code that already calls it there.
+
+    Arguments
+        node (str): Node name or DAG path (None/'' is accepted)
+
+    Return
+        str or None: full path, or None when the name is missing or
+        matches more than one node (both are logged)
+    '''
+    if not node:
+        return None
+    matches = cmds.ls(node, long=True) or []
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(f"'{node}' matches {len(matches)} nodes "
+                       f"({', '.join(matches[:3])}); skipped. Rename the "
+                       f"duplicates so the name is unique.")
+        return None
+    return matches[0]
+
+
+def leaf(node):
+    '''
+    The short name at the end of a DAG path.
+
+    Every name test in the pipeline - the '_ee_' end-joint marker, the
+    naming template, the rigname - describes a node's OWN name, not its
+    ancestry. Once chains carry full paths, running those tests on the path
+    lets an ancestor's name decide a descendant's fate: a chain parented
+    under a joint with '_ee_' in its name would read as all end joints.
+
+    Arguments
+        node (str): Node name or DAG path
+
+    Return
+        str: the last path component, or the name unchanged
+    '''
+    return node.split('|')[-1] if node else node
+
+
+def is_end_joint(node):
+    '''
+    Whether a node is a chain's '_ee_' end joint, by its own name.
+
+    Arguments
+        node (str): Node name or DAG path
+
+    Return
+        bool: True when the node's own name carries the '_ee_' marker
+    '''
+    return '_ee_' in leaf(node)
 
 
 def remove(node):
@@ -2078,7 +2147,13 @@ def _chain_influence_joints(rigname):
     joints = list(rt_constants.JOINTS_BN.get(rigname) or [])
     if not joints:
         return []
-    for child in cmds.listRelatives(joints[-1], c=True, typ='joint') or []:
+    # fullPath: the Setup phase fills JOINTS_BN with full DAG paths, and the
+    # end joint returned here is handed straight to the skin re-baseline. A
+    # short name for it is unusable the moment another chain in the scene
+    # has an end joint of the same name, which is exactly the state Setup
+    # tolerates.
+    for child in cmds.listRelatives(joints[-1], c=True, typ='joint',
+                                    fullPath=True) or []:
         if child not in joints:
             joints.append(child)
     return joints

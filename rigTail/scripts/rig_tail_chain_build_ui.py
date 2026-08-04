@@ -86,9 +86,15 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self._param_values = {mode: default
                               for mode, (default, _, _) in self.PARAM_MODES.items()}
         self._param_mode = None
-        # Rig name -> chain root, filled by Select. The box shows rig names
-        # because that is what reads well in a list; the tool works on roots.
+        # Rig name -> chain root (a full DAG path), filled by Select. The box
+        # shows rig names because that is what reads well in a list; the tool
+        # works on roots. A path, not a name: two chains may answer to one
+        # rig name, and the pick is what says which.
         self._roots = {}
+        # Typed names that turned out to name more than one joint, collected
+        # by _root_from_name so an action can tell the artist to select the
+        # chain instead of reporting a bare 'no chain found'.
+        self._ambiguous = set()
         # Rig name -> the joint actually picked in the viewport, for
         # 'Build from selected joint'. Only Select can fill this in: a typed
         # name says which chain, never which joint of it.
@@ -362,24 +368,38 @@ class JointChainBuilderUI(QtWidgets.QDialog):
 
         # Buttons --------------------------------------------------------
         button_layout = QtWidgets.QHBoxLayout()
-        button_layout.setSpacing(20)
+        button_layout.setSpacing(10)
 
         self.btn_reset = QtWidgets.QPushButton('Bake Joint Chain')
         self.btn_reset.setToolTip('Bake joints to preserve the current shape,'
             'keeping this joint chain for the next Build.\n'
             'Build preserves this shape and the earlier one is forgotten.')
+        # Renames ONE chain, not every node carrying the rig part name, which
+        # is what makes it the way out of two chains sharing a name: park the
+        # old one under a name RIGPARTS does not list and Setup and the build
+        # ignore it, without it being deleted.
+        self.btn_rename = QtWidgets.QPushButton('Rename Chain')
+        self.btn_rename.setToolTip(
+            'Rename the listed chain onto a different rig part name, and '
+            'renumber it from 00.\nRenames this chain only, so a replacement '
+            'tail can take over the name while the old chain stays in the '
+            'scene.\nA rig part name RIGPARTS does not list is ignored by '
+            'Setup and by Tail Build.')
         self.btn_build = QtWidgets.QPushButton('Build Joints')
         self.btn_build.setToolTip(
             'Build or re-space the listed chain(s) with the settings above. '
             'One undo step.')
 
         self.btn_reset.clicked.connect(self.reset_original)
+        self.btn_rename.clicked.connect(self.rename_chain)
         self.btn_build.clicked.connect(self.run_build)
 
         self.style_button(self.btn_reset, 0)
+        self.style_button(self.btn_rename, 0)
         self.style_button(self.btn_build, 4)  # olive primary
 
         button_layout.addWidget(self.btn_reset)
+        button_layout.addWidget(self.btn_rename)
         button_layout.addWidget(self.btn_build)
 
         main_layout.addLayout(button_layout)
@@ -557,17 +577,39 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             2. a rig name resolved through the naming template, which gives
                the root's expected name outright;
             3. the name of any joint in the chain, taken literally.
+
+        Select comes first because it is the only one that can tell two
+        chains of the same rig part apart: it records a full DAG path, where
+        both name lookups can only say 'a joint called this'. That ordering
+        is what lets a replacement tail be rebuilt while the chain it
+        replaces is still in the scene - pick it in the viewport and the
+        tool works on the one that was picked.
         '''
         try:
             root = self._roots.get(name)
             if root and cmds.objExists(root):
                 return rt_chain.chain_root(root)
-            templated = rt_naming.fstr(name, rt_constants.JOINT, rt_constants.TYPE_BN, 0)
-            if cmds.objExists(templated):
-                return rt_chain.chain_root(templated)
-            return rt_chain.chain_root(name) if cmds.objExists(name) else None
+            templated = rt_naming.fstr(name, rt_constants.JOINT,
+                                       rt_constants.TYPE_BN, 0)
+            return (self._root_from_name(templated) or
+                    self._root_from_name(name))
         except Exception:
             return None
+
+    def _root_from_name(self, name):
+        '''The chain root for a joint NAME, or None when the name does not
+        pick out exactly one joint.
+
+        cmds.objExists answers True for a name two joints share, so it
+        cannot be the test here: it is precisely the shared-name case that
+        must not resolve silently to whichever one Maya listed first.
+        '''
+        matches = cmds.ls(name, long=True, type='joint') or []
+        if len(matches) == 1:
+            return rt_chain.chain_root(matches[0])
+        if len(matches) > 1:
+            self._ambiguous.add(name)
+        return None
 
     # STATUS ============================================================
 
@@ -680,6 +722,69 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             (f'. No chain found for: {", ".join(missing)}' if missing else '') +
             '.')
 
+    def rename_chain(self):
+        '''Move one listed chain onto a different rig part name.
+
+        One chain at a time on purpose: the new name is typed, and a list of
+        chains has no second name to give them. The chain is taken from the
+        first entry in the box, so Select then Rename does what it looks
+        like.
+        '''
+        names = self._chain_names()
+        if not names:
+            cmds.warning('No chain listed. Select a joint of the chain and '
+                         'click Select first.')
+            self._set_status('Rename Chain - nothing renamed: no chain '
+                             'listed.')
+            return
+        if len(names) > 1:
+            cmds.warning(f'{len(names)} chains listed. Rename takes one at a '
+                         f'time; renaming "{names[0]}".')
+
+        old = names[0]
+        self._ambiguous = set()
+        root = self._resolve_root(old)
+        if not root:
+            message = (f'"{old}" names more than one joint chain. Select a '
+                       'joint of the one you mean and click Select.'
+                       if self._ambiguous else
+                       f'No chain found for "{old}".')
+            cmds.warning(message)
+            self._set_status(f'Rename Chain - {message}')
+            return
+
+        new, ok = QtWidgets.QInputDialog.getText(
+            self, 'Rename Chain',
+            f'New rig part name for "{old}":\n\n'
+            'The chain is renamed and renumbered from 00. Nothing else in '
+            'the scene is touched.\nA name RIGPARTS does not list is ignored '
+            'by Setup and by Tail Build.',
+            text=f'{old}Old')
+        if not ok or not new.strip():
+            self._set_status('Rename Chain - cancelled.')
+            return
+
+        try:
+            joints = rt_chain.rename_chain(root, new.strip())
+        except Exception as exc:
+            cmds.warning(f'Rename failed: {exc}')
+            self._set_status(f'Rename Chain - failed: {exc}')
+            return
+
+        # The box still lists the old rig name, which no longer exists. Point
+        # both it and the recorded root at the renamed chain.
+        new = new.strip()
+        self._roots.pop(old, None)
+        self._starts.pop(old, None)
+        self._roots[new] = joints[0] if joints else None
+        self.txt_chain.setText(
+            ', '.join(new if n == old else n for n in names))
+        self._sync_detected()
+        cmds.warning(f'Renamed "{old}" to "{new}" ({len(joints)} joints, '
+                     'renumbered from 00).')
+        self._set_status(f'Rename Chain - renamed "{old}" to "{new}": '
+                         f'{len(joints)} joints, renumbered from 00.')
+
     def run_build(self):
         '''Build or re-space with the current settings. One undo step.'''
         n = self.spn_count.value()
@@ -706,11 +811,18 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         # One chain per name, each on its own: a typo or a guarded chain in a
         # list of four still leaves the other three rebuilt.
         done, failed, fellback = [], [], []
+        self._ambiguous = set()
         for name in names:
             root = self._resolve_root(name)
             if not root:
-                cmds.warning(f'No chain found for "{name}" - not a rig part '
-                             'or joint name in this scene.')
+                if self._ambiguous:
+                    cmds.warning(
+                        f'"{name}" names more than one joint chain in this '
+                        'scene. Select a joint of the chain you mean and '
+                        'click Select - a typed name cannot say which.')
+                else:
+                    cmds.warning(f'No chain found for "{name}" - not a rig '
+                                 'part or joint name in this scene.')
                 failed.append(name)
                 continue
             # None means the whole chain. A from-selected rebuild with no
@@ -748,6 +860,9 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                           f'{", ".join(fellback)}, built from base')
         if failed:
             status.append(f'failed on {", ".join(failed)} (see Script Editor)')
+        if self._ambiguous:
+            status.append(f'{", ".join(sorted(self._ambiguous))} names more '
+                          'than one chain - select the one you mean')
         self._set_status('Build Joints - ' + '; '.join(status) + '.')
         self._sync_detected()
 

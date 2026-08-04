@@ -304,13 +304,18 @@ def show_joint_orients(show=True):
     count = 0
     for joints in rt_constants.JOINTS_BN.values():
         for jnt in joints:
-            if cmds.objExists(jnt) and \
-                    cmds.attributeQuery('displayLocalAxis', node=jnt, exists=True):
-                try:
+            # Inside the try, all of it: cmds.objExists answers True for a
+            # name two joints share and attributeQuery then raises on it, so
+            # the check that was meant to make this safe was itself the
+            # throw. Chains carry full paths now, but one bad joint must
+            # still not cost the other forty-nine their axes.
+            try:
+                if cmds.attributeQuery('displayLocalAxis', node=jnt,
+                                       exists=True):
                     cmds.setAttr(f'{jnt}.displayLocalAxis', val)
                     count += 1
-                except Exception:
-                    pass
+            except Exception as err:
+                logger.debug(f'Setup: could not toggle axes on {jnt}: {err}')
     logger.info(f'Setup: joint local axes '
                 f'{"shown" if show else "hidden"} on {count} BN joints')
     return count
@@ -1003,9 +1008,16 @@ def _assign_rows(aim, up, aim_axis, up_axis):
 # APPLY ================================================================
 
 def _find_end_joint(parent):
-    ''' The '_ee_' child of a joint (the end/tip marker), or None. '''
-    for c in cmds.listRelatives(parent, typ='joint', children=True) or []:
-        if '_ee_' in c:
+    ''' The '_ee_' child of a joint (the end/tip marker), or None.
+
+    Full paths, and the marker tested on the child's own name: the BN chains
+    carry full DAG paths (rt_joint.get_joint_chain), because a scene may hold
+    two chains with the same joint names and a short one would not say which
+    end joint this is.
+    '''
+    for c in cmds.listRelatives(parent, typ='joint', children=True,
+                                fullPath=True) or []:
+        if rt_maya.is_end_joint(c):
             return c
     return None
 
