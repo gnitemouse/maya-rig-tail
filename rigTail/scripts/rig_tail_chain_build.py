@@ -192,9 +192,17 @@ def _guess_rigname(joint):
     '''Extract a rig part name from a joint name using the naming template,
     falling back to a sanitised version of the root joint name sans index.'''
     try:
-        rigname = rt_naming.get_rigname(joint, rt_constants.JOINT)
-        if rigname:
-            return rigname
+        # Strict first, then the lenient read that also accepts the
+        # convention with its type labels left off ('BN_C_fintail_1'). The
+        # two have to agree, because _index_targets decides on the lenient
+        # parse and then builds the new names from whatever THIS returns:
+        # disagreeing would rename a chain onto a rig part it never
+        # matched.
+        for lenient in (False, True):
+            rigname = rt_naming.get_rigname(joint, rt_constants.JOINT,
+                                            lenient=lenient)
+            if rigname:
+                return rigname
     except Exception:
         pass
     # Fallback: strip the type tags and the index off the joint's own name.
@@ -532,9 +540,18 @@ def _index_targets(bn_joints, rigname, start_index=0):
     carries `rigname`: a rename moves a conventional chain onto a NEW rig
     part name, and it is still the template that says what the joints are
     then called.
+
+    It is also a LENIENT parse, so a chain that is the convention with its
+    type labels left off - 'BN_C_fintail_1' rather than
+    'BN_C_fintail_01_jnt' - is recognised and conformed rather than left
+    half-named. Reading it as unconventional and only fixing its numbering
+    gave 'BN_C_fintail_00', which is neither what the artist typed nor what
+    the convention asks for. The leniency stops at the type labels: the TYPE
+    prefix and an index are both still required, so 'tentacle_bone_01' is
+    still an artist's name and keeps it.
     """
     try:
-        parsed = {rt_naming.get_rigname(j, rt_constants.JOINT)
+        parsed = {rt_naming.get_rigname(j, rt_constants.JOINT, lenient=True)
                   for j in bn_joints}
         conventional = (
             len(parsed) == 1 and None not in parsed and

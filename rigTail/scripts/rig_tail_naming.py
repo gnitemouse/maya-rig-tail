@@ -108,7 +108,7 @@ def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):
     return name
 
 
-def get_rigname(node, template):
+def get_rigname(node, template, lenient=False):
     """
     Get rigname from node, provided a naming template.
     Node name must follow the naming convention from template.
@@ -127,6 +127,11 @@ def get_rigname(node, template):
     Arguments:
         node (str): Node name or DAG path to extract rigname from
         template (str): Naming template with {rigname} placeholder
+        lenient (bool): Also accept a name that is the convention with its
+            type labels left off, e.g. 'BN_C_fintail_1' for
+            '{TYPE}_{rigname}_{NN}_{JNT}'. Off by default: callers that
+            decide whether a node IS a rig part's node want the strict
+            answer. See compile_template_to_regex.
 
     Return:
         str or None: Extracted rigname, or None if not found
@@ -137,12 +142,12 @@ def get_rigname(node, template):
     if not node:
         return None
 
-    regex = compile_template_to_regex(template)
+    regex = compile_template_to_regex(template, lenient)
     m = regex.match(node.split('|')[-1])
     return m.group('rigname') if m else None
 
 
-def compile_template_to_regex(template):
+def compile_template_to_regex(template, lenient=False):
     """
     Compile naming template to regex pattern for matching.
     Known placeholders (TYPE, NN/nn, type labels such as JNT/GRP/CTRL)
@@ -150,12 +155,25 @@ def compile_template_to_regex(template):
 
     Arguments:
         template (str): Naming template with placeholders
+        lenient (bool): Make the type-label placeholders (JNT, GRP, CTRL -
+            anything resolving to a plain rt_constants string) optional,
+            along with the separator in front of them.
+
+            A half-named chain is the common case this exists for:
+            'BN_C_fintail_1' is plainly rig part 'C_fintail' joint 1, but
+            the strict pattern rejects it for want of a '_jnt', and a tool
+            that cannot read it cannot conform it either. The TYPE and the
+            index stay REQUIRED, which is what keeps the leniency narrow:
+            'tentacle_bone_01' still does not match, so genuinely
+            hand-named chains are not swept into the convention.
 
     Return:
         re.Pattern: Compiled regex pattern
     """
     # Break into tokens: {placeholder} or literal text
     tokens = re.findall(r'\{[^}]+\}|[^{}]+', template)
+    # (kind, pattern) rather than bare patterns, so the lenient pass can
+    # tell a type label from an index from a plain separator afterwards.
     parts = []
 
     for tok in tokens:
@@ -165,7 +183,7 @@ def compile_template_to_regex(template):
 
             # Insert leading literal
             if leading:
-                parts.append(re.escape(leading))
+                parts.append(('literal', re.escape(leading)))
 
             # Capture rigname; resolve every other placeholder to its
             # exact value so the neighboring tokens anchor the capture:
@@ -175,31 +193,66 @@ def compile_template_to_regex(template):
             # rignames unambiguous without greedy captures:
             # 'BN_C_tail_00_jnt' -> 'C_tail', never 'C' or 'C_tail_00'.
             if name == 'rigname':
-                parts.append(r'(?P<rigname>.+?)')
+                parts.append(('rigname', r'(?P<rigname>.+?)'))
             elif name in ('NN', 'nn'):
-                parts.append(r'(?:\d+|ee)')
+                parts.append(('index', r'(?:\d+|ee)'))
             elif name == 'TYPE':
                 types = [rt_constants.TYPE_BN, rt_constants.TYPE_IK,
                          rt_constants.TYPE_FK, rt_constants.TYPE_FX]
-                parts.append('(?:' + '|'.join(re.escape(t) for t in types) + ')')
+                parts.append(('type', '(?:' + '|'.join(
+                    re.escape(t) for t in types) + ')'))
             else:
                 const = getattr(rt_constants, name, None)
                 if isinstance(const, str) and const:
-                    parts.append(re.escape(const))
+                    parts.append(('label', re.escape(const)))
                 else:
                     # Unknown placeholder (e.g. TAG): wildcard
-                    parts.append(r'.+?')
+                    parts.append(('wildcard', r'.+?'))
 
             # Insert trailing literal
             if trailing:
-                parts.append(re.escape(trailing))
+                parts.append(('literal', re.escape(trailing)))
 
         else:
             # Literal text outside placeholders
-            parts.append(re.escape(tok))
+            parts.append(('literal', re.escape(tok)))
 
-    pattern = ''.join(parts)
+    if lenient:
+        parts = _relax_labels(parts)
+
+    pattern = ''.join(pattern for _, pattern in parts)
     return re.compile(pattern + r'\Z')
+
+
+def _relax_labels(parts):
+    """
+    Make every type label in a compiled template optional, together with the
+    separator that precedes it.
+
+    The separator has to come inside the optional group: with the template
+    '{TYPE}_{rigname}_{NN}_{JNT}', making only the '{JNT}' optional leaves a
+    dangling '_' that 'BN_C_fintail_1' still fails to supply.
+
+    Arguments:
+        parts (list): (kind, pattern) pairs from compile_template_to_regex
+
+    Return:
+        list: the same pairs with 'label' entries relaxed
+    """
+    out = []
+    for kind, pattern in parts:
+        if kind != 'label':
+            out.append((kind, pattern))
+            continue
+        # Fold in a preceding separator-only literal ('_', '-', '.', ' ').
+        # Anything else is real text the name still has to carry.
+        sep = ''
+        if out and out[-1][0] == 'literal':
+            plain = re.sub(r'\\(.)', r'\1', out[-1][1])
+            if re.fullmatch(r'[_\-. ]+', plain):
+                sep = out.pop()[1]
+        out.append(('label', f'(?:{sep}{pattern})?'))
+    return out
 
 
 def parse_placeholder(raw):
