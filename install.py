@@ -119,14 +119,36 @@ if TOOL_DIR not in sys.path:
 '''
 
 PREAMBLE_TOKEN = '#@TOOL_DIR@'
+PURGE_TOKEN = '#@PURGE@'
+
+# Every launcher purges the whole rig_tail package, not just its own tool's
+# modules.
+#
+# Each tool sits on top of the shared core -- rig_tail_maya, _joint,
+# _naming, _cleanup, _math -- and purging only 'rig_tail_chain' left that
+# core loaded from whenever it was first imported. A core module that gained
+# a function then looked, from the tool, like it had never had one:
+# "module 'rig_tail_maya' has no attribute 'unique_path'", with nothing to
+# suggest a stale import was the cause. Clicking the tool's own button is
+# what an artist does after an update, so that is where the reload has to be
+# complete.
+#
+# rig_tail_constants is deliberately kept: it holds the roster and settings
+# for the session, and re-importing it would throw away RIGPARTS edits made
+# in the Setup UI but not yet saved to a config. It is data and config
+# helpers only, with no dependency on the modules being reloaded. Use the
+# Reload button when it changes -- that one purges everything.
+PURGE_MODULES = '''# Reload the package, keeping the session's settings
+# (see PURGE_MODULES in install.py for why rig_tail_constants stays)
+for mod in list(sys.modules):
+    if mod.startswith('rig_tail') and mod != 'rig_tail_constants':
+        del sys.modules[mod]
+'''
 
 LAUNCH_BUILD_COMMAND = '''# Launch Rig Tail Builder
 #@TOOL_DIR@
 
-for mod in list(sys.modules):
-    if mod.startswith('rig_tail_build'):
-        del sys.modules[mod]
-
+#@PURGE@
 import rig_tail_build_ui as rt_build_ui
 import rig_tail_build_test as rt_build_test
 rt_build_ui.show_ui()
@@ -135,10 +157,7 @@ rt_build_ui.show_ui()
 LAUNCH_CHAIN_COMMAND = '''# Launch Joint Chain Builder
 #@TOOL_DIR@
 
-for mod in list(sys.modules):
-    if mod.startswith('rig_tail_chain'):
-        del sys.modules[mod]
-
+#@PURGE@
 import rig_tail_chain_build_ui as rt_chain_ui
 import rig_tail_chain_build as rt_chain
 import rig_tail_chain_spacing as rt_chain_spacing
@@ -149,10 +168,7 @@ rt_chain_ui.show_ui()
 LAUNCH_SETUP_COMMAND = '''# Launch Rig Tail Setup
 #@TOOL_DIR@
 
-for mod in list(sys.modules):
-    if mod.startswith('rig_tail_setup'):
-        del sys.modules[mod]
-
+#@PURGE@
 import rig_tail_setup as rt_setup
 import rig_tail_setup_ui as rt_setup_ui
 import rig_tail_setup_test as rt_setup_test
@@ -248,9 +264,10 @@ def _source_dir():
 
 
 def _shelf_command(template, tool_dir):
-    '''Embed tool_dir in a shelf command.'''
+    '''Embed tool_dir and the module purge in a shelf command.'''
     preamble = TOOL_DIR_PREAMBLE.format(tool_dir.replace('\\', '/'))
-    return template.replace(PREAMBLE_TOKEN, preamble)
+    return (template.replace(PREAMBLE_TOKEN, preamble)
+                    .replace(PURGE_TOKEN, PURGE_MODULES))
 
 
 def _reload_command(selection):

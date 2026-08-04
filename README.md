@@ -131,9 +131,10 @@ rt.rig_tail_multiple(root='tail', fk=True, ik=True)
 rt.main()                                   # or launch the Builder UI
 ```
 
-Editing a module mid-session? Click **TailReload** (see
-[Tail Reload](#tail-reload)). Importing again on its own will not pick the
-change up, and the other buttons only refresh their own modules.
+Editing a module mid-session? Importing again on its own will not pick the
+change up. The three tool buttons reload every `rig_tail*` module except
+`rig_tail_constants`; click **TailReload** (see [Tail Reload](#tail-reload))
+when that one changes, or for a clean session.
 
 ## Rig Hierarchy
 
@@ -305,14 +306,20 @@ aliases above, and leaves a commented workflow in the Script Editor — chain,
 setup, build and test calls — ready to uncomment.
 
 Use it after editing a module, after re-installing, or to get a clean
-session. The other three buttons refresh only their own modules
-(`rig_tail_chain*`, `rig_tail_setup*`, `rig_tail_build*`), so **TailReload**
-is the only one that guarantees every module on disk is the one running —
-and the only one that picks up an edit to `rig_tail_constants` without
-restarting Maya. The trade-off is that a full reload also resets session
-state: the settings edited in the UI return to the loaded config. The other
-buttons leave `rig_tail_constants` alone, so those settings persist across
-relaunches.
+session.
+
+The other three buttons reload every `rig_tail*` module **except**
+`rig_tail_constants`, so an edit anywhere in the package — including the
+shared core (`rig_tail_maya`, `rig_tail_joint`, `rig_tail_naming`,
+`rig_tail_cleanup`) — is picked up by launching the tool itself. They hold
+`rig_tail_constants` back on purpose: it carries the roster and settings for
+the session, and re-importing it would discard RIGPARTS edits made in the UI
+but not yet saved to a config.
+
+**TailReload** is therefore the only button that picks up an edit to
+`rig_tail_constants` without restarting Maya. The trade-off is that it
+resets that session state: the settings edited in the UI return to the
+loaded config.
 
 ## Requirements
 
