@@ -233,8 +233,9 @@ re-orients the raw BN skeleton so tails move coherently, and never runs
 during the build. Three independent toggles: **Orient Joints** (stop the
 up-axis twisting down the chain), **Mirror Orient** (make matching `L_`/`R_`
 tails face as mirror images) and **Mirror Joints** (mirror their positions
-too). **Roll Chain** is a separate per-tail fix-up that rolls listed chains
-onto the right plane without moving a joint.
+too, and build a target side that has no joints yet). **Roll Chain** is a
+separate per-tail fix-up that rolls listed chains onto the right plane
+without moving a joint.
 
 A typical run enables Orient Joints + Mirror Orient, adding Mirror Joints
 only when the two sides are positionally off. Enable **Dry Run** first to
@@ -244,6 +245,9 @@ if the skeleton is already oriented.
 ### Highlights
 
 - Everything except Mirror Joints preserves joint positions.
+- Mirror Joints is the only toggle that can create a chain. A listed tail
+  with no joints is built from its `L_`/`R_` counterpart; the other toggles
+  warn about it instead. Details go to the Script Editor, not the dialog.
 - Orient runs before the mirrors, so one run with both ticked is always
   correct.
 - Up Mode *Cascade* (default) keeps the roll a chain already has, so a

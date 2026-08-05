@@ -313,7 +313,15 @@ Three independent batch toggles in `rig_tail_constants`:
 |----------|--------|-----------|
 | `ORIENT_JOINTS` | Aim-orient each chain so its up-axis stops twisting from joint to joint. No mirroring: both sides are oriented from their own geometry. `ORIENT_UP_MODE` picks the roll. | kept |
 | `MIRROR_ORIENT` | Reflect matching `L_`/`R_` pairs' **orientation** across the symmetry plane, so the two sides face as mirror images. | kept |
-| `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions** across the symmetry plane, so the target side's joints sit at the exact mirror of the source side's. | **moved** |
+| `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions** across the symmetry plane, so the target side's joints sit at the exact mirror of the source side's. Also **creates** a target side that has no chain at all, mirrored from its source. | **moved** |
+
+A missing chain is only ever created by `MIRROR_JOINTS`: it is the one
+toggle that derives the target's positions in full. The other two can only
+rewrite joints that already exist, so an included rig part with no chain is
+reported instead — as a source side that blocks its pair, as a target side
+that `MIRROR_JOINTS` would build, or as an unpaired part with nothing to
+build from. Every operation, pairing and warning is scoped to the included
+parts.
 
 `ORIENT_JOINTS` runs first, then the mirrors, so a mirror copies a clean
 source. `MIRROR_SOURCE_SIDE` (default `R`) picks which side is authored;

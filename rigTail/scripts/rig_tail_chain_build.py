@@ -4,11 +4,10 @@ author: Daisy Jane @gnitemouse
 
 Maya I/O layer for Joint Chain Builder.
 Detects, guards, creates and rewrites BN joint chains before the Setup
-phase. Sessions cache the original chain shape so repeated count changes
-do not compound distortion.
+phase. A session cache holds each chain's original shape so repeated
+count changes do not compound distortion.
 
-This module imports from the core one-way only: existing modules may
-never import this one.
+Imports from the core one-way only: no core module may import this one.
 
 Functions:
     build_new: create a new chain between two transforms
@@ -19,14 +18,12 @@ Functions:
     chain_root: the root of the chain a joint belongs to
     clear_cache: forget session original cache for one or all chains
 
-Joints are addressed by full DAG path throughout. A scene may hold two
-chains with the same joint names - a replacement tail built alongside the
-one it will replace - and a short name cannot say which is meant; Maya
-answers an ambiguous one with 'More than one object matches name'.
+Joints are addressed by full DAG path throughout: a scene may hold two
+chains with the same joint names, and a short name cannot say which is
+meant.
 
-Settings deliberately live nowhere: every option is a UI widget read at
-click time. No config file, no preferences — the tool is a handful of
-controls and each click is a single undo.
+Settings live nowhere. Every option is a UI widget read at click time,
+and each click is a single undo.
 """
 
 import math
@@ -45,18 +42,15 @@ logger = logger_setup(__name__)
 
 
 # SESSION ORIGINAL CACHE ================================================
-# Module global, dies on reload, no scene metadata.
-# Keyed on the root joint's long DAG path. Each entry stores the
-# original positions (the first time the chain was touched this session)
-# and the last-written positions.
+# Keyed on the root joint's long DAG path; dies on reload, nothing written
+# to the scene. Each entry holds the chain's positions the first time it
+# was touched this session, plus the last ones written.
 
 _ORIGINALS = {}
 
-# Display radius given to a chain that has none worth keeping, and the ceiling
-# every rebuild applies: half the mean segment, so the spheres of adjacent
-# joints just touch however dense the chain gets.  Without it a chain taken
-# from 21 joints to 80 keeps a radius set for the old spacing and draws as one
-# solid blob.
+# Radius ceiling every rebuild applies: half the mean segment, so adjacent
+# joint spheres just touch however dense the chain gets. Without it a chain
+# taken from 21 joints to 80 draws as one solid blob.
 RADIUS_SEGMENT_FRACTION = 0.5
 
 
@@ -72,9 +66,8 @@ class ChainSpec:
         self.end = end            # end transform
         self.rigname = rigname    # rig part name
         self.is_new = is_new      # True = build new, False = rebuild
-        # The joint actually picked in the viewport, which is what
-        # 'Build from selected joint' rebuilds down from.  Equal to root
-        # whenever the root itself was the pick.
+        # The joint picked in the viewport, which 'Build from selected
+        # joint' rebuilds down from. Equals root when the root was picked.
         self.selected = selected
 
 
@@ -92,9 +85,8 @@ def resolve_selection():
         - Many joints: resolve each to its root, deduplicate.
         - Nothing / non-transforms: abort.
     """
-    # Full paths: the selection is the ONE place the tool learns which of
-    # two identically named chains the artist means, so the answer must
-    # survive being written down.
+    # Full paths: the selection is the one place the tool learns which of
+    # two identically named chains is meant.
     sel = cmds.ls(selection=True, transforms=True, long=True)
     if not sel:
         abort_build(logger, 'Nothing selected. Select joints or transforms '
@@ -104,11 +96,9 @@ def resolve_selection():
     joints = [n for n in sel if cmds.nodeType(n) == 'joint']
 
     if joints:
-        # Any joint in the selection means rebuild.  Resolving every joint
-        # to its own chain root and de-duplicating handles one joint, a whole
-        # chain, and joints picked across several tails with one rule — the
-        # roots collapse to one entry per chain however many of its joints
-        # are selected.
+        # Any joint means rebuild. Resolving each to its chain root and
+        # de-duplicating collapses one joint, a whole chain, or joints
+        # picked across several tails to one entry per chain.
         roots = {}
         for j in joints:
             root = _walk_to_root(j)
@@ -118,9 +108,8 @@ def resolve_selection():
                 roots[key] = ChainSpec(root=root, rigname=_guess_rigname(root),
                                        selected=j)
             elif _depth(j) < _depth(spec.selected):
-                # Several joints of one chain picked: the highest one is what
-                # 'from selected joint' rebuilds down from, so the whole
-                # picked run is covered rather than its tail end.
+                # Several joints of one chain picked: rebuild from the
+                # highest, so the whole picked run is covered.
                 spec.selected = j
         return list(roots.values())
 
@@ -151,16 +140,11 @@ def chain_root(joint):
 
 def _walk_to_root(joint):
     '''Walk up from joint until the parent is not a joint, is a branch
-    point (has more than one joint child), or belongs to a different rig
-    part.
+    point, or belongs to a different rig part.
 
-    The rig-part test is what stops a tail parented under a spine from
-    reporting a spine joint as its base: the spine has one child, is a
-    joint, and would otherwise be walked straight through, putting spine
-    joints inside the chain a rebuild re-spaces.
-
-    Works in full DAG paths, so a chain whose joint names are duplicated
-    elsewhere in the scene still walks to ITS OWN root.
+    The rig-part test stops a tail parented under a spine from reporting a
+    spine joint as its base and pulling spine joints into the rebuild.
+    Works in full paths, so a duplicated chain still finds its own root.
     '''
     j = rt_maya.unique_path(joint)
     if not j:
@@ -192,12 +176,10 @@ def _guess_rigname(joint):
     '''Extract a rig part name from a joint name using the naming template,
     falling back to a sanitised version of the root joint name sans index.'''
     try:
-        # Strict first, then the lenient read that also accepts the
-        # convention with its type labels left off ('BN_C_fintail_1'). The
-        # two have to agree, because _index_targets decides on the lenient
-        # parse and then builds the new names from whatever THIS returns:
-        # disagreeing would rename a chain onto a rig part it never
-        # matched.
+        # Strict first, then lenient (accepts the convention with its type
+        # labels left off, 'BN_C_fintail_1'). Both must agree: the naming
+        # decision is made on the lenient parse but the names are built
+        # from whatever this returns.
         for lenient in (False, True):
             rigname = rt_naming.get_rigname(joint, rt_constants.JOINT,
                                             lenient=lenient)
@@ -216,9 +198,8 @@ def _guess_rigname(joint):
     # Remove trailing digits (index)
     while parts and parts[-1].isdigit():
         parts.pop()
-    # And the LEADING type tag. Without this a joint whose name the template
-    # cannot parse yields 'BN_R_fintail' rather than 'R_fintail', and the
-    # rebuild goes on to name its new joints 'BN_BN_R_fintail_00_jnt'.
+    # And the LEADING type tag, or an unparsable name yields 'BN_R_fintail'
+    # and the rebuild names its joints 'BN_BN_R_fintail_00_jnt'.
     while len(parts) > 1 and parts[0] in types:
         parts.pop(0)
     return '_'.join(parts) if parts else name
@@ -233,9 +214,8 @@ def _guard_chain(joints):
     branching children, locked translates.
     '''
     for j in joints:
-        # Joints arrive as full DAG paths (see rt_joint.get_joint_chain).
-        # Messages name the leaf, which is what the artist sees in the
-        # Outliner, but every cmds call keeps the path.
+        # Messages name the leaf, which is what the Outliner shows; every
+        # cmds call keeps the full path.
         name = rt_maya.leaf(j)
         skin = _find_influence_skin(j)
         if skin:
@@ -274,11 +254,9 @@ def _guard_chain(joints):
 def _find_influence_skin(joint):
     '''Return the first skinCluster this joint is an influence of.
 
-    A skinCluster sits DOWNSTREAM of its influences -- joint.worldMatrix
-    feeds skinCluster.matrix -- so the lookup follows the joint's future.
-    Walking its history instead finds nothing however tightly the joint is
-    bound, which is the difference between guarding a skinned chain and
-    silently re-spacing one.
+    A skinCluster sits DOWNSTREAM of its influences (joint.worldMatrix
+    feeds skinCluster.matrix), so the lookup goes forward. Walking history
+    instead finds nothing however tightly the joint is bound.
     '''
     skins = cmds.listConnections(f'{joint}.worldMatrix', source=False,
                                  destination=True, type='skinCluster') or []
@@ -323,12 +301,10 @@ def _fit_radius(baseline, positions):
     '''
     The one radius the whole chain should draw at.
 
-    The artist's own radius, never larger than half the new mean segment.
-    The cap is what stops a chain looking like a single blob once the count
-    goes up: the joints get closer together, so the spheres have to get
-    smaller with them.  `baseline` comes from the session original cache,
-    not from the chain as it stands, so lowering the count again restores
-    the radius rather than ratcheting it down for good.
+    The artist's own radius, never larger than half the new mean segment,
+    so a denser chain does not draw as one blob. `baseline` comes from the
+    session original cache rather than the chain as it stands, so lowering
+    the count again restores the radius instead of ratcheting it down.
 
     Arguments:
         baseline (float): the chain's own radius, or None if unreadable
@@ -374,11 +350,9 @@ def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
     creating or deleting joints as needed, preserving the _ee_ end joint.
 
     Every write ends with the span's indices running start_index,
-    start_index+1, ... down the chain, whatever the count did. Numbering is
-    part of what the tool guarantees, not a side effect of adding or
-    removing joints: a chain that was mis-numbered before a same-count
-    re-space used to stay mis-numbered, because there was no rename pass to
-    ride along with.
+    start_index+1, ... down the chain, whatever the count did. The
+    numbering is guaranteed rather than a side effect of adding or removing
+    joints, so a same-count re-space still fixes a mis-numbered chain.
 
     Arguments:
         joints (list): current chain joints as full DAG paths (including
@@ -394,7 +368,7 @@ def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
             None falls back to holding the _ee_'s original distance out along
             the new final segment.
         reserved (set): leaf names held by joints ABOVE the span, which the
-            renumber must not collide with. See _renumber_chain.
+            renumber must not collide with
 
     Return:
         list: new chain joints as full DAG paths (BN only, no _ee_)
@@ -410,10 +384,9 @@ def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
     joints = _renumber_chain(joints, rigname, start_index, reserved)
 
     if n == old_n:
-        # Hierarchy stays exactly as it is; only positions move. The _ee_
-        # still has to follow the tip: a same-count re-space (say Keep ->
-        # Uniform) moves the last joint, and an _ee_ left behind would give
-        # Setup a bogus final aim direction.
+        # Hierarchy unchanged, positions only. The _ee_ still follows the
+        # tip - a same-count re-space moves the last joint, and an _ee_
+        # left behind gives Setup a bogus final aim direction.
         bn = [j for j in joints if not rt_maya.is_end_joint(j)]
         for j, pos in zip(bn, positions):
             cmds.xform(j, ws=True, t=pos)
@@ -432,13 +405,11 @@ def _renumber_chain(joints, rigname, start_index=0, reserved=None):
     Rewrite the span's joint indices so they increment by one from
     start_index, and return the span with its joints re-resolved.
 
-    Two naming modes, chosen for the span as a whole by _index_targets: a
-    conventional chain is rebuilt from the naming template, an
-    unconventional one keeps its own names and has only its index token
-    rewritten. Deciding per chain rather than per joint is what stops a span
-    coming out half template-named and half artist-named; it costs nothing,
-    because rewriting the index of an already-conventional name produces
-    exactly the template name anyway.
+    Two naming modes, chosen for the span as a whole: a conventional chain
+    is rebuilt from the naming template, an unconventional one keeps its own
+    names and has only its index token rewritten. Deciding per chain rather
+    than per joint stops a span coming out half template-named and half
+    artist-named, and costs nothing either way.
 
     Arguments:
         joints (list): span joints as full DAG paths, _ee_ included
@@ -470,22 +441,17 @@ def _renumber_chain(joints, rigname, start_index=0, reserved=None):
             'The joints above the rebuilt span are numbered inconsistently; '
             'rebuild from the base joint to renumber the whole chain.')
 
-    # UUIDs survive renames, and the path is re-resolved from one at every
-    # step: renaming a joint invalidates the stored paths of everything
-    # below it, so the list this started with goes stale immediately. The
-    # _ee_ is tracked the same way even when its own name does not change -
-    # it sits at the bottom of the chain, so EVERY rename above it moves it,
-    # and looking a stale path up again by name is what the whole change is
-    # here to stop.
+    # Track by UUID and re-resolve the path at every step: renaming a joint
+    # invalidates the stored paths of everything below it, so the list this
+    # started with goes stale immediately. That includes the _ee_ even when
+    # its own name never changes.
     uuids = [(cmds.ls(j, uuid=True) or [None])[0] for j in bn_joints]
     originals = [rt_maya.leaf(j) for j in bn_joints]
     ee_uuid = (cmds.ls(ee, uuid=True) or [None])[0] if ee else None
 
-    # Maya cannot swap names in-place, and the span's targets overlap its
-    # current names whenever the run shifts by anything but zero. EVERY
-    # joint goes through a unique temporary name first - not just the ones
-    # whose name changes - so no target can collide with a name the pass has
-    # not moved out of the way yet.
+    # Maya cannot swap names in-place, and a shifted run's targets overlap
+    # its current names. EVERY joint goes through a temporary name first,
+    # so no target collides with one not yet moved out of the way.
     for i, uuid in enumerate(uuids):
         current = cmds.ls(uuid, long=True) if uuid else None
         if current:
@@ -537,18 +503,13 @@ def _index_targets(bn_joints, rigname, start_index=0):
         past it. (None, None) when the names cannot be read at all.
 
     The test is that the chain parses consistently, not that it already
-    carries `rigname`: a rename moves a conventional chain onto a NEW rig
-    part name, and it is still the template that says what the joints are
-    then called.
+    carries `rigname` - a rename moves a conventional chain onto a NEW rig
+    part name, and the template still says what its joints are called.
 
-    It is also a LENIENT parse, so a chain that is the convention with its
-    type labels left off - 'BN_C_fintail_1' rather than
-    'BN_C_fintail_01_jnt' - is recognised and conformed rather than left
-    half-named. Reading it as unconventional and only fixing its numbering
-    gave 'BN_C_fintail_00', which is neither what the artist typed nor what
-    the convention asks for. The leniency stops at the type labels: the TYPE
-    prefix and an index are both still required, so 'tentacle_bone_01' is
-    still an artist's name and keeps it.
+    The parse is LENIENT, so the convention with its type labels left off
+    ('BN_C_fintail_1') is recognised and conformed rather than left
+    half-named. The leniency stops there: a TYPE prefix and an index are
+    both still required, so 'tentacle_bone_01' keeps its artist name.
     """
     try:
         parsed = {rt_naming.get_rigname(j, rt_constants.JOINT, lenient=True)
@@ -581,10 +542,9 @@ def _shrink_chain(joints, positions, rigname, ee_distance, ee_pos=None):
     for j, pos in zip(keep, positions):
         cmds.xform(j, ws=True, t=pos)
 
-    # Reparent the _ee_ to the new last joint BEFORE deleting the surplus —
-    # its old parent is among them. cmds.parent returns a short name, so the
-    # result is re-resolved: that name may well match a joint of another
-    # chain, and _place_ee has to move THIS one.
+    # Reparent the _ee_ BEFORE deleting the surplus - its old parent is
+    # among them. The result is re-resolved to a path, since _place_ee has
+    # to move THIS _ee_ and not a same-named one in another chain.
     anchor = keep[-1] if keep else joints[0]
     ee = _find_ee(joints)
     if ee:
@@ -611,10 +571,9 @@ def _grow_chain(joints, positions, rigname, ee_distance, start_index=0,
     for j, pos in zip(bn, positions[:old_n]):
         cmds.xform(j, ws=True, t=pos)
 
-    # What to call the joints about to be created. The span's naming mode is
-    # settled once, here, rather than per joint: a chain whose names the
-    # template cannot parse grows joints that continue ITS naming instead of
-    # reverting to the template halfway down.
+    # Naming mode is settled once for the span, so a chain the template
+    # cannot parse grows joints continuing ITS naming rather than reverting
+    # to the template halfway down.
     _, mode = _index_targets(bn, rigname, start_index)
 
     # Create new joints
@@ -641,15 +600,13 @@ def _add_end_joint(joints, positions, rigname):
     Give a chain that has no '_ee_' one, a segment out past its tip.
 
     The new joint continues the chain's final direction at the length of its
-    final segment, so the tail gets longer by one segment rather than the
-    joints being re-spread to make room. That is the point of it: an artist
-    asking for an end joint on a chain that never had one is marking where
-    the tail carries on to, not moving the joints already placed.
+    final segment, so the tail gets one segment longer rather than its
+    joints being re-spread to make room - asking for an end joint marks
+    where the tail carries on to, it does not move what is already placed.
 
-    It matters for what comes next. Setup aims the last real joint at the
-    '_ee_' rather than guessing a final direction, and a later rebuild
-    treats the '_ee_' as the end of the tail's length - so from the next
-    rebuild on, this chain re-spaces up to here.
+    Downstream, Setup aims the last real joint at the '_ee_' instead of
+    guessing a final direction, and a later rebuild treats it as the end of
+    the tail's length, so the chain re-spaces up to here from now on.
 
     Arguments:
         joints (list): the chain's BN joints, full DAG paths, root first
@@ -687,12 +644,11 @@ def _end_joint_name(last_bn, rigname, mode):
     '''
     What to call a chain's '_ee_' end joint.
 
-    Template mode takes it from the naming template. In-place mode keeps the
-    chain's own naming and swaps its index token for 'ee', so an
-    artist-named chain does not sprout one joint named to a convention the
-    rest of it does not follow. A last joint with no index token to swap
-    leaves nothing to build from, so the template is the fallback - better a
-    conventional name than two joints called the same thing.
+    Template mode takes it from the naming template. In-place mode swaps the
+    chain's own index token for 'ee', so an artist-named chain does not
+    sprout one joint following a convention the rest of it does not. With no
+    index token to swap the template is the fallback - a conventional name
+    beats two joints called the same thing.
     '''
     if mode == 'in-place':
         name = rt_naming.replace_index_in_name(last_bn, 'ee')
@@ -708,12 +664,11 @@ def _grown_name(bn, rigname, mode, start_index, index):
     `index`.
 
     Follows the span's own naming: the template when the existing joints
-    parse as this rig part, otherwise the last existing joint's name with
-    its index token rewritten. Without the second case a chain with artist
-    names grows joints named from the template, so raising the count leaves
-    it named two different ways down its length. A last joint with no index
-    token to rewrite has no stem to follow, so the template is the only
-    answer left.
+    parse as this rig part, otherwise the last joint's name with its index
+    token rewritten - without which raising the count would leave an
+    artist-named chain named two ways down its length. With no index token
+    to rewrite there is no stem to follow, so the template is all that is
+    left.
     '''
     if mode == 'in-place' and bn:
         grown = rt_naming.replace_index_in_name(bn[-1], start_index + index)
@@ -727,14 +682,10 @@ def _create_joint(name, parent=None):
     '''
     Create a joint under `parent` and return its full DAG path.
 
-    Created parented rather than created-then-parented, because the name
-    cmds.createNode answers with is not safe to hand back to cmds.parent: a
-    chain being grown to 50 joints creates 'BN_R_fintail_17_jnt' while the
-    chain it is replacing still has one, and the very next call is given a
-    name that now matches two nodes.
-
-    The path is built from the name Maya actually used, which is not always
-    the name asked for - a clash under one parent gets uniquified.
+    Created already parented, since the short name cmds.createNode answers
+    with is not safe to hand back to cmds.parent while another chain holds
+    a joint of that name. The path is built from the name Maya actually
+    used, which a clash under one parent may have uniquified.
     '''
     made = cmds.createNode('joint', name=name, parent=parent) if parent \
         else cmds.createNode('joint', name=name)
@@ -749,9 +700,8 @@ def _reparent(node, parent):
     '''
     Parent a node and return its new full DAG path.
 
-    cmds.parent answers with a short name, which is exactly the name that is
-    not safe to keep hold of: the scene may well hold another joint called
-    the same thing in the chain this one is replacing.
+    cmds.parent answers with a short name, which is the one name not safe to
+    keep hold of: another chain may hold a joint called the same thing.
     '''
     moved = cmds.parent(node, parent)
     if not moved:
@@ -761,14 +711,11 @@ def _reparent(node, parent):
 
 
 def _copy_joint_attrs(src, dst):
-    '''Carry rotateOrder, preferredAngle and the display radius from the
-    nearest surviving neighbour onto a newly created joint, so a grown chain
-    stays uniform in the channels the rest of the pipeline reads.
-
-    radius matters visually rather than mechanically: a fresh joint draws at
-    Maya's default 1.0, which is why growing a chain used to fill it with
-    joints far larger than the ones already there.  The chain-wide pass in
-    rebuild settles the final value; this keeps the joint sane in between.
+    '''Carry rotateOrder, preferredAngle and radius from the nearest
+    surviving neighbour onto a new joint, so a grown chain stays uniform in
+    the channels the rest of the pipeline reads. radius is visual only, but
+    a fresh joint draws at Maya's default 1.0 and swamps the chain until the
+    chain-wide pass settles the final value.
     '''
     if not src:
         return
@@ -783,12 +730,11 @@ def _copy_joint_attrs(src, dst):
 def _place_ee(ee, positions, distance, target=None):
     '''Put the _ee_ end joint where the rebuild wants it.
 
-    `target` is the resample's own final point: the _ee_ marks the end of the
-    tail's length, so it takes part in the resample and lands back exactly
-    where the artist left it, whatever the joint count. Without one -- no
-    _ee_ took part, because it sits on top of the tip -- fall back to the old
-    rule: its original distance out along the new final segment, so it still
-    hands Setup a sane final aim direction.
+    `target` is the resample's own final point: the _ee_ marks the end of
+    the tail's length, so it takes part in the resample and lands back
+    where it was, whatever the joint count. Without one, fall back to its
+    original distance out along the new final segment, which still gives
+    Setup a sane final aim direction.
     '''
     if not ee:
         return
@@ -814,10 +760,9 @@ def _end_joint(last_bn):
     '''
     The _ee_ end joint hanging off a chain's last BN joint, if any.
 
-    rt_joint.get_joint_chain stops BEFORE the _ee_, so it never appears in the
-    chain list and has to be looked up from the tip.  Setup's end-joint
-    handling depends on it existing and being sensibly placed, so a rebuild
-    that ignored it would leave it behind at the old tip.
+    Chain detection stops BEFORE the _ee_, so it never appears in the chain
+    list and has to be looked up from the tip. A rebuild that ignored it
+    would leave it behind at the old tip, which Setup then aims at.
     '''
     if not last_bn:
         return None
@@ -882,7 +827,7 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
         orient (bool): aim-orient the new joints down the chain instead of
             leaving Maya's default
         add_ee (bool): finish the chain with an '_ee_' end joint, a segment
-            out past the tip. See _add_end_joint.
+            out past the tip
 
     Return:
         list: the new BN joints, root first ('_ee_' excluded, as everywhere)
@@ -901,11 +846,8 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
         positions, _ = rt_chain_spacing.resample(
             [start_pos, end_pos], n, mode, param=param, invert=invert, snap=False)
 
-        # Create joints. A new chain is numbered from 00 by definition, and
-        # the joints are tracked by full DAG path from the moment they are
-        # parented - cmds.createNode and cmds.parent both answer with short
-        # names, which say nothing about WHICH node they mean once the scene
-        # holds a second chain named the same way.
+        # A new chain is numbered from 00 by definition, and tracked by full
+        # DAG path from the moment its joints are parented.
         joints = []
         parent = cmds.listRelatives(start, parent=True, fullPath=True) or None
         for i, pos in enumerate(positions):
@@ -918,9 +860,8 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
 
         ee = _add_end_joint(joints, positions, rigname) if add_ee else None
 
-        # Every joint is brand new, so there is no artist radius to keep and
-        # Maya's default 1.0 has nothing to do with the chain's scale. Fit it
-        # to the spacing instead.
+        # Nothing to keep on a brand-new chain, and Maya's default 1.0 has
+        # nothing to do with its scale, so fit the radius to the spacing.
         _apply_radius(joints + ([ee] if ee else []),
                       _fit_radius(_joint_radius(start), positions))
 
@@ -956,14 +897,13 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
     '''
     Aim-orient a chain down its own length.
 
-    Read-only use of rt_setup.aim_frames — the same frames Setup's Orient
-    Joints produces, so the two agree rather than fighting. up_ref None is
-    Setup's 'best-fit' (roll from the chain's bend plane), which is right for
-    a brand-new chain; passing the chain's current up is its 'cascade', which
-    keeps the roll an existing chain already had.
+    Produces the same frames Setup's Orient Joints does, so the two agree
+    rather than fighting. up_ref None is Setup's 'best-fit' (roll from the
+    chain's bend plane), right for a brand-new chain; passing the chain's
+    current up is its 'cascade', which keeps the roll it already had.
 
-    Imported here rather than at module scope so the rest of the tool stays
-    usable if Setup is unavailable.
+    Setup is imported here, not at module scope, so the rest of the tool
+    still works without it.
 
     Arguments:
         joints (list): chain joints, root first.
@@ -976,20 +916,16 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
     aim_axis = getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')
     up_axis = getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')
     frames = rt_setup.aim_frames(positions, aim_axis, up_axis, up_ref)
-    # The _ee_ position MUST be read before the chain is re-oriented. It is a
-    # child excluded from the chain, so nothing re-places it: it simply swings
-    # with its parent, because its local translate is a fixed offset in the
-    # parent's space. Re-aiming the tip therefore moves the _ee_ in world by
-    # the same rotation, and reading its position afterwards bakes that swing
-    # in — which is the _ee_ standing perpendicular to the chain it should
-    # continue. _place_ee has already put it on the final segment; this pins
-    # it there. Same rule as rt_setup._end_joint_position.
+    # Read the _ee_ position BEFORE re-orienting. Nothing re-places the
+    # _ee_, so it swings with its parent when the tip is re-aimed, and
+    # reading it afterwards bakes that swing in - leaving it perpendicular
+    # to the chain it should continue. _place_ee already put it on the
+    # final segment; this pins it there.
     ee_pos = cmds.xform(ee, q=True, ws=True, t=True) if ee else None
     for joint, frame, pos in zip(joints, frames, positions):
         _write_frame(joint, frame, pos)
-    # The _ee_ is excluded from the chain, so it would keep a stale
-    # orientation pointing a different way from everything above it. Give it
-    # the last real joint's frame, as Setup does.
+    # Excluded from the chain, the _ee_ would otherwise keep a stale
+    # orientation, so give it the last real joint's frame.
     if ee:
         _write_frame(ee, frames[-1], ee_pos)
     mode = 'cascade' if up_ref else 'best-fit'
@@ -1000,10 +936,9 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
 def _write_frame(joint, frame, pos):
     '''Set a joint's world orientation, landing it in jointOrient.
 
-    The full world matrix is set directly (unambiguous, no euler-order
-    dependence); with jointOrient zeroed the orientation arrives in rotate,
-    which is then moved into jointOrient with rotate cleared, so the joint
-    reads as a clean rest pose.
+    The world matrix is set directly (no euler-order dependence); with
+    jointOrient zeroed the orientation arrives in rotate, which is then
+    moved into jointOrient, leaving the joint at a clean rest pose.
     '''
     cmds.setAttr(f'{joint}.rotate', 0, 0, 0)
     cmds.setAttr(f'{joint}.jointOrient', 0, 0, 0)
@@ -1045,8 +980,8 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
 
         add_ee (bool): give the chain an '_ee_' end joint if it has not got
             one, a segment out past the tip. Ignored when the chain already
-            has one - that joint is the tail's end and is never replaced,
-            and never removed either. See _add_end_joint.
+            has one - that joint is the tail's end, and is never replaced
+            or removed.
 
     Numbering: the rebuilt span always comes out with its indices
     incrementing by one down the chain. From the base that run starts at 00;
@@ -1087,12 +1022,10 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             'the base.')
 
     # ...and the index its first joint is NUMBERED with, which is not the
-    # same thing. A from-selected rebuild leaves the run above untouched, so
-    # the span has to continue THAT run's numbering: taking the position
-    # instead renumbers a span picked at '_05_jnt' of a chain numbered from
-    # 01 as if it started at 04, colliding with the joint above it and
-    # leaving two joints of that name in one chain. From the base the answer
-    # is 0 by definition - that is what 'base joint starts at 00' means.
+    # same thing. The span has to continue the untouched run's numbering:
+    # using the position instead renumbers a span picked at '_05_jnt' of a
+    # chain numbered from 01 as if it started at 04, colliding with the
+    # joint above it. From the base the answer is 0 by definition.
     start_index = 0
     if span_at:
         named = rt_naming.get_index_from_name(chain[0])
@@ -1107,27 +1040,23 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
     _guard_min_length(chain)
 
     with rt_maya.build_performance_scope(name='Joint Chain Builder'):
-        # Keyed on the span's own first joint, so a from-the-base rebuild and
-        # a from-partway one keep separate baselines instead of resampling
-        # each other's positions. Already a full DAG path, which is what
-        # makes the key tell two identically named chains apart.
+        # Keyed on the span's own first joint, so a from-the-base rebuild
+        # and a from-partway one keep separate baselines. Already a full
+        # DAG path, which is what tells two same-named chains apart.
         key = chain[0]
         current_positions = [cmds.xform(j, q=True, ws=True, t=True)
                              for j in chain if not rt_maya.is_end_joint(j)]
-        # The _ee_ is where the tail actually ends, so it is the last point of
-        # the resample rather than something dragged along behind the tip.
-        # That pins it in world and spreads the BN joints over the WHOLE
-        # length up to it: the gap between the last BN joint and the _ee_ is
-        # one segment of the new count, so it narrows as the count rises
-        # instead of the tail stopping ever further short of its own end.
-        # Without an _ee_ the last BN joint is the end and is pinned instead.
+        # The _ee_ is where the tail ends, so it takes part in the resample
+        # as its last point rather than being dragged behind the tip. That
+        # pins it in world and spreads the BN joints over the whole length
+        # up to it. Without one, the last BN joint is the end and is pinned.
         ee = _end_joint(chain[-1])
         ee_source = cmds.xform(ee, q=True, ws=True, t=True) if ee else None
         if ee_source and _length_vec(
                 _sub(ee_source, current_positions[-1])) < rt_chain_spacing.EPS:
-            # An _ee_ sitting on top of the tip adds no length and would give
-            # the resample a zero-length final span. Leave it out and let
-            # _place_ee follow the tip the old way.
+            # An _ee_ sitting on top of the tip adds no length and would
+            # give the resample a zero-length final span. Leave it out and
+            # let it follow the tip instead.
             ee_source = None
         if ee_source:
             current_positions.append(ee_source)
@@ -1141,18 +1070,17 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         # when the chain has not been hand-edited since the last write.
         if key in _ORIGINALS:
             written = _ORIGINALS[key]['written']
-            # Compare against what this tool last wrote.  Positions are plain
-            # lists here, not nodes, so the distance is computed inline —
-            # rt_math.get_vec_length takes node names.
+            # Compare against what this tool last wrote. These are plain
+            # position lists, not nodes, so the distance is inline.
             drift = max(
                 _length_vec(_sub(current_positions[i], written[i]))
                 for i in range(min(len(current_positions), len(written)))
             ) if written else float('inf')
             if (drift > rt_constants.JOINT_POS_TOLERANCE or
                     _ORIGINALS[key].get('has_ee') != bool(ee_source)):
-                # Hand-edited, or the _ee_ came or went since the baseline was
-                # taken — either way the cached source no longer describes the
-                # length being re-spaced. Re-baseline.
+                # Hand-edited, or the _ee_ came or went: either way the
+                # cached source no longer describes the length being
+                # re-spaced, so re-baseline.
                 _ORIGINALS[key]['positions'] = [list(p) for p in current_positions]
                 _ORIGINALS[key]['radius'] = _joint_radius(chain[0])
                 _ORIGINALS[key]['has_ee'] = bool(ee_source)
@@ -1161,61 +1089,54 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             _ORIGINALS[key] = {
                 'positions': [list(p) for p in current_positions],
                 'written': None,
-                # Whether that baseline runs all the way out to an _ee_, so a
-                # later rebuild can tell a stale source from a live one.
+                # Whether that baseline runs out to an _ee_, so a later
+                # rebuild can tell a stale source from a live one.
                 'has_ee': bool(ee_source),
                 # The radius as the artist left it, cached for the same
-                # reason the positions are: every later rebuild fits its
-                # radius to this, so raising the count and lowering it again
-                # comes back to the size it started at.
+                # reason the positions are: every rebuild fits to this, so
+                # raising the count and lowering it again comes back.
                 'radius': _joint_radius(chain[0]),
             }
             source = current_positions
 
-        # Resample.  With an _ee_ in the source the chain needs one more point
-        # than it has BN joints: the last one belongs to the _ee_.
+        # With an _ee_ in the source the chain needs one more point than it
+        # has BN joints: the last one belongs to the _ee_.
         positions, snapped = rt_chain_spacing.resample(
             source, n + 1 if ee_source else n, mode,
             param=param, invert=invert, snap=snap)
         ee_pos = positions.pop() if ee_source else None
 
-        # Write.  get_joint_chain stops before the _ee_, so append it here:
-        # _write_chain re-parents it onto the new tip and re-places it.
+        # Chain detection stops before the _ee_, so append it here for
+        # _write_chain to re-parent onto the new tip and re-place.
         all_joints = list(chain)
         if ee:
             all_joints.append(ee)
         result = _write_chain(all_joints, positions, rigname, start_index,
                               ee_pos, reserved)
 
-        # An end joint the chain never had, if asked for. Created here,
-        # after the write: it takes no part in the resample that just ran
-        # (it marks where the tail carries on to, not where it stops), but
-        # it does need to exist before the radius and orient passes below,
-        # which both read the chain's end joint.
+        # An end joint the chain never had, if asked for. After the write:
+        # it took no part in the resample, but it must exist before the
+        # radius and orient passes below, which both read it.
         if add_ee and not ee:
             _add_end_joint(result, positions, rigname)
 
         # One radius for the whole span, sized to the spacing it ended up
-        # with. Without this a grown chain mixes the artist's radius with
-        # Maya's default 1.0 on the joints that were just created, which is
-        # what makes a denser chain look like it grew fat rather than long.
+        # with, so a grown chain does not mix the artist's radius with
+        # Maya's default 1.0 on the joints just created.
         ee = _end_joint(result[-1])
         _apply_radius(result + ([ee] if ee else []),
                       _fit_radius(_ORIGINALS[key].get('radius'), positions))
 
         if orient:
-            # The _ee_ was re-read above: a count change re-parents it, and a
-            # shrink gave it a new parent entirely.
+            # ee was re-read above: a count change re-parents it.
             _orient_chain(result, positions, ee, up_ref)
 
-        # Update cache
-        # A count change can rename the root.  Move the cache to its new
-        # long DAG path so subsequent edits still use the original source.
+        # A count change can rename the root, so move the cache entry to its
+        # new path or later edits lose the original source.
         result_key = (cmds.ls(result[0], long=True) or [result[0]])[0]
         entry = _ORIGINALS.pop(key)
-        # Written mirrors current_positions point for point, _ee_ included, so
-        # the next rebuild's drift check notices a hand-moved _ee_ as readily
-        # as a hand-moved joint.
+        # 'written' mirrors current_positions point for point, _ee_
+        # included, so the next drift check notices a hand-moved _ee_ too.
         entry['written'] = ([list(p) for p in positions] +
                             ([list(ee_pos)] if ee_pos else []))
         _ORIGINALS[result_key] = entry
@@ -1266,20 +1187,15 @@ def rename_chain(root_joint, rigname):
     """
     Rename ONE chain's joints onto a new rig part name, in place.
 
-    Scoped to the chain given, which is what makes it usable while a second
-    chain still answers to the old rig part name: rt_cleanup.rename_rigpart
-    sweeps the whole scene by name token, so it would rename both chains and
-    leave the collision exactly as it was. Here the chain is addressed by
-    DAG path, so the one that was picked in the viewport is the one that
-    moves.
+    Scoped to the one chain by DAG path, which is what makes it usable while
+    a second chain still answers to the old rig part name - a scene-wide
+    rename by name token would move both and leave the collision as it was.
 
-    The point of it is to park a chain out of the roster without deleting
-    it. A rig part name that RIGPARTS does not list is ignored by Setup and
-    by the build, so the old tail can sit in the scene, skin and all, while
-    its replacement takes over the name.
-
-    Joints are renumbered from 00 as they are renamed, so the parked chain
-    comes out conventional whatever it was before.
+    The point is to park a chain out of the roster without deleting it. A
+    rig part name RIGPARTS does not list is ignored by Setup and by the
+    build, so the old tail can sit in the scene, skin and all, while its
+    replacement takes over the name. Joints are renumbered from 00 as they
+    are renamed, so the parked chain comes out conventional either way.
 
     Arguments:
         root_joint (str): any joint of the chain (a DAG path when the name

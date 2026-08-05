@@ -9,12 +9,10 @@ rig_tail_chain_build). Two kinds:
     spacing functions in isolation under plain Python.
     run_math()
 
-  SCENE tests - run on the loaded skeleton and are MUTATING: they
-    create, rebuild and re-space real joint chains through the same entry
-    points the UI uses. Like the real tool they affect the scene, so
-    RELOAD THE SCENE afterwards. Each one snapshots the chain's names and
-    positions and puts them back, but a shrink deletes joints and undo
-    does not run for the whole suite - the reload is what makes it clean.
+  SCENE tests - MUTATING. Create, rebuild and re-space real joint chains
+    through the same entry points the UI uses, so RELOAD THE SCENE
+    afterwards. Each test restores the chain's names and positions, but a
+    shrink deletes joints and undo does not cover the whole suite.
     run_scene()
 
 Usage:
@@ -27,13 +25,8 @@ Usage:
     rt_chain_test.test_guards()            # MUTATING, but on its own scratch chain
 
 The scene tests default to DEFAULT_CHAIN on the sample squid scene; pass
-a rig part name (or the name of any joint in the chain) on another rig.
-run_math() needs no Maya at all, so maya.cmds and the Maya I/O layer are
-imported behind a guard rather than at module scope.
-
-Containment:
-    test_containment greps every core module for rig_tail_chain and
-    fails if any is found - enforcing the one-way import rule.
+a rig part name (or any joint in the chain) on another rig. run_math()
+needs no Maya, so the Maya I/O layer is imported behind a guard.
 
 Functions:
   Runners
@@ -73,10 +66,8 @@ import os
 
 import rig_tail_chain_spacing as rt_chain_spacing
 
-# The scene half. Imported behind a guard so run_math() stays runnable
-# under plain Python: rig_tail_chain_build pulls in maya.cmds, and a
-# top-level import would take that away for the sake of five tests that
-# need a scene anyway. _require_maya() turns the absence into a skip.
+# The scene half, behind a guard so run_math() stays runnable under plain
+# Python. _require_maya() turns the absence into a skip.
 try:
     import maya.cmds as cmds
     import rig_tail_constants as rt_constants
@@ -154,10 +145,9 @@ def _chain_length(positions):
 def _smooth_chain(n, bunch=2.0):
     """A tail-like chain: a smooth curve, unevenly spaced along itself.
 
-    _random_chain is uniform noise in a unit cube — consecutive segments
-    turn through ~90-180 degrees, which no real skeleton does. Shape-
-    stability claims are about chains like this one instead: curved, but
-    with a well-defined path that survives being resampled.
+    Random noise turns ~90-180 degrees between segments, which no real
+    skeleton does. Shape-stability claims are about a chain like this:
+    curved, with a path well-defined enough to survive resampling.
     """
     pts = []
     for i in range(n):
@@ -252,10 +242,9 @@ def test_invert_symmetry():
 def test_taper_direction():
     """Power and Ratio both taper base -> tip; Invert reverses every mode.
 
-    The direction is a promise the UI makes in words ('spacing starts wide
-    at the base and closes toward the tip'), and it is one sign flip away
-    from being silently wrong: u = t**k tapers the opposite way to
-    u = t**(1/k) and both look plausible in a screenshot.
+    The UI promises this in words, and it is one sign flip from being
+    silently wrong: t**k tapers the opposite way to t**(1/k), and both
+    look plausible in a screenshot.
     """
     ok = True
     for n in (5, 9, 20):
@@ -373,17 +362,16 @@ def test_keep_preserves_distribution():
 def test_resample_noop():
     """Re-spacing at unchanged count does not drift.
 
-    This is the exactness claim the whole anti-drift argument rests on, and
-    it is NOT 'n == N returns the input': asking for Uniform on a chain that
-    is not uniform must genuinely redistribute it. Three separate promises:
+    The exactness claim the anti-drift argument rests on - and NOT 'n == N
+    returns the input': Uniform on a non-uniform chain must genuinely
+    redistribute it. Three promises:
 
-      Keep at n == N is EXACT at any count — PCHIP and Catmull-Rom both
-        interpolate at their knots, and that is the default mode, so the
-        first click on a freshly selected chain never touches it.
+      Keep at n == N is EXACT at any count, since PCHIP and Catmull-Rom
+        both interpolate at their knots. It is also the default mode, so
+        the first click on a freshly selected chain never touches it.
       The analytic modes are idempotent to within a hair of the chain
-        length once the count actually samples the shape. At tiny counts
-        the reconstructed curve IS the loss (plan section 4), so a second
-        pass lands slightly differently; the error falls away with count.
+        length once the count samples the shape. At tiny counts the
+        reconstruction itself is the loss, and that error falls with count.
       Everything contracts (below), so repeated clicks settle.
     """
     ok = True
@@ -401,10 +389,10 @@ def test_resample_noop():
                 ok &= _verdict(f"n={n} keep exact at unchanged count",
                                d < POS_TOL, f"max err={d}")
             else:
-                # Bound the shape-reconstruction error, not floating point:
-                # N samples of a curve reconstruct it to O(1/N^2), so the
-                # limit tightens with count instead of being one flat number
-                # that is either meaningless at n=21 or unmeetable at n=3.
+                # Bounds the shape-reconstruction error, not floating
+                # point: N samples reconstruct a curve to O(1/N^2), so the
+                # limit tightens with count rather than being one flat
+                # number that suits neither n=3 nor n=21.
                 limit = length * 0.5 / n ** 2
                 ok &= _verdict(f"n={n} {mode} idempotent to {limit:.4f}",
                                d < limit, f"max err={d}")
@@ -561,9 +549,9 @@ def _resolve_root(name):
     """
     The chain root for a rig part name, or for the name of any joint in it.
 
-    The same cheap lookups the UI's Joint Chain(s) box does: the naming
-    template turns a rig part into its root joint's name outright,
-    otherwise the name is taken literally as a joint and walked up.
+    The same lookups the UI's Joint Chain(s) box does: the naming template
+    turns a rig part into its root joint's name, otherwise the name is
+    taken literally as a joint and walked up.
     """
     try:
         templated = rt_naming.fstr(name, rt_constants.JOINT,
@@ -576,11 +564,10 @@ def _resolve_root(name):
 
 
 def _chain_bn(root):
-    """The chain's BN joints, root first. get_joint_chain stops before _ee_.
+    """The chain's BN joints, root first. Detection stops before the _ee_.
 
-    The filter tests the joint's own name, not its DAG path: get_joint_chain
-    returns full paths, and a chain parented under an '_ee_' joint would
-    otherwise filter itself away entirely.
+    The filter tests the joint's own name, not its DAG path: a chain
+    parented under an '_ee_' joint would otherwise filter itself away.
     """
     return [j for j in rt_joint.get_joint_chain(root)
             if '_ee_' not in j.split('|')[-1]]
@@ -623,9 +610,8 @@ def _name_diff(want, got):
     """
     How two name lists differ, in one line.
 
-    A tail is 30-odd joints; printing both lists in full on every verdict
-    buries the run in names nobody reads. The first difference is what
-    tells you what happened.
+    A tail is 30-odd joints, and printing both lists on every verdict
+    buries the run. The first difference is what tells you what happened.
     """
     if want == got:
         return f'{len(got)} name(s) unchanged'
@@ -647,9 +633,8 @@ def _broken_parent(chain):
     The first joint whose parent is not its predecessor, or None.
 
     A rebuild can return a plausible-looking list while leaving a joint
-    parented to a node that is no longer above it - a shrink re-parents
-    the _ee_ and any stray children before deleting the surplus, and a
-    grow parents each new joint onto the previous one.
+    parented to a node no longer above it, since a shrink re-parents
+    before deleting and a grow parents each new joint onto the previous.
     """
     for i in range(1, len(chain)):
         parent = _parent_joint(chain[i])
@@ -680,10 +665,9 @@ def _restore(state, root=None):
     Put the chain back to its snapshot count and positions and forget the
     session original cache.
 
-    Best effort, and NOT a substitute for reloading the scene: joints a
-    shrink deleted come back as freshly created nodes, and orientations
-    are not restored. It exists so one failing test does not leave the
-    next one measuring a chain of the wrong length.
+    Best effort, NOT a substitute for reloading the scene: deleted joints
+    come back as fresh nodes and orientations are not restored. It exists
+    so one failing test does not leave the next measuring a wrong chain.
     """
     root = root or _resolve_root(state['names'][0]) or state['root']
     try:
@@ -738,13 +722,12 @@ def _make_scratch_chain(junk, n=6, length=10.0):
     """
     Build a throwaway straight chain, returning (root, joints).
 
-    test_guards arms its hazards on a chain the test owns rather than on
-    the loaded skeleton: arming them means binding a skinCluster,
-    connecting a driver and hanging a branch off a joint, and doing that
-    to real joints would leave debris behind the moment something raised.
+    test_guards arms its hazards - a skinCluster, a driver connection, a
+    branch child - on a chain the test owns, since doing that to real
+    joints would leave debris the moment something raised.
 
-    Every node is appended to the caller's junk list as it is made, so a
-    raise halfway through still leaves the caller something to delete.
+    Every node joins the caller's junk list as it is made, so a raise
+    halfway through still leaves something to delete.
     """
     start = cmds.spaceLocator(name=f'{SCRATCH}_start')[0]
     junk.append(start)
@@ -776,25 +759,19 @@ def test_rebuild_count(rigname=DEFAULT_CHAIN):
     what, and where the _ee_ ends up.
 
     Grow, shrink and same-count in one pass, all resampled from the same
-    cached original. What has to hold for every one of them:
+    cached original. What has to hold for every one:
 
-      The chain as it stands IN THE SCENE - walked down from the root, not
-        read off the returned list - is exactly n joints in a single
-        parent-to-child line. A rebuild that returned the right names
-        while orphaning a joint or leaving a stale parent passes any check
-        that only looks at the return value.
-      Both ends of the TAIL sit where they always did. The base is the root
-        joint; the end is the _ee_ when the chain has one, otherwise the
-        last BN joint. Resampling pins them, so no count change may shorten
-        the tail or move its base.
+      The chain IN THE SCENE - walked down from the root, not read off the
+        returned list - is exactly n joints in one parent-to-child line.
+        Checking only the return value would miss an orphaned joint.
+      Both ends of the TAIL sit where they always did: the root joint, and
+        the _ee_ when there is one, otherwise the last BN joint.
       No two joints land on top of each other.
-      The _ee_ still hangs off the NEW tip. Left behind at the old tip it
-        would hand Setup a bogus final aim direction.
+      The _ee_ hangs off the NEW tip. Left at the old one it would hand
+        Setup a bogus final aim direction.
       The last BN joint stops ONE SEGMENT short of the _ee_, and that gap
-        narrows as the count rises. The _ee_ is the end of the tail's
-        length, not a fixed-length stub tacked onto whatever the last BN
-        joint happens to be, so 50 joints have to reach closer to it than
-        30 do.
+        narrows as the count rises - the _ee_ is the end of the tail's
+        length, not a fixed-length stub behind the last joint.
     """
     if not _require_maya('test_rebuild_count'):
         return None
@@ -882,14 +859,13 @@ def test_names_preserved(rigname=DEFAULT_CHAIN):
     """
     A same-count rebuild leaves every name untouched.
 
-    n == N is what the UI opens on - Select sets Joint Count to the chain's
-    own length - so this is the common case, and in it the joints move and
-    nothing else changes: no renumbering, no new nodes, no renamed _ee_.
+    n == N is what the UI opens on, so this is the common case: the joints
+    move and nothing else changes - no renumbering, no new nodes, no
+    renamed _ee_.
 
-    Deliberately Power with a strong exponent rather than Uniform. On a
-    chain that is already evenly spaced, Uniform would move nothing and
-    "the names survived" would be true of doing nothing at all; Power at
-    k=3 redistributes any chain, so the claim has something to survive.
+    Power at k=3 rather than Uniform, deliberately. Uniform would move
+    nothing on an already-even chain, and 'the names survived' would then
+    be true of doing nothing at all.
     """
     if not _require_maya('test_names_preserved'):
         return None
@@ -932,15 +908,14 @@ def test_partial_rebuild(rigname=DEFAULT_CHAIN):
     """
     'Build from selected joint' re-spaces the span and NOTHING above it.
 
-    The whole value of the option is what it leaves alone, so that is what
-    is measured: the run above the picked joint keeps its names, its
-    positions and its numbering, and the picked joint itself does not move
-    - it is an endpoint of the resample, which is what lets the joint above
-    it go on aiming exactly where it was.
+    The value of the option is what it leaves alone, so that is what is
+    measured: the run above the picked joint keeps its names, positions
+    and numbering, and the picked joint itself does not move - being an
+    endpoint of the resample, it lets the joint above go on aiming at it.
 
     Grows the span rather than matching its count, so the renumbering path
-    runs: a partial rebuild has to continue the numbers above it
-    (joint 8 onward), not restart the span at 0 and collide with the root.
+    runs: it has to continue the numbers above it, not restart at 0 and
+    collide with the root.
     """
     if not _require_maya('test_partial_rebuild'):
         return None
@@ -1011,10 +986,9 @@ def test_radius_consistent(rigname=DEFAULT_CHAIN):
     capped at half the new mean segment, so joints that end up closer
     together get smaller with the spacing rather than swallowing it.
 
-    The lower count is rebuilt afterwards on purpose. The cap comes from the
-    session original cache, not from the chain as it stands, so it has to
-    lift again when the joints spread back out instead of ratcheting the
-    chain permanently small.
+    The lower count is rebuilt afterwards on purpose: the cap comes from
+    the session original cache, so it has to lift again when the joints
+    spread back out rather than ratcheting the chain permanently small.
     """
     if not _require_maya('test_radius_consistent'):
         return None
@@ -1062,19 +1036,11 @@ def test_guards():
     with a clean rebuild either side: a refusal only means something if
     the same chain rebuilds once the hazard is gone.
 
-    Two details do the real work.
-
-    The guard must raise RigTailBuildError SPECIFICALLY. "It raised
-    something" is not a pass: the bug this test exists for had
-    _find_influence_skin calling cmds.listHistory(joint, type='skinCluster')
-    - listHistory has no -type flag - so every rebuild died with a
-    TypeError and the Chain Builder silently did nothing. A test that
-    accepted any exception would have called a completely broken tool
-    well guarded. The clean-chain controls catch the same bug from the
-    other side, by insisting an unguarded chain rebuilds at all.
-
-    And the chain must be untouched afterwards. The guards run before the
-    write, so a refusal is a no-op, not a half-finished rebuild.
+    Two details do the real work. The guard must raise RigTailBuildError
+    SPECIFICALLY - 'it raised something' would pass a tool whose skin
+    lookup itself throws a TypeError on every chain, guarded or not, which
+    is the bug this test exists for. And the chain must be untouched
+    afterwards: the guards run before the write, so a refusal is a no-op.
     """
     if not _require_maya('test_guards'):
         return None
@@ -1216,22 +1182,17 @@ def test_cache_no_compounding(rigname=DEFAULT_CHAIN):
     Ten count changes and back to N land exactly where one N->n->N pass
     does. The empirical proof of the session original cache.
 
-    Every rebuild resamples the chain's FIRST-SEEN shape, not the shape
-    the last rebuild left behind, so distortion cannot accumulate however
-    many times the artist drags the count spinner. The claim is not the
-    weak "less than ten times the drift" - it is that the two paths agree
-    to within float noise, because both are the same one resampling of the
-    same source. Without the cache the ten-pass result would be ten
-    lossy passes stacked on each other.
+    Every rebuild resamples the chain's FIRST-SEEN shape, not what the last
+    rebuild left behind, so distortion cannot accumulate however many times
+    the count spinner is dragged. The claim is not the weak 'less than ten
+    times the drift' - the two paths agree to within float noise, being the
+    same single resampling of the same source.
 
-    Uses Power at k=3 rather than Uniform so the redistribution is
-    substantial on any chain: comparing two paths that both moved nothing
-    would prove nothing.
+    Power at k=3, not Uniform, so the redistribution is substantial on any
+    chain; two paths that both moved nothing would prove nothing.
 
-    Also checks the escape hatch. A chain edited by hand between clicks
-    re-baselines - past JOINT_POS_TOLERANCE the cache is discarded and the
-    chain as it now stands becomes the new original - so the cache is a
-    convenience, not a cage.
+    Also checks the escape hatch: a chain edited by hand past
+    JOINT_POS_TOLERANCE re-baselines, so the cache is not a cage.
     """
     if not _require_maya('test_cache_no_compounding'):
         return None
@@ -1322,19 +1283,14 @@ def test_undo(rigname=DEFAULT_CHAIN):
     """
     One undo restores the pre-click state, for a grow and for a shrink.
 
-    The rebuild runs inside build_performance_scope, which opens a single
-    undo chunk, so everything one click does - new nodes, deleted nodes,
-    renumbering, the _ee_ re-parented and re-placed - has to come back in
-    ONE step. Anything less leaves the artist hammering Ctrl+Z through a
-    half-rebuilt chain with no way to tell when they have arrived.
+    The rebuild runs in a single undo chunk, so everything one click does -
+    new nodes, deleted nodes, renumbering, the _ee_ re-parented and
+    re-placed - has to come back in ONE step. The shrink is the harder
+    half: undoing it must bring deleted joints back, named and placed as
+    they were.
 
-    The shrink is the harder half: undoing it has to bring deleted joints
-    back, under their old names, in their old places.
-
-    The session original cache is a module global and is NOT undone. After
-    an undo it still holds what the tool last wrote, so the next rebuild
-    sees the difference and re-baselines - intended, and checked in
-    test_cache_no_compounding rather than here.
+    The session original cache is a module global and is NOT undone, so the
+    next rebuild re-baselines. That is intended, and checked elsewhere.
     """
     if not _require_maya('test_undo'):
         return None

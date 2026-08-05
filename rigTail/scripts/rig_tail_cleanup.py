@@ -1364,10 +1364,17 @@ def detect_joints_bn():
     logger.debug('Detect BN joints for all RIGPARTS (Setup phase)')
     found = []
     find_start = _bn_start_finder()
+    # Detection covers the full roster so roll_chain still reaches an
+    # excluded part, but only an INCLUDED part missing its chain is worth
+    # saying out loud - an excluded one was held back on purpose.
+    included = set(rt_cache.active_parts())
     for rigname in rt_constants.RIGPARTS:
         start_jnt = find_start(rigname)
         if not start_jnt:
-            logger.warning(f'{rigname}: No BN joints found, skipping')
+            if rigname in included:
+                logger.warning(f'{rigname}: No BN joints found, skipping')
+            else:
+                logger.debug(f'{rigname}: No BN joints found (excluded)')
             continue
         chain = rt_joint.get_joint_chain(start_jnt)
         if not chain:

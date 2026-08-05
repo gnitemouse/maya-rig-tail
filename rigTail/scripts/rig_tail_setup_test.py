@@ -57,6 +57,7 @@ Functions:
     test_mirror_frames: mirror reflects the aim to the far side, and the
         symmetric/parallel behaviors are a 180 deg roll apart
     test_find_mirror_pairs: L/R pairing honours the source side
+    test_swap_side: side-token swap picks the mirrored parent's name
   Scene tests (MUTATING)
     test_orient: ORIENT_JOINTS leaves valid frames aimed down the chain
     test_end_joint: the '_ee_' joint keeps its position, stays down-chain
@@ -411,6 +412,22 @@ def test_find_mirror_pairs():
     finally:
         rt_constants.RIGPARTS = saved_parts
         rt_constants.MIRROR_SOURCE_SIDE = saved_side
+
+
+def test_swap_side():
+    '''_swap_side flips L/R side tokens and leaves everything else alone.'''
+    cases = [
+        ('BN_R_fintail_00_jnt', 'BN_L_fintail_00_jnt'),
+        ('BN_L_fintail_00_jnt', 'BN_R_fintail_00_jnt'),
+        ('BN_C_fintail_00_jnt', 'BN_C_fintail_00_jnt'),
+        # Multi-letter tokens starting with l/r must not be touched.
+        ('BN_root_left_jnt', 'BN_root_left_jnt'),
+    ]
+    ok = True
+    for name, want in cases:
+        got = rt_setup._swap_side(name)
+        ok &= _verdict(f'_swap_side {name}', got == want, f'got {got}')
+    return ok
 
 
 # SCENE HELPERS ========================================================
@@ -884,7 +901,7 @@ def run_math():
     '''Run every safe geometry-helper test and print a summary.'''
     tests = [test_reflect, test_assign_rows, test_roll_about,
              test_aim_frames, test_up_mode, test_mirror_frames,
-             test_find_mirror_pairs]
+             test_find_mirror_pairs, test_swap_side]
     results = []
     for fn in tests:
         print(f'\n--- {fn.__name__} ---')

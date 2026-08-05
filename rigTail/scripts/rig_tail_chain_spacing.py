@@ -34,16 +34,12 @@ EPS = 1e-9
 ALPHA = 0.5           # centripetal Catmull–Rom
 K_RANGE = (0.2, 5.0)  # power exponent clamping
 K_DEFAULT = 1.7       # power exponent when none is given
-# Power evaluates u = t ** (1/k), NOT t ** k.  Both Power and Ratio taper the
-# same way -- long segments at the base, short ones toward the tip -- so
-# raising either number strengthens the same taper and Invert is the one
-# control that swaps the direction.  k < 1 reverses it, which is what makes
-# K_RANGE symmetric about 1.0 in the 1/k sense.
-# Ratio is capped at 1.0: r < 1 packs joints toward the tip and r == 1 is
-# uniform, so the whole useful range is (0, 1] and the other direction is
-# reached with invert.  The floor is NOT 0 — small r collapses the far end
-# of the chain (r = 0.7 over 30 joints ends on a segment 2e-5 of the chain
-# length), and a zero-length bone breaks aim-orient downstream in Setup.
+# Power and Ratio taper the same way — long segments at the base, short ones
+# at the tip — so Invert is the only control that swaps the direction.
+# K_RANGE is symmetric about 1.0 in the 1/k sense; r == 1 is uniform, so the
+# useful ratio range is (0, 1]. The 0.5 floor is not cosmetic: smaller r
+# collapses the tip end (r = 0.7 over 30 joints ends on a segment 2e-5 of
+# the chain), and a zero-length bone breaks Setup's aim-orient.
 R_RANGE = (0.5, 1.0)  # ratio clamping
 R_DEFAULT = 0.90      # ratio when none is given
 
@@ -177,9 +173,9 @@ def arclength_table(points):
     total = (n - 1) * ARC_SAMPLES
     table = [0.0]
     prev = list(points[0])
-    # Sample every span independently.  A global, uniformly spaced knot
-    # parameter misses the original knots on non-uniform chains, which in
-    # turn makes s_hat point at the wrong entries in the table.
+    # Per span, not one global sweep: a uniformly spaced knot parameter
+    # misses the original knots on a non-uniform chain, and s_hat would then
+    # index the wrong table entries.
     for span in range(n - 1):
         for step in range(1, ARC_SAMPLES + 1):
             t = knots[span] + (knots[span + 1] - knots[span]) * step / ARC_SAMPLES
@@ -250,9 +246,8 @@ def distribute(mode, n, param=None, invert=False, source=None):
         ratio    — geometric ratio r  (r R_DEFAULT, clamped to R_RANGE)
         keep     — PCHIP resample of source distribution (source required)
 
-    Power and Ratio both taper base -> tip: the segments start long at the
-    base and get shorter toward the tip, so joints bunch at the tip. k above
-    1 and r below 1 strengthen that taper; Invert swaps the direction for
+    Power and Ratio both taper base -> tip, so joints bunch at the tip; k
+    above 1 and r below 1 strengthen it. Invert swaps the direction for
     every mode, Keep included.
 
     Arguments:
@@ -279,10 +274,8 @@ def distribute(mode, n, param=None, invert=False, source=None):
         if abs(k - 1.0) < EPS:
             u_vals = list(t_vals)
         else:
-            # 1/k, so k > 1 pushes u ABOVE t: the chain covers more of its
-            # length in the first few joints, which is a long base segment
-            # tapering to short ones at the tip -- the same direction Ratio
-            # tapers.  t ** k would taper the other way.
+            # 1/k, not k: it pushes u above t, so the chain covers more of
+            # its length early and tapers base -> tip like Ratio does.
             u_vals = [t ** (1.0 / k) for t in t_vals]
 
     elif mode == 'ratio':
@@ -297,9 +290,8 @@ def distribute(mode, n, param=None, invert=False, source=None):
         if not source or len(source) < 2:
             u_vals = list(t_vals)
         else:
-            # Preserve the source distribution: joint index is the input
-            # coordinate and its curve arclength is the output coordinate.
-            # Reversing those axes instead produces the inverse profile.
+            # Joint index in, curve arclength out - reversing those axes
+            # would give the inverse profile.
             x_norm = [i / (len(source) - 1) for i in range(len(source))]
             m = pchip_tangents(x_norm, source)
             u_vals = pchip_eval(x_norm, source, m, t_vals)
@@ -477,20 +469,16 @@ def resample(source_points, n, mode, param=None, invert=False, snap=True):
             snapped_indices)
     """
     N = len(source_points)
-    # No short-circuit at n == N.  Re-spacing an existing chain WITHOUT
-    # changing its count is the tool's main job (Keep -> Uniform on 21
-    # joints), so returning the input unchanged there would make three of
-    # the four modes do nothing.  Exactness at unchanged count comes from
-    # the maths instead: Catmull-Rom and PCHIP both interpolate at their
-    # knots, so Keep at n == N evaluates back onto the original positions,
-    # and any mode re-applied to its own result is a true no-op.
+    # Deliberately no short-circuit at n == N: re-spacing at an unchanged
+    # count is the tool's main job. Exactness comes from the maths instead -
+    # Catmull-Rom and PCHIP interpolate at their knots, so Keep at n == N
+    # lands back on the original positions.
     knots = catmull_rom_knots(source_points)
     table, total = arclength_table(source_points)
 
-    # Source normalised arclengths: the cumulative arclength fraction at
-    # each original knot. On a uniform-straight chain these equal i/(N-1);
-    # on a curved chain they differ, which is why snap uses the actual
-    # arclength, not the parameter fraction.
+    # Cumulative arclength fraction at each original knot. These only equal
+    # i/(N-1) on a straight uniform chain, which is why snap works off the
+    # actual arclength rather than the parameter fraction.
     s_hat = []
     for i in range(N):
         if total > EPS:

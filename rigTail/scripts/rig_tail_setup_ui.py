@@ -24,6 +24,10 @@ Three batch operations, exposed as checkboxes:
         Disabled unless Mirror Orient is ticked.
     Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
         positions so the target side's joints sit at the exact mirror.
+        Also the only operation that CREATES a chain: a listed rig part
+        whose target-side joints do not exist yet is built from its source
+        side. The other two can only rewrite joints that already exist, so
+        they warn about a missing chain instead.
 Below those, its own section, is the interactive Roll Chain fix-up: list one
 or more chains in the Chain box (type them, or Select to read them from the
 selected joints), then the left/right arrows roll every one of them about
@@ -227,7 +231,12 @@ class RigTailSetupUI(QtWidgets.QDialog):
             'Reflect each matching L_/R_ pair\'s POSITIONS across the '
             'symmetry plane, so the target side\'s joints sit at the exact '
             'mirror of the source side\'s. Moves joints. Enable only when the '
-            'sides are not already positional mirrors. (MIRROR_JOINTS)')
+            'sides are not already positional mirrors.\n'
+            'Also BUILDS a target side that has no joints at all: an '
+            "included rig part like 'L_fintail' with no chain gets one "
+            "mirrored from 'R_fintail', end joint included. Mirror Orient "
+            'and Orient Joints cannot create joints, so they only warn about '
+            'a missing chain. (MIRROR_JOINTS)')
         self.chk_dryrun = QtWidgets.QCheckBox('Dry Run (preview only)')
         self.chk_dryrun.setToolTip(
             'Only log the intended changes for the batch operations (orient '
@@ -849,27 +858,23 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 f'Setup failed:\n{str(e)}')
             return
 
-        preview = ' (preview only, nothing changed)' if result.get('dry_run') else ''
-        excluded = result.get('excluded') or []
-        excluded_msg = ''
-        if excluded:
-            excluded_msg = (
-                f"\n\nSkipped {len(excluded)} excluded rig part(s):\n  "
-                f"{', '.join(excluded)}\nTheir joints were left untouched "
-                'and their geometry stays bound.')
-        missing = result.get('missing_geo') or []
-        missing_msg = ''
-        if missing:
-            missing_msg = (
-                f"\n\nWARNING - no geometry found for {len(missing)} rig "
-                f"part(s):\n  {', '.join(missing)}\nTheir meshes are not "
-                "named '<rigname>_geo' / '<rigname>' / '<rigname>_NN', so "
-                'they will not bind or deform. Rename the meshes to match.')
+        # One line in the dialog, the full account in the Script Editor:
+        # every case below is already logged in detail by the Setup phase,
+        # so repeating it here only buries the counts that matter.
+        counts = [
+            (result.get('created'), 'chain(s) created'),
+            (result.get('missing_chains'), 'chain(s) missing'),
+            (result.get('missing_geo'), 'without geometry'),
+            (result.get('excluded'), 'excluded'),
+        ]
+        notes = [f'{len(items)} {label}' for items, label in counts if items]
+        detail = f" - {', '.join(notes)}" if notes else ''
+        preview = ' Preview only, nothing changed.' \
+            if result.get('dry_run') else ''
         QtWidgets.QMessageBox.information(self, 'Setup complete',
-            f"Oriented {result.get('oriented', 0)} joints, "
-            f"mirrored {result.get('mirrored', 0)} joints{preview}.\n\n"
-            'See the Script Editor log for per-chain details. '
-            f'Build the rig next.{excluded_msg}{missing_msg}')
+            f"Oriented {result.get('oriented', 0)} joints, mirrored "
+            f"{result.get('mirrored', 0)}{detail}.{preview} "
+            'See the Script Editor for details.')
         self.update_display()
         # Close on a real run, like the Builder does; keep the window up
         # after a dry run so the previewed settings can be run for real.

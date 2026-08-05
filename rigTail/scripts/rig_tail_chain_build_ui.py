@@ -5,14 +5,13 @@ author: Daisy Jane @gnitemouse
 PySide2 UI for Joint Chain Builder.
 Create and re-space BN joint chains before the Setup phase.
 
-Own copies of create_group_box / style_button — never modifies shared
-widgets in rig_tail_ui.py (see §2.2 of the Joint Chain Builder plan).
+Keeps its own create_group_box / style_button rather than touching the
+shared widgets the other tool windows use.
 
-Deliberately stateless: every option is a widget read at click time, with
-no config file and no preferences. The tool is a handful of controls and
-one undo step per click, so there is nothing worth persisting. What little
-the window does remember is scene state, not settings: which chains Select
-found and which joint of each was picked.
+Stateless by design: every option is a widget read at click time, with no
+config file and no preferences. What the window remembers is scene state,
+not settings - which chains Select found, and which joint of each was
+picked.
 
 Classes and functions:
     JointChainBuilderUI: the Joint Chain Builder window
@@ -40,20 +39,15 @@ class JointChainBuilderUI(QtWidgets.QDialog):
     FIELD_H = 28        # height of every input widget
     LABEL_W = 150       # shared field start
     ROW_GAP = 6         # label -> field gap, identical on every row
-    # Breathing room between a field and the grey hint beside it. Applied as
-    # the hint's own left margin rather than the row's spacing, because
-    # changing a row's spacing would also move that row's field and break
-    # the shared left edge.
+    # Gap between a field and the grey hint beside it. The hint's own left
+    # margin, not the row's spacing - that would move the field too and
+    # break the shared left edge.
     HINT_STYLE = 'color: #999999; font-size: 10px; margin-left: 2px;'
 
     # Left padding is 8px everywhere EXCEPT the combo box, which gets 10.
-    # QLineEdit and the spin boxes (which contain a QLineEdit) add Qt's own
-    # 2px internal horizontal margin on top of the stylesheet padding; a
-    # QComboBox paints its text straight into the padded rect and has no
-    # such margin. Matching numbers therefore look mismatched: the combo
-    # text sits 2px left of everything else. The extra 2px here is what
-    # makes Joint Chain(s), Joint Count, Spacing and Spacing Value all
-    # start their text on one line.
+    # QLineEdit and the spin boxes add Qt's own 2px internal margin on top
+    # of the stylesheet padding; a QComboBox does not. Matching numbers
+    # would leave the combo text 2px left of every other field.
     FIELD_STYLE = '''
         QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
             background-color: #3a3a3a; color: #cccccc;
@@ -69,10 +63,9 @@ class JointChainBuilderUI(QtWidgets.QDialog):
 
     MODES = ['Keep', 'Uniform', 'Power', 'Ratio']
 
-    # Spacing Value is only meaningful for the two parametric modes. Each
-    # keeps its own value and range so switching Power <-> Ratio does not
-    # carry a nonsensical number across (1.7 is a fine exponent and an
-    # impossible ratio).
+    # Spacing Value only means anything in the two parametric modes, and
+    # each keeps its own value and range: 1.7 is a fine exponent and an
+    # impossible ratio, so switching must not carry it across.
     PARAM_MODES = {
         'power': (rt_chain_spacing.K_DEFAULT, rt_chain_spacing.K_RANGE, 0.05),
         'ratio': (rt_chain_spacing.R_DEFAULT, rt_chain_spacing.R_RANGE, 0.01),
@@ -87,22 +80,19 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self._param_values = {mode: default
                               for mode, (default, _, _) in self.PARAM_MODES.items()}
         self._param_mode = None
-        # Rig name -> chain root (a full DAG path), filled by Select. The box
-        # shows rig names because that is what reads well in a list; the tool
-        # works on roots. A path, not a name: two chains may answer to one
-        # rig name, and the pick is what says which.
+        # Rig name -> chain root, as a full DAG path, filled by Select. The
+        # box lists rig names because they read well; a path is stored
+        # because two chains may answer to one name and the pick says which.
         self._roots = {}
-        # Typed names that turned out to name more than one joint, collected
-        # by _root_from_name so an action can tell the artist to select the
-        # chain instead of reporting a bare 'no chain found'.
+        # Typed names that turned out to match more than one joint, so an
+        # action can say 'select the chain' rather than 'no chain found'.
         self._ambiguous = set()
-        # Rig name -> the joint actually picked in the viewport, for
-        # 'Build from selected joint'. Only Select can fill this in: a typed
-        # name says which chain, never which joint of it.
+        # Rig name -> the joint picked in the viewport, for 'Build from
+        # selected joint'. Only Select can fill this in: a typed name says
+        # which chain, never which joint of it.
         self._starts = {}
         # Last count Select or a Build-from switch put in the spin box, so
-        # the field can follow the detected count until the artist overrides
-        # it and then stop touching it.
+        # the field follows the detected count until the artist overrides it.
         self._detected_first = None
         self.setup_ui()
         self._sync_source_mode()    # also syncs the mode-dependent fields
@@ -185,19 +175,17 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             'them; rename them in Maya afterwards if you want something '
             'else.')
         self.rad_rebuild.toggled.connect(self._sync_source_mode)
-        # Explicit groups, because all four radio buttons end up children of
-        # the Source group box and Qt would otherwise make one exclusive set
-        # of the lot: picking 'from selected joint' would clear 'Rebuild
-        # selected chain'.
+        # Explicit groups: all four radios are children of the Source group
+        # box, and Qt would otherwise make one exclusive set of the lot.
         self._source_group = QtWidgets.QButtonGroup(self)
         for rad in (self.rad_rebuild, self.rad_new):
             rad.setStyleSheet('color: #cccccc; spacing: 4px;')
             self._source_group.addButton(rad)
 
         # Build from -----------------------------------------------------
-        # Which end of a rebuild's chain the joint count and spacing apply
-        # from. Last in Source because it qualifies what the pair above
-        # already chose rather than being a third choice alongside them.
+        # Which end of a rebuild's chain the count and spacing apply from.
+        # Last in Source: it qualifies the pair above rather than being a
+        # third choice alongside them.
         self.rad_from_base = QtWidgets.QRadioButton('Build from base joint')
         self.rad_from_selected = QtWidgets.QRadioButton('Build from selected joint')
         self.rad_from_base.setChecked(True)
@@ -391,10 +379,9 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.btn_reset.setToolTip('Bake joints to preserve the current shape,'
             'keeping this joint chain for the next Build.\n'
             'Build preserves this shape and the earlier one is forgotten.')
-        # Renames ONE chain, not every node carrying the rig part name, which
-        # is what makes it the way out of two chains sharing a name: park the
-        # old one under a name RIGPARTS does not list and Setup and the build
-        # ignore it, without it being deleted.
+        # Renames ONE chain, not every node carrying the rig part name -
+        # which is the way out of two chains sharing one: park the old chain
+        # under a name RIGPARTS does not list and nothing else touches it.
         self.btn_rename = QtWidgets.QPushButton('Rename Chain')
         self.btn_rename.setToolTip(
             'Rename the listed chain onto a different rig part name, and '
@@ -559,10 +546,9 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             counts.append(count)
             labels.append(str(count) if count else '?')
 
-        # The spin box follows the detected count while it still holds what
-        # was last detected: Select and a Build-from switch then land on a
-        # count that re-spaces what is there, and a count the artist typed is
-        # left alone.
+        # The spin box follows the detected count only while it still holds
+        # what was last detected, so Select lands on a count that re-spaces
+        # what is there and a typed count is left alone.
         first = counts[0] if counts else None
         if first and (self._detected_first is None or
                       self.spn_count.value() == self._detected_first):
@@ -595,12 +581,10 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                the root's expected name outright;
             3. the name of any joint in the chain, taken literally.
 
-        Select comes first because it is the only one that can tell two
-        chains of the same rig part apart: it records a full DAG path, where
-        both name lookups can only say 'a joint called this'. That ordering
-        is what lets a replacement tail be rebuilt while the chain it
-        replaces is still in the scene - pick it in the viewport and the
-        tool works on the one that was picked.
+        Select comes first as the only lookup that can tell two chains of
+        one rig part apart: it records a DAG path, where a name lookup can
+        only say 'a joint called this'. That is what lets a replacement tail
+        be rebuilt while the chain it replaces is still in the scene.
         '''
         try:
             root = self._roots.get(name)
@@ -617,9 +601,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         '''The chain root for a joint NAME, or None when the name does not
         pick out exactly one joint.
 
-        cmds.objExists answers True for a name two joints share, so it
-        cannot be the test here: it is precisely the shared-name case that
-        must not resolve silently to whichever one Maya listed first.
+        cmds.objExists cannot be the test: it answers True for a name two
+        joints share, which is the case that must not resolve silently.
         '''
         matches = cmds.ls(name, long=True, type='joint') or []
         if len(matches) == 1:
@@ -747,10 +730,9 @@ class JointChainBuilderUI(QtWidgets.QDialog):
     def rename_chain(self):
         '''Move one listed chain onto a different rig part name.
 
-        One chain at a time on purpose: the new name is typed, and a list of
-        chains has no second name to give them. The chain is taken from the
-        first entry in the box, so Select then Rename does what it looks
-        like.
+        One at a time on purpose: the new name is typed, and a list of
+        chains has no second name to give them. Takes the first entry in the
+        box, so Select then Rename does what it looks like.
         '''
         names = self._chain_names()
         if not names:
