@@ -27,6 +27,7 @@ from PySide2 import QtWidgets, QtCore
 
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
 import rig_tail_joint as rt_joint
 import rig_tail_chain_build as rt_chain
 import rig_tail_chain_spacing as rt_chain_spacing
@@ -340,6 +341,22 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.style_checkbox(self.chk_orient)
         spc_layout.addWidget(self.chk_orient)
 
+        # End joint
+        self.chk_ee = QtWidgets.QCheckBox('Add end joint (_ee_)')
+        self.chk_ee.setToolTip(
+            'Finish the chain with an end joint, one segment out past the '
+            'tip along the chain\'s final direction. The tail gets longer by '
+            'that segment; the joints already placed do not move.\n\n'
+            'Tail Rig Setup aims the last real joint at the end joint rather '
+            'than guessing a final direction, and from the next rebuild on '
+            'the end joint is treated as the end of the tail\'s length - so '
+            'the chain re-spaces up to it rather than past it.\n\n'
+            'Does nothing to a chain that already has one: that joint is the '
+            'tail\'s end and is never moved out here, nor removed by '
+            'unticking this.')
+        self.style_checkbox(self.chk_ee)
+        spc_layout.addWidget(self.chk_ee)
+
         spc_group.setLayout(spc_layout)
         main_layout.addWidget(spc_group)
         main_layout.addSpacing(8)
@@ -632,6 +649,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             parts.append('snap')
         if self.chk_orient.isChecked():
             parts.append('orient')
+        if self.chk_ee.isChecked():
+            parts.append('end joint')
         if self.rad_rebuild.isChecked():
             parts.append('from selected joint'
                          if self.rad_from_selected.isChecked() else
@@ -659,10 +678,13 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             spec = new_specs[0]
             self.rad_new.setChecked(True)
             self.txt_chain.clear()
-            cmds.warning(f'New chain mode: {spec.start} to {spec.end}. '
+            # Leaf names: the spec holds full paths, which read as noise in
+            # a one-line report.
+            start, end = rt_maya.leaf(spec.start), rt_maya.leaf(spec.end)
+            cmds.warning(f'New chain mode: {start} to {end}. '
                          'Click Build Joints.')
-            self._set_status(f'Select - new chain mode, {spec.start} to '
-                             f'{spec.end}. Click Build Joints.')
+            self._set_status(f'Select - new chain mode, {start} to '
+                             f'{end}. Click Build Joints.')
             return
 
         # Show rig names, remember the roots they came from. A rig name reads
@@ -793,9 +815,10 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         invert = self.chk_invert.isChecked()
         snap = self.chk_snap.isChecked()
         orient = self.chk_orient.isChecked()
+        add_ee = self.chk_ee.isChecked()
 
         if self.rad_new.isChecked():
-            self._build_new_chain(n, mode, param, invert, orient)
+            self._build_new_chain(n, mode, param, invert, orient, add_ee)
             return
 
         names = self._chain_names()
@@ -835,7 +858,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                 fellback.append(name)
             try:
                 rt_chain.rebuild(root, n, mode, param, invert, snap, orient,
-                                 start)
+                                 start, add_ee)
                 done.append(name)
             except Exception as exc:
                 cmds.warning(f'Rebuild failed on {name}: {exc}')
@@ -866,13 +889,13 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self._set_status('Build Joints - ' + '; '.join(status) + '.')
         self._sync_detected()
 
-    def _build_new_chain(self, n, mode, param, invert, orient):
+    def _build_new_chain(self, n, mode, param, invert, orient, add_ee=False):
         '''Create one chain between the two selected objects.
 
         No rig name is asked for: the joints are named after the first
         selected object and can be renamed in Maya like any others.
         '''
-        sel = cmds.ls(selection=True, transforms=True)
+        sel = cmds.ls(selection=True, transforms=True, long=True)
         if len(sel) < 2:
             cmds.warning('Select two objects to mark the ends of the new '
                          'chain.')
@@ -882,16 +905,20 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         options = self._options_summary()
         try:
             joints = rt_chain.build_new(sel[0], sel[1], n, None, mode, param,
-                                      invert, orient)
+                                      invert, orient, add_ee)
         except Exception as exc:
             cmds.warning(f'Chain build failed: {exc}')
             self._set_status(f'Build Joints - new chain failed: {exc}')
             return
-        cmds.warning(f'Built {n} joints ({mode}) from {sel[0]} to {sel[1]}: '
-                     f'{joints[0]} onward.')
+        # Leaf names in the report: the ends and the new root are picked by
+        # full path so the right nodes are used, but a path reads as noise
+        # in a one-line status field.
+        start, end = rt_maya.leaf(sel[0]), rt_maya.leaf(sel[1])
+        root = rt_maya.leaf(joints[0])
+        cmds.warning(f'Built {n} joints ({mode}) from {start} to {end}: '
+                     f'{root} onward.')
         self._set_status(f'Build Joints - built a new chain of {n} joints '
-                         f'[{options}] from {sel[0]} to {sel[1]}: '
-                         f'{joints[0]} onward.')
+                         f'[{options}] from {start} to {end}: {root} onward.')
 
 
 def get_maya_window():

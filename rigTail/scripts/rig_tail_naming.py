@@ -340,12 +340,15 @@ def replace_index_in_name(node, index, underscore=True):
     has to run in order.
 
     The LAST numeric token is the one rewritten, matching
-    get_index_from_name's default. An 'ee' token is not an index and is
-    never touched, so an end joint keeps its marker.
+    get_index_from_name's default. An existing 'ee' token is not an index
+    and is never touched, so an end joint keeps its marker.
 
     Arguments:
         node (str): Node name or DAG path
-        index (int): New index, formatted with rt_constants.DFORMAT
+        index (int or 'ee'): New index, formatted with rt_constants.DFORMAT.
+            Pass 'ee' to write the end-joint marker in the index's place,
+            which is how an end joint is named for a chain that does not
+            follow the template - 'squiggle_04_bone' -> 'squiggle_ee_bone'.
         underscore (bool): If True, index must be preceded by
             whitespace/underscore/dash
 
@@ -354,9 +357,10 @@ def replace_index_in_name(node, index, underscore=True):
         no numeric index token to rewrite
 
     Examples:
-        replace_index_in_name('R_tail_01_jnt', 7) -> 'R_tail_07_jnt'
-        replace_index_in_name('spine_ctrl', 7)    -> 'spine_ctrl'
-        replace_index_in_name('R_tail_ee_jnt', 7) -> 'R_tail_ee_jnt'
+        replace_index_in_name('R_tail_01_jnt', 7)    -> 'R_tail_07_jnt'
+        replace_index_in_name('spine_ctrl', 7)       -> 'spine_ctrl'
+        replace_index_in_name('R_tail_ee_jnt', 7)    -> 'R_tail_ee_jnt'
+        replace_index_in_name('R_tail_01_jnt', 'ee') -> 'R_tail_ee_jnt'
     """
     if not node:
         return node
@@ -369,8 +373,8 @@ def replace_index_in_name(node, index, underscore=True):
             last = m
     if last is None:
         return leaf
-    return (leaf[:last.start()] + rt_constants.DFORMAT.format(int(index)) +
-            leaf[last.end():])
+    token = 'ee' if index == 'ee' else rt_constants.DFORMAT.format(int(index))
+    return leaf[:last.start()] + token + leaf[last.end():]
 
 
 def strip_group_suffix(name):

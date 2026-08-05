@@ -191,6 +191,22 @@ picked.
 
 - Joints are reused in place, so names, rotate orders and custom attributes
   survive wherever the count allows.
+- Every rebuild leaves the span's indices incrementing by one: from the base
+  the run starts at `00`, from a selected joint it continues that joint's own
+  index. A chain that is the convention with its labels left off
+  (`BN_C_fintail_1`) is conformed to the template; a genuinely hand-named one
+  (`tentacle_bone_01`) keeps its names and has only its numbering fixed.
+- **Add end joint (_ee_)** finishes a chain that has none with an end joint a
+  segment out past the tip — the tail gets longer by that segment, the joints
+  already placed do not move. A chain that already has one is left alone:
+  that joint is the tail's end, and unticking the box never removes it.
+- **Rename Chain** moves one chain onto a different rig part name and
+  renumbers it from `00`. Renames that chain only, so a replacement tail can
+  take over a name while the chain it replaces stays in the scene — a rig
+  part name RIGPARTS does not list is ignored by Setup and by Tail Build.
+- Two chains may share a rig part name until Tail Build, which refuses to run
+  until each has its own. Chain Builder follows the viewport selection, so it
+  can tell them apart; Setup picks the one under `ROOT` and logs which.
 - Shrinking is the only lossy operation: re-spacing at an unchanged count,
   and re-applying a profile to its own result, both leave the chain put.
 - Each chain's original shape is remembered per session and always

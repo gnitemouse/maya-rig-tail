@@ -636,6 +636,72 @@ def _grow_chain(joints, positions, rigname, ee_distance, start_index=0,
     return [(cmds.ls(j, long=True) or [j])[0] for j in result]
 
 
+def _add_end_joint(joints, positions, rigname):
+    '''
+    Give a chain that has no '_ee_' one, a segment out past its tip.
+
+    The new joint continues the chain's final direction at the length of its
+    final segment, so the tail gets longer by one segment rather than the
+    joints being re-spread to make room. That is the point of it: an artist
+    asking for an end joint on a chain that never had one is marking where
+    the tail carries on to, not moving the joints already placed.
+
+    It matters for what comes next. Setup aims the last real joint at the
+    '_ee_' rather than guessing a final direction, and a later rebuild
+    treats the '_ee_' as the end of the tail's length - so from the next
+    rebuild on, this chain re-spaces up to here.
+
+    Arguments:
+        joints (list): the chain's BN joints, full DAG paths, root first
+        positions (list): the world positions just written to them
+        rigname (str): rig part name, for the template naming
+
+    Return:
+        str or None: the new joint's DAG path, or None when there is
+        nothing sensible to extend (fewer than two joints, or a final
+        segment of no length)
+    '''
+    if len(joints) < 2 or len(positions) < 2:
+        logger.warning('Cannot add an end joint to a chain of fewer than two '
+                       'joints: there is no final direction to continue.')
+        return None
+    step = _sub(positions[-1], positions[-2])
+    distance = _length_vec(step)
+    if distance < rt_chain_spacing.EPS:
+        logger.warning('Cannot add an end joint: the chain\'s final segment '
+                       'has no length to continue along.')
+        return None
+
+    _, mode = _index_targets(joints, rigname, 0)
+    name = _end_joint_name(joints[-1], rigname, mode)
+    ee = _create_joint(name, joints[-1])
+    cmds.xform(ee, ws=True,
+               t=_add(positions[-1], _scale(_norm_vec(step), distance)))
+    _copy_joint_attrs(joints[-1], ee)
+    logger.info(f'Added end joint {rt_maya.leaf(ee)}, one segment '
+                f'({distance:.4f}) past the tip.')
+    return ee
+
+
+def _end_joint_name(last_bn, rigname, mode):
+    '''
+    What to call a chain's '_ee_' end joint.
+
+    Template mode takes it from the naming template. In-place mode keeps the
+    chain's own naming and swaps its index token for 'ee', so an
+    artist-named chain does not sprout one joint named to a convention the
+    rest of it does not follow. A last joint with no index token to swap
+    leaves nothing to build from, so the template is the fallback - better a
+    conventional name than two joints called the same thing.
+    '''
+    if mode == 'in-place':
+        name = rt_naming.replace_index_in_name(last_bn, 'ee')
+        if name != rt_maya.leaf(last_bn) and rt_maya.is_end_joint(name):
+            return name
+    return rt_naming.fstr(rigname, rt_constants.JOINT, rt_constants.TYPE_BN,
+                          'ee')
+
+
 def _grown_name(bn, rigname, mode, start_index, index):
     '''
     What to call a joint the rebuild is about to create, at chain position
@@ -796,7 +862,7 @@ def _world_matrix(rows, pos):
 # PUBLIC API ============================================================
 
 def build_new(start, end, n, rigname=None, mode='uniform', param=None,
-              invert=False, orient=False):
+              invert=False, orient=False, add_ee=False):
     """
     Create a new BN chain between two transforms.
 
@@ -815,9 +881,11 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
         invert (bool): invert distribution
         orient (bool): aim-orient the new joints down the chain instead of
             leaving Maya's default
+        add_ee (bool): finish the chain with an '_ee_' end joint, a segment
+            out past the tip. See _add_end_joint.
 
     Return:
-        list: the new BN joints, root first
+        list: the new BN joints, root first ('_ee_' excluded, as everywhere)
     """
     if n < 2:
         abort_build(logger, 'Joint count must be at least 2.')
@@ -848,16 +916,20 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
             cmds.xform(j, ws=True, t=pos)
             joints.append(j)
 
+        ee = _add_end_joint(joints, positions, rigname) if add_ee else None
+
         # Every joint is brand new, so there is no artist radius to keep and
         # Maya's default 1.0 has nothing to do with the chain's scale. Fit it
         # to the spacing instead.
-        _apply_radius(joints, _fit_radius(_joint_radius(start), positions))
+        _apply_radius(joints + ([ee] if ee else []),
+                      _fit_radius(_joint_radius(start), positions))
 
         if orient:
-            _orient_chain(joints, positions)
+            _orient_chain(joints, positions, ee)
 
         logger.info(f'Created new chain {rigname} with {n} joints '
-                    f'({mode}{", oriented" if orient else ""}).')
+                    f'({mode}{", oriented" if orient else ""}'
+                    f'{", end joint" if ee else ""}).')
         return joints
 
 
@@ -942,7 +1014,7 @@ def _write_frame(joint, frame, pos):
 
 
 def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
-            orient=False, start_joint=None):
+            orient=False, start_joint=None, add_ee=False):
     """
     Re-space an existing BN chain at a different joint count.
 
@@ -970,6 +1042,11 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
             rebuilds the whole chain, base to tip. The start joint itself
             never moves — it is an endpoint of the resample — so the joint
             above it keeps aiming at exactly where it was.
+
+        add_ee (bool): give the chain an '_ee_' end joint if it has not got
+            one, a segment out past the tip. Ignored when the chain already
+            has one - that joint is the tail's end and is never replaced,
+            and never removed either. See _add_end_joint.
 
     Numbering: the rebuilt span always comes out with its indices
     incrementing by one down the chain. From the base that run starts at 00;
@@ -1110,6 +1187,14 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         result = _write_chain(all_joints, positions, rigname, start_index,
                               ee_pos, reserved)
 
+        # An end joint the chain never had, if asked for. Created here,
+        # after the write: it takes no part in the resample that just ran
+        # (it marks where the tail carries on to, not where it stops), but
+        # it does need to exist before the radius and orient passes below,
+        # which both read the chain's end joint.
+        if add_ee and not ee:
+            _add_end_joint(result, positions, rigname)
+
         # One radius for the whole span, sized to the spacing it ended up
         # with. Without this a grown chain mixes the artist's radius with
         # Maya's default 1.0 on the joints that were just created, which is
@@ -1144,7 +1229,7 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
 
 
 def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
-                     orient=False, from_selected=False):
+                     orient=False, from_selected=False, add_ee=False):
     """
     Re-space the chain(s) in the current selection.
 
@@ -1157,6 +1242,8 @@ def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
         orient (bool): aim-orient the result, new chains and rebuilds alike
         from_selected (bool): rebuild each chain from the joint that was
             picked rather than from its base joint
+        add_ee (bool): give each chain an '_ee_' end joint if it has not got
+            one, a segment out past the tip
 
     Return:
         list of list: BN joints per rebuilt chain
@@ -1166,11 +1253,12 @@ def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
     for spec in specs:
         if spec.is_new:
             results.append(build_new(spec.start, spec.end, n, spec.rigname,
-                                     mode, param, invert, orient))
+                                     mode, param, invert, orient, add_ee))
         else:
             results.append(rebuild(spec.root, n, mode, param, invert, snap,
                                    orient,
-                                   spec.selected if from_selected else None))
+                                   spec.selected if from_selected else None,
+                                   add_ee))
     return results
 
 
