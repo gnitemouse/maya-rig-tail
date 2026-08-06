@@ -133,6 +133,11 @@ def get_rigname(node, template, lenient=False):
             decide whether a node IS a rig part's node want the strict
             answer. See compile_template_to_regex.
 
+    Note:
+        The index token is optional in BOTH modes, so an unnumbered joint
+        such as 'BN_L_leg_jnt' reads as rig part 'L_leg'. See
+        compile_template_to_regex.
+
     Return:
         str or None: Extracted rigname, or None if not found
     """
@@ -153,6 +158,15 @@ def compile_template_to_regex(template, lenient=False):
     Known placeholders (TYPE, NN/nn, type labels such as JNT/GRP/CTRL)
     are resolved to their exact values; only {rigname} is captured.
 
+    The index token is OPTIONAL, together with the separator in front of
+    it: a one-joint chain is commonly authored unnumbered, and
+    'BN_L_leg_jnt' is plainly rig part 'L_leg' - refusing to read it left
+    the roster-from-selection button with nothing to offer but the joint's
+    own name. A present index still wins, because {rigname} is non-greedy:
+    'BN_L_tail3_00_jnt' is 'L_tail3' index 00, never 'L_tail3_00'. The
+    TYPE prefix and (in strict mode) the type label still bracket the
+    capture, so this does not widen the match to arbitrary node names.
+
     Arguments:
         template (str): Naming template with placeholders
         lenient (bool): Make the type-label placeholders (JNT, GRP, CTRL -
@@ -162,10 +176,13 @@ def compile_template_to_regex(template, lenient=False):
             A half-named chain is the common case this exists for:
             'BN_C_fintail_1' is plainly rig part 'C_fintail' joint 1, but
             the strict pattern rejects it for want of a '_jnt', and a tool
-            that cannot read it cannot conform it either. The TYPE and the
-            index stay REQUIRED, which is what keeps the leniency narrow:
+            that cannot read it cannot conform it either. The TYPE stays
+            REQUIRED, which is what keeps the leniency narrow:
             'tentacle_bone_01' still does not match, so genuinely
-            hand-named chains are not swept into the convention.
+            hand-named chains are not swept into the convention. (The
+            index is optional in both modes, so it is no longer the second
+            guard it once was - callers that need a real index test for it
+            with get_index_from_name, as _index_targets does.)
 
     Return:
         re.Pattern: Compiled regex pattern
@@ -217,11 +234,33 @@ def compile_template_to_regex(template, lenient=False):
             # Literal text outside placeholders
             parts.append(('literal', re.escape(tok)))
 
+    # Index first, then labels: relaxing an index folds in the separator
+    # BEFORE it, and relaxing a label folds in the separator before that
+    # one, so each still finds a plain literal where it expects one.
+    parts = _relax_indices(parts)
     if lenient:
         parts = _relax_labels(parts)
 
     pattern = ''.join(pattern for _, pattern in parts)
     return re.compile(pattern + r'\Z')
+
+
+def _relax_indices(parts):
+    """
+    Make every index token optional, together with the separator in front
+    of it, so an unnumbered name still parses.
+
+    The separator has to come inside the optional group for the same reason
+    it does in _relax_labels: with '{TYPE}_{rigname}_{NN}_{JNT}', making
+    only the '{NN}' optional leaves 'BN_L_leg_jnt' one '_' short.
+
+    Arguments:
+        parts (list): (kind, pattern) pairs from compile_template_to_regex
+
+    Return:
+        list: the same pairs with 'index' entries relaxed
+    """
+    return _relax(parts, 'index')
 
 
 def _relax_labels(parts):
@@ -239,9 +278,24 @@ def _relax_labels(parts):
     Return:
         list: the same pairs with 'label' entries relaxed
     """
+    return _relax(parts, 'label')
+
+
+def _relax(parts, want):
+    """
+    Make every part of one kind optional, together with the separator that
+    precedes it.
+
+    Arguments:
+        parts (list): (kind, pattern) pairs from compile_template_to_regex
+        want (str): the kind to relax ('label' or 'index')
+
+    Return:
+        list: the same pairs with entries of that kind relaxed
+    """
     out = []
     for kind, pattern in parts:
-        if kind != 'label':
+        if kind != want:
             out.append((kind, pattern))
             continue
         # Fold in a preceding separator-only literal ('_', '-', '.', ' ').
@@ -251,7 +305,7 @@ def _relax_labels(parts):
             plain = re.sub(r'\\(.)', r'\1', out[-1][1])
             if re.fullmatch(r'[_\-. ]+', plain):
                 sep = out.pop()[1]
-        out.append(('label', f'(?:{sep}{pattern})?'))
+        out.append((kind, f'(?:{sep}{pattern})?'))
     return out
 
 

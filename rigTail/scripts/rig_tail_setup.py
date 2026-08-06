@@ -34,9 +34,12 @@ have a toggle in rig_tail_constants:
                    exact mirror of the source side's. This is also the only
                    operation that can CREATE a chain: a pair whose target
                    side has no BN chain at all gets one built from the
-                   source (create_missing_chains). Mirror Orient and Orient
-                   Joints only ever rewrite joints that already exist, so
-                   they warn about a missing chain instead.
+                   source (create_missing_chains), as does a source-side
+                   part with no counterpart in RIGPARTS at all - listing
+                   'L_leg' alone is enough to have 'R_leg' built and added.
+                   Mirror Orient and Orient Joints only ever rewrite joints
+                   that already exist, so they warn about a missing chain
+                   instead.
 MIRROR_ORIENT and MIRROR_JOINTS are independent (either, both, or neither);
 run ORIENT_JOINTS first so a mirror copies a clean source. A typical run
 enables ORIENT_JOINTS + MIRROR_ORIENT (+ MIRROR_JOINTS if the sides are
@@ -76,7 +79,8 @@ Functions:
     orient_chains: aim-orient every BN chain to remove twist (ORIENT_JOINTS)
     mirror_chains: reflect each L/R pair's orientation and/or positions
         (MIRROR_ORIENT / MIRROR_JOINTS)
-    create_missing_chains: build a pair's absent target chain (MIRROR_JOINTS)
+    create_missing_chains: build a pair's absent target chain, stated or
+        implied by a lone source side (MIRROR_JOINTS)
     roll_chain: interactively roll one chain about its aim axis
     rignames_from_selection: the RIGPARTS of every selected joint (UI)
     rigname_from_selection: resolve the RIGPART of the selected joint (UI)
@@ -191,7 +195,6 @@ def setup_tails(root=None, dry_run=None):
                     'created': [], 'missing_chains': list(_active()),
                     'missing_geo': [], 'excluded': rt_cache.excluded_parts()}
 
-        included = _active()
         excluded = rt_cache.excluded_parts()
         if excluded:
             logger.info(f'Setup: skipping {len(excluded)} excluded rig '
@@ -208,7 +211,10 @@ def setup_tails(root=None, dry_run=None):
                 if bool(_cst('MIRROR_JOINTS')) else []
 
         have = set(found) | set(created)
-        active = [p for p in included if p in have]
+        # Re-read the roster rather than reuse `included`: creating an
+        # implied target adds it to RIGPARTS, and it is a full member of
+        # this run - it must be geometry-checked and oriented like any other.
+        active = [p for p in _active() if p in have]
         missing_chains = _report_chain_gaps(have, created, preview)
 
         # Warn about parts whose mesh does not follow the naming convention:
@@ -610,6 +616,16 @@ def create_missing_chains(dry_run, detected=None):
     cannot (it has no positions to place joints at) and Orient Joints
     cannot, so both only warn - see _report_chain_gaps.
 
+    A source-side part whose counterpart is not in RIGPARTS at all is
+    treated as naming its own target (_implied_mirror_pairs): picking the
+    left side's joints in 'Edit Rig Parts' is a complete statement of what
+    to mirror, and requiring an 'R_leg' to be typed in beside 'L_leg'
+    before Mirror Joints would build it made the roster carry a name for a
+    chain that does not exist yet. The implied name is appended to
+    RIGPARTS once the chain is actually built, so every later step -
+    the orient/mirror pass below, the geometry check, the build - sees an
+    ordinary listed rig part.
+
     The new joints are created with the mirrored ORIENTATION as well as the
     mirrored positions, so the chain is usable even when Mirror Orient is
     off; the enabled batch steps then run over it like any other chain.
@@ -627,21 +643,25 @@ def create_missing_chains(dry_run, detected=None):
 
     Return
         list: target rignames whose chain was created (empty on a dry run).
-        rt_constants.JOINTS_BN is updated for each.
+        rt_constants.JOINTS_BN is updated for each, and an implied target is
+        appended to rt_constants.RIGPARTS.
     '''
     if detected is None:
         detected = set(rt_constants.JOINTS_BN)
     pairs, _ = find_mirror_pairs(_active())
+    implied = _implied_mirror_pairs(detected)
     created = []
-    for source, target in pairs:
+    for source, target in _creation_order(pairs + implied):
         if target in detected or source not in detected:
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
             continue
         if dry_run:
+            listed = '' if (source, target) not in implied \
+                else f', and listed as a rig part alongside {source}'
             logger.info(f'Mirror [dry-run]: would create {target} '
-                        f'({len(src)} joints) mirrored from {source}')
+                        f'({len(src)} joints) mirrored from {source}{listed}')
             continue
         try:
             chain = _build_mirror_chain(src, target)
@@ -651,9 +671,81 @@ def create_missing_chains(dry_run, detected=None):
             continue
         rt_constants.JOINTS_BN[target] = chain
         created.append(target)
+        # Only now, with joints actually in the scene to answer to it: a
+        # name added ahead of a failed build would leave the roster naming
+        # a chain that is not there.
+        if target not in rt_constants.RIGPARTS:
+            rt_constants.RIGPARTS.append(target)
+            logger.info(f'Mirror: added {target} to RIGPARTS (implied by '
+                        f'{source} with Mirror Joints on)')
         logger.info(f'Mirror: created {target} ({len(chain)} joints) '
                     f'mirrored from {source}')
     return created
+
+
+def _creation_order(pairs):
+    '''
+    Order pairs so a chain is created before anything that hangs off it.
+
+    _mirror_parent hangs a created chain under the MIRROR of the source's
+    parent, which only works if that mirror already exists. Three chains
+    off one leg - 'L_leg' the pivot, 'L_rear_wing' and 'L_rear_eye' below
+    it - therefore have to be built root first, or the two lower ones land
+    under the LEFT leg and the new side is left half-attached. Roster order
+    happens to get this right when the names sort that way and silently
+    wrong when they do not, so it is not left to the roster: shallower
+    source roots go first, and RIGPARTS order breaks ties (a stable sort).
+
+    Arguments
+        pairs (list): [(source_rigname, target_rigname), ...].
+
+    Return
+        list: the same pairs, parents before children.
+    '''
+    def depth(pair):
+        joints = rt_constants.JOINTS_BN.get(pair[0]) or []
+        # No chain is a pair that gets skipped anyway; sort it last rather
+        # than let it claim depth 0 and jump the queue.
+        return joints[0].count('|') if joints else 1 << 30
+    return sorted(pairs, key=depth)
+
+
+def _implied_mirror_pairs(detected):
+    '''
+    Pairs for source-side parts whose counterpart is not in RIGPARTS.
+
+    find_mirror_pairs answers with the pairs the roster STATES; this adds
+    the ones it implies. A part on the mirror source side that has a chain,
+    and whose opposite-side name no rig part carries, names its own target:
+    'L_leg' with MIRROR_SOURCE_SIDE 'L' implies 'R_leg'. Only ever adds the
+    target side, so the side the artist authored is never the one written
+    onto.
+
+    The side letter is swapped in place, so a lowercase 'l_leg' implies
+    'r_leg' rather than switching the roster to a second convention.
+
+    Arguments
+        detected (set): rignames whose chain this run detected.
+
+    Return
+        list: [(source_rigname, target_rigname), ...] in RIGPARTS order.
+    '''
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    known = {rp.upper() for rp in rt_constants.RIGPARTS}
+    pairs = []
+    for rp in _active():
+        m = _SIDE_RE.match(rp)
+        if not m or m.group(1).upper() != source_side or rp not in detected:
+            continue
+        letter = 'R' if source_side == 'L' else 'L'
+        # Keep the source's own case, so 'l_leg' implies 'r_leg'.
+        if m.group(1).islower():
+            letter = letter.lower()
+        target = f'{letter}_{m.group(2)}'
+        if target.upper() in known:
+            continue
+        pairs.append((rp, target))
+    return pairs
 
 
 def _build_mirror_chain(src_joints, target):
@@ -738,6 +830,14 @@ def _mirror_parent(src_root):
         logger.warning(f"Mirror: {len(found)} nodes named '{counterpart}', "
                        f'so the created chain was parented under {parent} '
                        'instead. Rename them and re-parent it by hand.')
+    else:
+        # Said out loud because the chain still gets built, correctly
+        # placed, and hanging off the WRONG SIDE - which reads as success
+        # everywhere except the outliner.
+        logger.warning(f"Mirror: no '{counterpart}' to hang the created "
+                       f'chain under, so it was parented under {parent} - '
+                       'the source side. Mirror or create that parent '
+                       'first, then re-parent the chain.')
     return parent
 
 
@@ -854,7 +954,9 @@ def find_mirror_pairs(rigparts):
     present (prefix match is case-insensitive; the base must be identical).
     The source side is rt_constants.MIRROR_SOURCE_SIDE (default 'R'); the other
     side is the target that gets overwritten. Center and unpaired parts are
-    ignored.
+    ignored - a lone source side names a target that RIGPARTS does not
+    list, which is _implied_mirror_pairs' business and only Mirror Joints
+    can act on, so it is not a pair until that has built the chain.
 
     Arguments
         rigparts (list): RIGPARTS names.

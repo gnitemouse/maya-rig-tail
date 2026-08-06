@@ -15,8 +15,10 @@ Functions:
 
 import maya.cmds as cmds
 from logger_config import logger_setup
+import rig_tail_constants as rt_constants
 import rig_tail_math as rt_math
 import rig_tail_maya as rt_maya
+import rig_tail_naming as rt_naming
 
 logger = logger_setup(__name__)
 
@@ -24,7 +26,8 @@ logger = logger_setup(__name__)
 def get_joint_chain(start, end=None):
     """
     Get joint chain from start joint to optional end joint.
-    Follows first child at each level.
+    Follows first child at each level, stopping where the chain stops
+    being this rig part's (see _same_rigpart).
 
     Joints are returned as full DAG paths. A scene may legitimately hold two
     chains with the same joint names - a replacement tail built alongside the
@@ -59,10 +62,39 @@ def get_joint_chain(start, end=None):
         # every descendant of an '_ee_' joint read as an end joint too.
         if rt_maya.is_end_joint(j):
             return chain
+        # A branch point hands its children to whichever rig part names
+        # them, and children[0] is an arbitrary pick between them. Walking
+        # into one regardless is how 'BN_L_leg_jnt' - a pivot with a rear
+        # wing and a rear eye hanging off it - would report the wing's
+        # joints as part of the leg, and mirror a leg chain with a stray
+        # wing joint welded to its end.
+        if not _same_rigpart(chain[-1], j):
+            return chain
         chain.append(j)
         if j == end:
             return chain
     return chain
+
+
+def _same_rigpart(parent, child):
+    '''
+    Whether a child joint belongs to the same rig part as its parent.
+
+    The mirror of the rule _walk_to_root climbs by (rig_tail_chain_build):
+    an unreadable name on either side answers True, so a hand-named or
+    half-named chain still walks end to end exactly as it did before -
+    only two joints that BOTH parse, to different rig parts, part company.
+
+    Arguments:
+        parent (str): the joint already in the chain
+        child (str): the candidate next joint
+
+    Return:
+        bool: True to keep walking, False to end the chain at parent
+    '''
+    here = rt_naming.get_rigname(parent, rt_constants.JOINT)
+    below = rt_naming.get_rigname(child, rt_constants.JOINT)
+    return not (here and below and here != below)
 
 
 def get_joint_hierarchy(start_jnt, end_jnt=None):

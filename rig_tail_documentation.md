@@ -447,7 +447,16 @@ selected node, or None.
 Toggle `displayLocalAxis` on every BN chain joint, to eyeball the result.
 
 #### `find_mirror_pairs(rigparts)`
-Pair rig parts into (source, target) by `L_`/`R_` prefix.
+Pair rig parts into (source, target) by `L_`/`R_` prefix. Only pairs the
+roster *states* — both sides must be listed.
+
+#### `_implied_mirror_pairs(detected)`
+The pairs the roster *implies*: a part on the mirror source side that has a
+chain and whose opposite-side name no rig part carries names its own target,
+so `L_leg` alone implies `R_leg`. Only ever adds the target side, so the
+authored side is never overwritten. `create_missing_chains` builds these and
+appends the implied name to `RIGPARTS`; nothing is added on a dry run, or if
+the build fails.
 
 #### `aim_frames(positions, aim_axis, up_axis, up_ref=None)`
 Per-joint world frames aimed down a chain with a twist-free up-axis. With
@@ -1055,7 +1064,10 @@ rt_naming.fstr('tail', rt_constants.JOINT, 'IK', 3)  # Returns: 'IK_tail_03_jnt'
 ```
 
 #### `get_rigname(node, template)`
-Extract rig name from node name using template pattern.
+Extract rig name from node name using template pattern. The index token is
+optional, so an unnumbered one-joint chain reads normally —
+`BN_L_leg_jnt` -> `L_leg`. A present index still wins: `BN_L_tail3_00_jnt`
+is `L_tail3` index `00`, never `L_tail3_00`.
 
 #### `get_index_from_name(name)`
 Parse joint index (##) from naming convention.
@@ -1275,7 +1287,12 @@ Joint chain utilities.
 ### Functions
 
 #### `get_joint_chain(start_jnt, end_jnt=None)`
-Get ordered joint chain from start to end.
+Get ordered joint chain from start to end. Follows the first child at each
+level, stopping at an `_ee_` joint or where the next joint parses to a
+*different* rig part — so a branch point such as `BN_L_leg_jnt`, carrying a
+rear wing and a rear eye, reports the leg alone rather than an arbitrary one
+of its branches. An unreadable name on either side keeps the walk going, so
+hand-named chains behave as before.
 
 #### `get_joint_hierarchy(root)`
 Get all joints under root.

@@ -57,6 +57,7 @@ Functions:
     test_mirror_frames: mirror reflects the aim to the far side, and the
         symmetric/parallel behaviors are a 180 deg roll apart
     test_find_mirror_pairs: L/R pairing honours the source side
+    test_implied_mirror_pairs: a lone source side names its own target
     test_swap_side: side-token swap picks the mirrored parent's name
   Scene tests (MUTATING)
     test_orient: ORIENT_JOINTS leaves valid frames aimed down the chain
@@ -411,6 +412,47 @@ def test_find_mirror_pairs():
         return ok
     finally:
         rt_constants.RIGPARTS = saved_parts
+        rt_constants.MIRROR_SOURCE_SIDE = saved_side
+
+
+def test_implied_mirror_pairs():
+    '''A lone source side names its own target, and only its own target.'''
+    saved_parts = list(rt_constants.RIGPARTS)
+    saved_side = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
+    saved_excl = list(getattr(rt_constants, 'RIGPARTS_EXCLUDE', []))
+    try:
+        rt_constants.RIGPARTS = ['L_leg', 'L_rear_eye', 'R_fintail',
+                                 'L_fintail', 'C_tail', 'L_nochain']
+        rt_constants.RIGPARTS_EXCLUDE = []
+        rt_constants.MIRROR_SOURCE_SIDE = 'L'
+        # The parts a run detected chains for; L_nochain deliberately has none.
+        detected = {'L_leg', 'L_rear_eye', 'L_fintail', 'R_fintail', 'C_tail'}
+        implied = rt_setup._implied_mirror_pairs(detected)
+
+        ok = True
+        ok &= _verdict('implied pairs for the unpaired source sides',
+                       set(implied) == {('L_leg', 'R_leg'),
+                                        ('L_rear_eye', 'R_rear_eye')},
+                       f'{sorted(implied)}')
+        # L_fintail already has R_fintail listed: find_mirror_pairs' business.
+        ok &= _verdict('a stated pair is not also implied',
+                       all(s != 'L_fintail' for s, _ in implied))
+        # Nothing to mirror FROM, so naming a target would only add a name.
+        ok &= _verdict('a source with no chain implies nothing',
+                       all(s != 'L_nochain' for s, _ in implied))
+        ok &= _verdict('a centre part implies nothing',
+                       all(s != 'C_tail' for s, _ in implied))
+
+        # Source side R: the L parts are targets, and a target never implies
+        # a source - that would overwrite the side the artist authored.
+        rt_constants.MIRROR_SOURCE_SIDE = 'R'
+        rt_constants.RIGPARTS = ['L_leg', 'L_rear_eye']
+        ok &= _verdict('target-side-only roster implies nothing',
+                       rt_setup._implied_mirror_pairs(detected) == [])
+        return ok
+    finally:
+        rt_constants.RIGPARTS = saved_parts
+        rt_constants.RIGPARTS_EXCLUDE = saved_excl
         rt_constants.MIRROR_SOURCE_SIDE = saved_side
 
 
@@ -901,7 +943,8 @@ def run_math():
     '''Run every safe geometry-helper test and print a summary.'''
     tests = [test_reflect, test_assign_rows, test_roll_about,
              test_aim_frames, test_up_mode, test_mirror_frames,
-             test_find_mirror_pairs, test_swap_side]
+             test_find_mirror_pairs, test_implied_mirror_pairs,
+             test_swap_side]
     results = []
     for fn in tests:
         print(f'\n--- {fn.__name__} ---')

@@ -248,6 +248,11 @@ if the skeleton is already oriented.
 - Mirror Joints is the only toggle that can create a chain. A listed tail
   with no joints is built from its `L_`/`R_` counterpart; the other toggles
   warn about it instead. Details go to the Script Editor, not the dialog.
+- A source side listed on its own is enough: with Mirror Joints on, `L_leg`
+  and no `R_leg` in the roster builds `R_leg` and adds it to RIGPARTS. So
+  **Edit Rig Parts -> Get from Selected Joints** on one side's joints, then
+  Setup, is a complete mirror-duplicate workflow. Chains are built root
+  first, so a tail hanging off a mirrored pivot lands under the new side.
 - Orient runs before the mirrors, so one run with both ticked is always
   correct.
 - Up Mode *Cascade* (default) keeps the roll a chain already has, so a

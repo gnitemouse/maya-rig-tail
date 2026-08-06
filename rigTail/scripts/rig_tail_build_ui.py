@@ -1104,19 +1104,38 @@ class RigPartsEditor(QtWidgets.QDialog):
         self._refresh_counts()
 
     def get_rigparts_from_selection(self):
-        '''Replace both lists with rig names extracted from selected joints.'''
+        '''
+        Replace both lists with rig names extracted from selected joints.
+
+        A joint whose name the template cannot read is REPORTED, not added.
+        Adding its own name was the same length of string but not the same
+        kind of thing: 'BN_L_leg_jnt' entered as a rig part sends every
+        later lookup after 'BN_BN_L_leg_jnt_00_jnt', so the part reads as
+        missing everywhere downstream and the roster looks populated while
+        naming nothing. Saying which joints could not be read, and leaving
+        them out, is the answer the caller can act on.
+        '''
         selected = cmds.ls(selection=True, type='joint')
         if not selected:
             QtWidgets.QMessageBox.warning(self, 'Warning', 'No joints selected.')
             return
 
-        rignames = list()
+        rignames, unreadable = [], []
         for jnt in selected:
             rigname = rt_naming.get_rigname(jnt, rt_constants.JOINT)
             if rigname:
-                rignames.append(rigname)
+                if rigname not in rignames:
+                    rignames.append(rigname)
             else:
-                rignames.append(jnt)
+                unreadable.append(jnt.split('|')[-1])
+
+        if not rignames:
+            QtWidgets.QMessageBox.warning(self, 'No Rig Parts',
+                f'None of the {len(selected)} selected joint(s) follow the '
+                f'JOINT naming template ({rt_constants.JOINT}), so no rig '
+                'part name could be read from them. Conform the chain in '
+                'Joint Chain Builder, or add the rig part by name with Add.')
+            return
 
         # A full reset of the roster, so any previous exclusion goes too -
         # keeping it would silently hold back a part the user just picked.
@@ -1124,6 +1143,14 @@ class RigPartsEditor(QtWidgets.QDialog):
         self.list_exclude.clear()
         self.list_widget.addItems(sorted(rignames))
         self._refresh_counts()
+
+        if unreadable:
+            QtWidgets.QMessageBox.warning(self, 'Joints Skipped',
+                f'{len(unreadable)} selected joint(s) do not follow the JOINT '
+                f'naming template ({rt_constants.JOINT}) and were skipped: '
+                f'{", ".join(unreadable[:6])}'
+                f'{" ..." if len(unreadable) > 6 else ""}. Conform them in '
+                'Joint Chain Builder, or add their rig parts with Add.')
 
     def add_item(self):
         '''Prompt for a new rig part name and append it to Include.'''
