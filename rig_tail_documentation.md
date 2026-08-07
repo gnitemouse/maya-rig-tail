@@ -458,6 +458,15 @@ authored side is never overwritten. `create_missing_chains` builds these and
 appends the implied name to `RIGPARTS`; nothing is added on a dry run, or if
 the build fails.
 
+Created joints carry the source joint's own index, **including its absence**
+— `BN_L_leg_jnt` mirrors to `BN_R_leg_jnt`, not `BN_R_leg_00_jnt` — so the
+two sides read as the same name but for the side token. This is what lets
+`_mirror_parent` find the new pivot: it looks for the side-swap of the
+source's own parent name, so a renumbered target would leave every chain
+hanging off that pivot parented back under the source side. Chains are built
+in the source side's own order — shallower roots first, siblings as they sit
+under their parent — so the mirror reads as a mirror in the outliner.
+
 #### `aim_frames(positions, aim_axis, up_axis, up_ref=None)`
 Per-joint world frames aimed down a chain with a twist-free up-axis. With
 `up_ref` (the `cascade` seed) that vector is carried down the chain by

@@ -693,8 +693,11 @@ def _creation_order(pairs):
     it - therefore have to be built root first, or the two lower ones land
     under the LEFT leg and the new side is left half-attached. Roster order
     happens to get this right when the names sort that way and silently
-    wrong when they do not, so it is not left to the roster: shallower
-    source roots go first, and RIGPARTS order breaks ties (a stable sort).
+    wrong when they do not, so it is not left to the roster: the order
+    comes from the SOURCE side's own shape, shallower roots first and
+    siblings in the order they sit under their parent. The created side
+    then reads as the mirror it is in the outliner, rather than in
+    whatever order the rig parts happen to be listed.
 
     Arguments
         pairs (list): [(source_rigname, target_rigname), ...].
@@ -702,12 +705,34 @@ def _creation_order(pairs):
     Return
         list: the same pairs, parents before children.
     '''
-    def depth(pair):
+    def where(pair):
         joints = rt_constants.JOINTS_BN.get(pair[0]) or []
         # No chain is a pair that gets skipped anyway; sort it last rather
         # than let it claim depth 0 and jump the queue.
-        return joints[0].count('|') if joints else 1 << 30
-    return sorted(pairs, key=depth)
+        if not joints:
+            return (1 << 30, 0)
+        return (joints[0].count('|'), _sibling_index(joints[0]))
+    return sorted(pairs, key=where)
+
+
+def _sibling_index(joint):
+    '''
+    Where a joint sits among its parent's joint children, for ordering the
+    created chains the way the source side is ordered.
+
+    Arguments
+        joint (str): joint DAG path.
+
+    Return
+        int: position under its parent, 0 when it has no joint parent.
+    '''
+    parents = cmds.listRelatives(joint, parent=True, typ='joint',
+                                 fullPath=True) or []
+    if not parents:
+        return 0
+    kids = cmds.listRelatives(parents[0], children=True, typ='joint',
+                              fullPath=True) or []
+    return kids.index(joint) if joint in kids else 0
 
 
 def _implied_mirror_pairs(detected):
@@ -753,7 +778,16 @@ def _build_mirror_chain(src_joints, target):
     Create one chain as the mirror of another and return its joints.
 
     Joints are named from the naming template under the target rigname,
-    keeping the source's own index per joint so the two sides number alike.
+    keeping the source's own index per joint so the two sides number alike
+    - INCLUDING when the source has no index. A one-joint chain is
+    commonly authored unnumbered, and numbering the mirror of
+    'BN_L_leg_jnt' as 'BN_R_leg_00_jnt' broke the pair in two ways: the
+    sides no longer read as the same name but for the side token, and
+    _mirror_parent - which looks for the side-swap of the source's own
+    parent name, 'BN_R_leg_jnt' - could not find the joint that had just
+    been created, so every chain hanging off that pivot was parented back
+    under the SOURCE side.
+
     Positions and orientations are the reflected source's, written by the
     same _apply_frames the batch mirror uses.
 
@@ -774,11 +808,9 @@ def _build_mirror_chain(src_joints, target):
     parent = _mirror_parent(src_joints[0])
     chain = []
     for i, src_jnt in enumerate(src_joints):
-        index = rt_naming.get_index_from_name(src_jnt)
-        if index is None or index == 'ee':
-            index = i
         jnt = _create_joint(rt_naming.fstr(target, rt_constants.JOINT,
-                                           rt_constants.TYPE_BN, index),
+                                           rt_constants.TYPE_BN,
+                                           _mirror_index(src_jnt, i)),
                             parent)
         _copy_joint_attrs(src_jnt, jnt)
         chain.append(jnt)
@@ -797,6 +829,37 @@ def _build_mirror_chain(src_joints, target):
                                      translation=True), keep)
         _orient_end_joint(chain[-1], frames[-1], False, position=ee_pos)
     return chain
+
+
+def _mirror_index(src_jnt, position):
+    '''
+    The index a created joint should carry, from the source joint's own.
+
+    The two sides are meant to read as the same name but for the side
+    token, so the source's index is carried across AS IT IS - including
+    its absence. Numbering the mirror of an unnumbered 'BN_L_leg_jnt' as
+    'BN_R_leg_00_jnt' broke the pair twice over: the names no longer
+    matched, and _mirror_parent's lookup for 'BN_R_leg_jnt' missed the
+    joint that had just been created, so everything hanging off that pivot
+    was parented back under the source side.
+
+    Arguments
+        src_jnt (str): the source joint being mirrored.
+        position (int): its position in the chain, the fallback numbering.
+
+    Return
+        int or str: index for rt_naming.fstr - '' for an unnumbered joint,
+        which fstr collapses out of the name entirely.
+    '''
+    index = rt_naming.get_index_from_name(src_jnt)
+    if index is None:
+        return ''
+    if index == 'ee':
+        # get_joint_chain stops AT an '_ee_', so one inside the chain body
+        # is a stray name rather than an end joint: number it by position
+        # rather than mint a second '_ee_' for the target.
+        return position
+    return index
 
 
 def _mirror_parent(src_root):

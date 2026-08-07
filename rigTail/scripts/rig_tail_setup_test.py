@@ -58,6 +58,8 @@ Functions:
         symmetric/parallel behaviors are a 180 deg roll apart
     test_find_mirror_pairs: L/R pairing honours the source side
     test_implied_mirror_pairs: a lone source side names its own target
+    test_mirror_index: a created joint carries the source's index, or its
+        absence, so the two sides differ only by the side token
     test_swap_side: side-token swap picks the mirrored parent's name
   Scene tests (MUTATING)
     test_orient: ORIENT_JOINTS leaves valid frames aimed down the chain
@@ -413,6 +415,35 @@ def test_find_mirror_pairs():
     finally:
         rt_constants.RIGPARTS = saved_parts
         rt_constants.MIRROR_SOURCE_SIDE = saved_side
+
+
+def test_mirror_index():
+    '''A created joint carries the source's index, absence included.'''
+    import rig_tail_naming as rt_naming
+    ok = True
+    # An unnumbered source stays unnumbered, so the two sides read as the
+    # same name but for the side token - and _mirror_parent can find it.
+    ok &= _verdict('unnumbered source gives no index',
+                   rt_setup._mirror_index('BN_L_leg_jnt', 0) == '')
+    ok &= _verdict('and so names the mirror BN_R_leg_jnt',
+                   rt_naming.fstr('R_leg', rt_constants.JOINT,
+                                  rt_constants.TYPE_BN,
+                                  rt_setup._mirror_index('BN_L_leg_jnt', 0))
+                   == 'BN_R_leg_jnt')
+    # A numbered source numbers the mirror the same, as it always has.
+    ok &= _verdict('numbered source keeps its number',
+                   rt_setup._mirror_index('BN_L_fintail_03_jnt', 7) == 3)
+    ok &= _verdict('and so names the mirror BN_R_fintail_03_jnt',
+                   rt_naming.fstr('R_fintail', rt_constants.JOINT,
+                                  rt_constants.TYPE_BN,
+                                  rt_setup._mirror_index(
+                                      'BN_L_fintail_03_jnt', 7))
+                   == 'BN_R_fintail_03_jnt')
+    # An '_ee_' in the chain BODY is a stray name, not an end joint:
+    # get_joint_chain stops at end joints, so one here would mint a second.
+    ok &= _verdict("a stray '_ee_' falls back to its position",
+                   rt_setup._mirror_index('BN_L_odd_ee_jnt', 4) == 4)
+    return ok
 
 
 def test_implied_mirror_pairs():
@@ -944,7 +975,7 @@ def run_math():
     tests = [test_reflect, test_assign_rows, test_roll_about,
              test_aim_frames, test_up_mode, test_mirror_frames,
              test_find_mirror_pairs, test_implied_mirror_pairs,
-             test_swap_side]
+             test_mirror_index, test_swap_side]
     results = []
     for fn in tests:
         print(f'\n--- {fn.__name__} ---')
