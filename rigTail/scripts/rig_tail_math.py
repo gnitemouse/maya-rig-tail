@@ -7,6 +7,9 @@ Vector operations, position calculations, and orientation utilities.
 
 Functions:
     linspace: Generate evenly spaced values
+    cumulative_lengths / length_fractions: distance along a point chain
+    nearest_index: index of the entry closest to a target value
+    greville_fractions: normalised Greville abscissae of a clamped curve
     get_axis_orientation: Guess axis from position bounding box
     get_local_orientation: Determine chain direction from joint orientations
     get_local_pos: Get local position
@@ -43,6 +46,109 @@ def linspace(start, stop, n):
     h = (stop - start) / (n - 1)
     for i in range(n):
         yield start + h * i
+
+
+def cumulative_lengths(points):
+    """
+    Running distance along a chain of points, starting at 0.
+
+    Arguments:
+        points (list): List of [x, y, z] positions
+
+    Return:
+        list: Same length as points; entry i is the distance from points[0]
+            to points[i] measured along the chain
+    """
+    out = [0.0]
+    for i in range(1, len(points)):
+        a, b = points[i-1], points[i]
+        out.append(out[-1] + math.sqrt(sum((b[k]-a[k])**2 for k in range(3))))
+    return out
+
+
+def length_fractions(points):
+    """
+    cumulative_lengths normalised to 0..1, base to tip.
+
+    This is the metric an animator reads as 'how far along the tail': it is
+    evenly spaced in space, unlike joint INDEX, which on a tapered chain
+    (8:1 bone ratio on the squid fintails) bunches badly toward the tip.
+
+    Arguments:
+        points (list): List of [x, y, z] positions
+
+    Return:
+        list: Fractions 0..1, or all zeros for a zero-length chain
+    """
+    lengths = cumulative_lengths(points)
+    total = lengths[-1] if lengths else 0.0
+    if total <= 0:
+        return [0.0] * len(points)
+    return [v / total for v in lengths]
+
+
+def nearest_index(values, target):
+    """
+    Index of the entry in values closest to target.
+
+    Arguments:
+        values (list): Sorted or unsorted numbers
+        target (float): Value to match
+
+    Return:
+        int: Index of the closest entry, or 0 for an empty list
+    """
+    if not values:
+        return 0
+    return min(range(len(values)), key=lambda i: abs(values[i] - target))
+
+
+def greville_fractions(num, degree=3):
+    """
+    Normalised Greville abscissae for a clamped uniform NURBS curve.
+
+    A CV does not sit at one parameter - it influences a stretch of curve.
+    The Greville abscissa is the one parameter that is most a given CV's
+    own: where its basis function peaks. For CV j of a degree-d curve it is
+    the mean of the d knots following knot j.
+
+    This is the metric that makes a control's DRAWN position agree with the
+    joints it actually rotates. The FK curve carries one CV per joint, so
+    feeding a joint's Greville fraction to a pointOnCurveInfo (with
+    turnOnPercentage on, i.e. a fraction of the PARAMETER range) lands
+    exactly on that joint - no lookup table needed. Measured on the squid
+    C_fintail the error is under 0.05% of tail length from joint 3 down;
+    joints 1-2 sit up to 0.55 units off because the first bone is 8x the
+    last against a clamped start knot, which no control is placed near.
+
+    Computed analytically rather than by closest-point query: it is exact
+    for the curve create_curve builds (clamped, uniform, one CV per joint)
+    and strictly increasing by construction - and joint_pos MUST be
+    monotonic or falloff_rotation's ramp hands one control's rotation to
+    two separate stretches of tail. A closest-point query is more accurate
+    at joints 1-2 but carries no such guarantee.
+
+    Arguments:
+        num (int): Number of CVs
+        degree (int): Curve degree; clamped to num-1 the way create_curve
+            clamps it, so the two cannot disagree on a short chain
+
+    Return:
+        list: num fractions from 0.0 at the base to 1.0 at the tip
+    """
+    if num < 1:
+        return []
+    if num == 1:
+        return [0.0]
+    d = max(1, min(degree, num - 1))
+    spans = num - d
+    knots = ([0.0] * (d + 1)
+             + [float(i) for i in range(1, spans)]
+             + [float(spans)] * (d + 1))
+    grev = [sum(knots[j+1:j+1+d]) / d for j in range(num)]
+    if grev[-1] <= 0:
+        return [0.0] * num
+    return [g / grev[-1] for g in grev]
 
 
 def get_axis_orientation(nodes, secondary_axis=False):

@@ -448,9 +448,16 @@ def create_controls_fk(rigname, joints, jnt_pos):
     rt_maya.parent_to(fkroot_grp, basectrl) # Move fkroot_grp under basectrl
     rt_maya.match_transform(fkroot_grp, basectrl)
 
-    # Calculate indices evenly distributed throughout FK chain
-    indices = list(rt_math.linspace(0, len(jnt_pos)-1, rt_constants.NUM_CTRL_FK+2))
-    positions = [joints[round(indices[i])] for i in range(1, rt_constants.NUM_CTRL_FK+1)]
+    # Spread the controls evenly by LENGTH along the chain, rounded to the
+    # nearest joint. Evenly spaced INDICES look equivalent and are not: the
+    # squid fintails taper 8:1 from first bone to last, so indices put the
+    # three controls at 44%, 66% and 85% of the tail instead of 25/50/75 -
+    # all of them past halfway, bunched at the tip. By length they land on
+    # joints 5, 15 and 30, i.e. 26/50/75%.
+    fractions = list(rt_math.linspace(0, 1, rt_constants.NUM_CTRL_FK+2))
+    lengths = rt_math.length_fractions(jnt_pos)
+    positions = [joints[rt_math.nearest_index(lengths, f)]
+                 for f in fractions[1:rt_constants.NUM_CTRL_FK+1]]
     # Create variable FK controls
     varfk_ctrls, varfk_ctrl_grps = create_control_match_list(rigname,
                                                              positions,
@@ -944,29 +951,37 @@ def set_attributes_visibility_ik(ik_controls):
 
 def get_control_position(control, joints):
     '''
-    Get control position relative to joint chain length (0 to 1).
-    Calculates normalized distance from control to end joint.
+    Get control position along the chain, measured from the BASE (0 to 1).
+
+    This is the animator-facing number: it feeds the `position` attribute
+    (x10, so 0-10), and it is a fraction of TAIL LENGTH, so position 5 is
+    genuinely halfway down the tail whatever the bones do. It is NOT the
+    same metric as joint_pos, which is a Greville (parameter) fraction - a
+    remapValue converts between them, see rig_tail_fk.set_curveinfo_fk.
+
+    Measured along the chain and snapped to the nearest joint, rather than
+    as a straight line: on a curled tail a chord shortens as the tail bends
+    (so the dial would drift under animation) and is not even monotonic -
+    two joints can sit the same distance from the tip.
 
     Arguments
         control (str): Control to measure
         joints (list): List of joints defining chain length
 
     Return
-        v (float): Normalized position (0=start, 1=end)
+        v (float): Normalized position (0=base, 1=tip)
     '''
-    end = joints[-1]
-    fullv = rt_math.get_vec_length(joints[0], end)
-    length = rt_math.get_vec_length(control, end)
-    logger.trace(f"ctrl '{control}' - length {length} fullv {fullv}")
-    if length == 0:
-        v = 0
-    elif fullv == 0:
-        logger.error(f"ctrl '{control}' - length {length} fullv {fullv}")
-        v = 0
-    else:
-        v = length/fullv
-
-    logger.trace(f'{control} V: {v}')
+    if not joints:
+        logger.error(f"ctrl '{control}' - no joints to measure against")
+        return 0
+    jnt_pos = [rt_math.get_world_pos(jnt) for jnt in joints]
+    fractions = rt_math.length_fractions(jnt_pos)
+    ctrl_pos = rt_math.get_world_pos(control)
+    idx = min(range(len(jnt_pos)),
+              key=lambda i: sum((jnt_pos[i][k] - ctrl_pos[k])**2
+                                for k in range(3)))
+    v = fractions[idx]
+    logger.trace(f"ctrl '{control}' - nearest '{joints[idx]}' V: {v}")
     return v
 
 def orient_control_aims(controls, orient_world=None):

@@ -77,7 +77,7 @@ _CONVERSION_SWEEP_PENDING = False
 UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
                       'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
                       'clamp', 'setRange', 'choice', 'curveInfo',
-                      'pointOnCurveInfo']
+                      'pointOnCurveInfo', 'remapValue']
 
 
 # CLEANUP ==============================================================
@@ -855,8 +855,10 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_*pointMatrixMult',
             f'{typ}_{rigname}_*setRange',
             f'{typ}_{rigname}_*pointOnCurveInfo',
+            # set_curveinfo_fk's position remap (tail length -> parameter)
+            f'{typ}_{rigname}_*remapValue',
         ]
-        # One scene scan for all seven patterns, one disconnect pass and one
+        # One scene scan for all eight patterns, one disconnect pass and one
         # delete for everything it finds (see cleanup_rigname)
         rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
@@ -1709,7 +1711,8 @@ def rename_components():
     # narrowed to marker-matching names by Maya rather than in Python.
     util_nodes = ['condition', 'multiplyDivide', 'plusMinusAverage',
                   'curveInfo', 'pointOnCurveInfo', 'blendTwoAttr',
-                  'multDoubleLinear', 'pointMatrixMult', 'setRange', 'clamp']
+                  'multDoubleLinear', 'pointMatrixMult', 'setRange', 'clamp',
+                  'remapValue']
     legacy_nodes = list(cmds.ls(*marker_patterns, dag=True) or [])
     legacy_nodes += cmds.ls(*marker_patterns, type=util_nodes) or []
     for node in dict.fromkeys(legacy_nodes):

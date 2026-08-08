@@ -5,8 +5,17 @@ author: Daisy Jane @gnitemouse
 Rig Tail FK: Variable FK system with sliding controls
 
 In FK mode, rotate varFK controls to control tail shape.
-Use Position attribute to move varFK controls along curve.
+Use Position attribute to move varFK controls along curve (0 at the base,
+10 at the tip, in tail-length units).
 Use Falloff attribute to adjust the range of joints affected.
+
+Two metrics meet here and must not be confused. `position` is what the
+animator reads: a fraction of TAIL LENGTH, so 5 is halfway down the tail.
+`joint_pos` is what the network compares against: a normalised Greville
+abscissa, i.e. a fraction of the curve's PARAMETER range, which is what a
+pointOnCurveInfo needs to land on a given joint. A remapValue per control
+converts the first into the second (set_curveinfo_fk), and everything
+downstream reads that output through control_position_plug.
 
 System Overview:
     Creates Variable FK controls (N=3 by default) that slide along the curve
@@ -32,18 +41,65 @@ logger = logger_setup(__name__)
 
 # ADD CURVEINFO (FK) ===================================================
 
+def control_position_plug(control):
+    '''
+    Output plug carrying a control's position in joint_pos units.
+
+    The `position` dial is in tail-length units and joint_pos is a Greville
+    (parameter) fraction, so everything that compares the two has to read
+    the remapValue's output, never the raw scaled dial. Falls back to the
+    scaled dial when no remap exists (an FK build that never ran
+    set_curveinfo_fk), which reproduces the old behaviour rather than
+    erroring.
+
+    Arguments
+        control (str): Control node-name stem, e.g. 'FK_tail_01'
+
+    Return
+        str: plug name to connect from
+    '''
+    remap = f'{control}_position_remapValue'
+    if cmds.objExists(remap):
+        return f'{remap}.outValue'
+    return f'{control}_control_position_multDoubleLinear.output'
+
+
 def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     '''
-    Parameterize control position to curve length using pointOnCurveInfo.
-    Creates node network to slide controls along curve based on position attribute.
+    Slide each variable-FK control along the curve from its position attr.
 
     Node network per control:
     1. curveInfo: Measures total curve length
     2. multDoubleLinear (ctrlpos): Scales position attribute (0-10) to range (0-1)
-    3. plusMinusAverage (pma): Calculates parameter = 1 - ctrlpos (reverses direction)
+    3. remapValue (remap): tail-length fraction -> curve parameter fraction
     4. pointOnCurveInfo (poci): Gets world position on curve at parameter
     5. pointMatrixMult (pmm): Converts world position to local space
     6. Connection: pmm.output -> control_group.translate
+
+    The remap is the fix for controls drawn away from the joints they drive.
+    `poci.turnOnPercentage` takes a fraction of the curve's PARAMETER range,
+    not of its length - those differ wherever the bones are uneven, and on
+    the squid fintails (8:1 taper) feeding it a length fraction drew the
+    first control at 60% of the tail while its rotation landed at 44%.
+    turnOnPercentage was never wrong; what it was being fed was.
+
+    So the ramp maps each joint's length fraction to that joint's Greville
+    fraction, one point per joint, sampled off the curve itself (so degree
+    and CV count cannot drift out of step with create_curve). Downstream,
+    falloff_rotation reads the SAME remap output via control_position_plug,
+    which is what keeps the drawn position and the rotated joints together.
+
+    Two deliberate asymmetries:
+    - `position` reads in tail length, `falloff` stays in joint_pos units. A
+      width cannot go through a point-wise remap, and leaving it in joint
+      units is what makes num_joints (a joint count) consistent.
+    - the ramp is built from the REST curve. If the curve stretches under
+      animation the mapping drifts slightly - the same class of static
+      approximation as offset_unit_scale, and invisible next to what it
+      replaces.
+
+    The old `1 - ctrlpos` reversal is gone: position, joint_pos and the
+    curve parameter now all run base to tip.
 
     Called after setting control attributes.
 
@@ -56,6 +112,15 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     curveinfo = rt_maya.create_curveinfo(rigname, curve, rt_constants.TYPE_FK)
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
+
+    # Ramp points read off the curve, not off the joint list: the FK curve
+    # carries one CV per joint at the joint positions, so its CVs give both
+    # metrics, and its own degree keeps greville_fractions in step.
+    num_cv, _spans, degree = rt_maya.get_num_cv(curve)
+    cv_pos = [cmds.pointPosition(f'{curve}.cv[{i}]', w=True)
+              for i in range(num_cv)]
+    ramp_in = rt_math.length_fractions(cv_pos)
+    ramp_out = rt_math.greville_fractions(num_cv, degree)
 
     for i, ctrl in enumerate(controls):
         NN = rt_naming.get_index_from_name(ctrl)
@@ -81,13 +146,22 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
         cmds.setAttr(f'{ctrlpos}.input2', 0.1)
         # Output: f'{ctrlpos}.output' = scaled position (0-1)
 
-        # plusMinusAverage: Create parameter (1 - ctrlpos)
-        pma = f'{ctrl_name}_parameter_plusMinusAverage'
-        cmds.createNode('plusMinusAverage', n=pma, s=1, ss=1)
-        cmds.setAttr(f'{pma}.operation', 2) # Subtract
-        cmds.setAttr(f'{pma}.input1D[0]', 1) # 1 - position
-        cmds.connectAttr(f'{ctrlpos}.output', f'{pma}.input1D[1]', f=1)
-        cmds.connectAttr(f'{pma}.output1D', f'{poci}.parameter', f=1)
+        # remapValue: tail-length fraction -> curve parameter fraction.
+        # One ramp point per joint, linear between them.
+        remap = f'{ctrl_name}_position_remapValue'
+        if not cmds.objExists(remap):
+            cmds.createNode('remapValue', n=remap, s=1, ss=1)
+        for idx, (in_v, out_v) in enumerate(zip(ramp_in, ramp_out)):
+            cmds.setAttr(f'{remap}.value[{idx}].value_Position', in_v)
+            cmds.setAttr(f'{remap}.value[{idx}].value_FloatValue', out_v)
+            cmds.setAttr(f'{remap}.value[{idx}].value_Interp', 1) # linear
+        # Drop any ramp points left over from a shorter chain: a stale entry
+        # past the end of the new ramp would still be interpolated through
+        for idx in cmds.getAttr(f'{remap}.value', mi=True) or []:
+            if idx >= len(ramp_in):
+                cmds.removeMultiInstance(f'{remap}.value[{idx}]', b=True)
+        cmds.connectAttr(f'{ctrlpos}.output', f'{remap}.inputValue', f=1)
+        cmds.connectAttr(f'{remap}.outValue', f'{poci}.parameter', f=1)
 
         # pointMatrixMult: Convert world position to local space
         pmm = f'{ctrl_name}_pointMatrixMult'
@@ -109,9 +183,16 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     - Multiple controls' rotations accumulate on each joint
 
     Control Attributes:
-        position (0-10): Control position along curve (0=base, 10=tip)
-        falloff (0.1-10): Range of influence (default 2)
+        position (0-10): Control position along curve (0=base, 10=tip),
+            in TAIL-LENGTH units
+        falloff (0.1-10): Range of influence (default 2), in joint_pos
+            (Greville) units - a width cannot go through the position
+            remap, and joint units are what make num_joints consistent
         num_joints (calculated): Number of joints affected by falloff
+
+    The comparison against jnt.joint_pos reads control_position_plug(), i.e.
+    the remapValue output rather than the raw scaled dial, so the joints a
+    control rotates are the joints it is drawn on. See set_curveinfo_fk.
 
     Range Calculation:
         Valid range: (ctrl - falloff) <= joint_pos <= (ctrl + falloff)
@@ -146,7 +227,10 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         cmds.createNode('multDoubleLinear', n=ctrlpos, s=1, ss=1)
         cmds.connectAttr(f'{ctrl}.position', f'{ctrlpos}.input1', f=1)
         cmds.setAttr(f'{ctrlpos}.input2', 0.1)
-    # Output: f'{ctrlpos}.output' = scaled position (0-1)
+    # The plug to COMPARE against joint_pos is the remap's output, not this
+    # node's: set_curveinfo_fk runs first (see rig_tail.rig_tail_fk), so the
+    # remap is already there on a full build
+    ctrlpos_plug = control_position_plug(control)
 
     # Scale control falloff to range(0,1)
     falloff = f'{control}_control_falloff_multDoubleLinear'
@@ -193,7 +277,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         # (ctrl - jnt)
         cmds.createNode('plusMinusAverage', n=ctrl_minus_jnt, s=1, ss=1)
         cmds.setAttr(f'{ctrl_minus_jnt}.operation', 2) # subtract
-        cmds.connectAttr(f'{ctrlpos}.output', f'{ctrl_minus_jnt}.input1D[0]', f=1)
+        cmds.connectAttr(ctrlpos_plug, f'{ctrl_minus_jnt}.input1D[0]', f=1)
         cmds.connectAttr(f'{jnt}.joint_pos', f'{ctrl_minus_jnt}.input1D[1]', f=1)
 
         # (ctrl - jnt + falloff)
@@ -211,7 +295,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         cmds.createNode('plusMinusAverage', n=jnt_minus_ctrl, s=1, ss=1)
         cmds.setAttr(f'{jnt_minus_ctrl}.operation', 2) # subtract
         cmds.connectAttr(f'{jnt}.joint_pos', f'{jnt_minus_ctrl}.input1D[0]', f=1)
-        cmds.connectAttr(f'{ctrlpos}.output', f'{jnt_minus_ctrl}.input1D[1]', f=1)
+        cmds.connectAttr(ctrlpos_plug, f'{jnt_minus_ctrl}.input1D[1]', f=1)
 
         # (jnt - ctrl + falloff)
         cmds.createNode('plusMinusAverage', n=numerator_neg, s=1, ss=1)
@@ -256,7 +340,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         cond = f'{sdk_name}_rotmult_{rt_constants.COND}'
         cmds.createNode('condition', n=cond, s=1, ss=1)
         cmds.setAttr(f'{cond}.operation', 2) # greater than
-        cmds.connectAttr(f'{ctrlpos}.output', f'{cond}.firstTerm', f=1) # ctrlpos
+        cmds.connectAttr(ctrlpos_plug, f'{cond}.firstTerm', f=1) # ctrlpos
         cmds.connectAttr(f'{jnt}.joint_pos', f'{cond}.secondTerm', f=1) # jntpos
 
         # If ctrl > jnt (control ahead): use rotmult_neg

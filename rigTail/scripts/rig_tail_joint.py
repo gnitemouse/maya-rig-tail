@@ -184,7 +184,27 @@ def is_equal_joint(joint1, joint2, tolerance=0.1):
 def set_joint_attributes(joints):
     """
     Label joint positions with custom 'joint_pos' attribute.
-    Adds attribute to each joint with V value (0 to 1) along chain.
+    Adds attribute to each joint with V value (0 to 1) along chain,
+    0 at the BASE and 1 at the tip.
+
+    The value is the joint's normalised Greville abscissa on the FK curve,
+    NOT a distance. The FK curve carries one CV per joint, so joint j's
+    Greville fraction is the parameter fraction that lands on joint j - and
+    since the variable-FK controls are placed by feeding this same number to
+    a pointOnCurveInfo (see rig_tail_fk.set_curveinfo_fk), control and
+    joints end up in one metric. It previously measured straight-line
+    distance to the TIP, which is a third metric again: the control was
+    drawn ~17% of the tail away from the joints it actually rotated.
+
+    Two consequences worth knowing:
+    - joint_pos is a fraction of JOINT COUNT, not of tail length. That is
+      what makes falloff_rotation's num_joints setRange (which maps falloff
+      onto a joint count) self-consistent.
+    - the animator-facing `position` dial stays in tail-length units; a
+      remapValue converts it into this space. See set_curveinfo_fk.
+
+    The degree is clamped exactly as rig_tail_curve.create_curve clamps it,
+    so a short chain cannot make the two disagree.
 
     Arguments:
         joints (list): List of joint names
@@ -194,18 +214,9 @@ def set_joint_attributes(joints):
         logger.error('No joints provided')
         return
 
-    end = joints[-1]
-    fullv = rt_math.get_vec_length(joints[0], end)
-    for jnt in joints:
-        length = rt_math.get_vec_length(jnt, end)
-        logger.trace(f"joint '{jnt}' length {length} fullv {fullv}")
-        if length == 0:
-            v = 0
-        elif fullv == 0:
-            logger.error(f"joint '{jnt}' - length {length} fullv {fullv}")
-            v = 0
-        else:
-            v = length / fullv
+    fractions = rt_math.greville_fractions(len(joints), min(3, len(joints)-1))
+    for jnt, v in zip(joints, fractions):
+        logger.trace(f"joint '{jnt}' joint_pos {v}")
 
         if cmds.attributeQuery('joint_pos', n=jnt, ex=1):
             cmds.setAttr(f"{jnt}.joint_pos", l=0)  # Unlock
