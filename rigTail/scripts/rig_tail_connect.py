@@ -140,10 +140,13 @@ def match_fk_to_ik_rest(fk, ik):
     their true rest. An earlier read, even after a forced eval, catches the
     raw-solver pose the joints briefly sit on.
 
-    Now that the IK rest IS the joint chain, this should be close to a no-op
-    on a clean build; it still matters after a rebuild, and for the residual
-    where a curve with CVs at the joints approximates rather than
-    interpolates them.
+    Still needed, and by a smaller margin than it used to be. The IK rest is
+    now the joint chain rather than a badly smoothed version of it, but a
+    curve with CVs AT the joints approximates rather than interpolates them,
+    so the IK joints still settle about 1.7 degrees off at the base of the
+    squid C_fintail (it was 21.2). FK sits on the joints exactly, so that
+    difference is what would pop on a mode switch without this. It becomes a
+    true no-op only if the solver curve is built to interpolate.
 
     The FK joint sits at the bottom of the variable-FK SDK stack, and the
     controls drive the groups ABOVE it, so moving the joint itself shifts only

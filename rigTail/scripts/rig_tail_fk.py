@@ -69,12 +69,18 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     Slide each variable-FK control along the curve from its position attr.
 
     Node network per control:
-    1. curveInfo: Measures total curve length
-    2. multDoubleLinear (ctrlpos): Scales position attribute (0-10) to range (0-1)
-    3. remapValue (remap): tail-length fraction -> curve parameter fraction
-    4. pointOnCurveInfo (poci): Gets world position on curve at parameter
-    5. pointMatrixMult (pmm): Converts world position to local space
-    6. Connection: pmm.output -> control_group.translate
+    1. multDoubleLinear (ctrlpos): Scales position attribute (0-10) to range (0-1)
+    2. remapValue (remap): tail-length fraction -> curve parameter fraction
+    3. pointOnCurveInfo (poci): Gets world position on curve at parameter
+    4. pointMatrixMult (pmm): Converts world position to local space
+    5. Connection: pmm.output -> control_group.translate
+
+    Also creates FK_{rigname}_curveInfo, which nothing reads. It is
+    vestigial - the length it measures is not used by this network (the
+    remap ramp carries the length information, baked at build time) and
+    stretch builds its own _scale_curveInfo. Left in place rather than
+    removed here because it is one idle node per rig part and deleting it
+    changes what an existing scene contains; safe to drop when convenient.
 
     The remap is the fix for controls drawn away from the joints they drive.
     `poci.turnOnPercentage` takes a fraction of the curve's PARAMETER range,

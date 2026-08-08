@@ -21,11 +21,30 @@ compounding.
 Method D only ever made the smoothing REPRODUCIBLE, not smaller: a
 one-time loss remained, and on the squid C_fintail it was severe (the base
 joint's aim 22.3 deg off, 8% of the base bend surviving, the curve 0.48
-units shorter than the joint chain). The smoothing itself is now gone -
+units shorter than the joint chain). Most of that is now gone -
 rig_tail_curve.connect_driver_to_solver_curve drives the solver curve as
-an offset from rest, so at rest it is the joint chain exactly. This module
-is still load-bearing: that correction is measured against these stored
-positions, so a stale or drifted capture would define a wrong rest.
+an offset from rest, so at rest it is the joint chain exactly.
+
+STILL NECESSARY, for two reasons.
+
+The loop is not closed, only slowed. A curve with CVs AT the joints does
+not pass through them, so the spline still settles the joints a little off
+what it was built from, and reading that back on the next rebuild still
+compounds. Measured on the squid C_fintail without this module: total turn
+angle 60.2 deg, then 56.9, 55.0, 53.6, 52.4 over successive rebuilds, and
+the base aim drifting 1.7, 2.8, 3.7, 4.4, reaching 7.1 by the tenth. With
+it, rebuild 1's figures repeat forever. The per-rebuild loss is far
+smaller than the old 22.5 -> 14.9 -> 9.8, but it accumulates without bound
+toward a straight line either way.
+
+And the correction itself is measured against these stored positions, so
+they now define what 'rest' MEANS rather than merely seeding it.
+
+That second point is a migration hazard. A scene carrying a restMatrix
+captured before the curve fix stored an already-degraded pose; the rig will
+now reproduce that degraded shape faithfully, as rest, and look correct
+doing it. On such a scene call clear_rest_pose() and rebuild once from a
+clean setup skeleton so the capture is the pose you actually want.
 
 Scope is deliberately minimal: it fixes only the curve input. It does not
 restore BN and does not stamp FK.

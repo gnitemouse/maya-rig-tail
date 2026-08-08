@@ -732,12 +732,25 @@ Rest-pose store for the IK rebuild-degradation fix (Method D). Captures
 each BN joint's rest world matrix once and builds the IK curve from it on
 every rebuild, so rebuilds reproduce the same shape instead of compounding.
 
-Method D only ever made the smoothing *reproducible*, not smaller. The
-smoothing itself is gone now —
-`rig_tail_curve.connect_driver_to_solver_curve` drives the solver curve
-as an offset from rest — but this module is still load-bearing: that
-correction is measured against the positions stored here, so a stale or
-drifted capture would define a wrong rest.
+Method D only ever made the smoothing *reproducible*, not smaller. Most
+of it is gone now — `rig_tail_curve.connect_driver_to_solver_curve`
+drives the solver curve as an offset from rest — but **this module is
+still necessary**, for two reasons.
+
+The degradation loop is slowed, not closed: a curve with CVs *at* the
+joints does not pass through them, so each rebuild still settles the
+joints slightly off what it was built from. Measured on the squid
+C_fintail without this module, total turn angle goes 60.2° → 56.9 → 55.0
+→ 53.6 → 52.4 over successive rebuilds, with the base aim drifting to
+7.1° by the tenth. With it, rebuild 1 repeats forever.
+
+And the rest correction is now *measured against* these stored positions,
+so they define what "rest" means rather than merely seeding it.
+
+> **Migration hazard.** A scene whose `restMatrix` was captured before the
+> curve fix stored an already-degraded pose, and the rig will now
+> reproduce that degraded shape faithfully as rest. On such a scene, call
+> `clear_rest_pose()` and rebuild once from a clean setup skeleton.
 
 ### Functions
 
