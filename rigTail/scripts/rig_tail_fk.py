@@ -2,30 +2,92 @@
 # rig_tail_fk.py
 author: Daisy Jane @gnitemouse
 
-Rig Tail FK: Variable FK system with sliding controls
+Rig Tail FK: variable FK for tails, tentacles and trunks.
 
-In FK mode, rotate varFK controls to control tail shape.
-Use Position attribute to move varFK controls along curve (0 at the base,
-10 at the tip, in tail-length units).
-Use Falloff attribute to adjust the range of joints affected.
+A few controls slide along the chain and each bends the joints near them,
+instead of one control per joint. Rotating a control bends the tail under
+it, fading to nothing at the edge of its reach; sliding the control moves
+that bend along the tail.
 
-Two metrics meet here and must not be confused. `position` is what the
-animator reads: a fraction of TAIL LENGTH, so 5 is halfway down the tail.
-`joint_pos` is what the network compares against: a normalised Greville
-abscissa, i.e. a fraction of the curve's PARAMETER range, which is what a
-pointOnCurveInfo needs to land on a given joint. A remapValue per control
-converts the first into the second (set_curveinfo_fk), and everything
-downstream reads that output through control_position_plug.
+OVERVIEW
+    NUM_CTRL_FK controls (3 by default), each with three dials:
+        position (0-10)   where it sits: 0 at the base, 10 at the tip
+        falloff (0.1-10)  how far its bend reaches along the chain
+        rotate            the bend itself
+    A control also reports num_joints, the number of joints currently in
+    its range, for the animator to read.
 
-System Overview:
-    Creates Variable FK controls (N=3 by default) that slide along the curve
-    and distribute their rotation to joints based on position and falloff.
-    Each joint has SDK groups that receive weighted rotation from all controls.
+ARCHITECTURE
+    Controls slide
+        Each control's position drives a pointOnCurveInfo on the FK curve,
+        which places the control's parent group. See set_curveinfo_fk.
+    Joints receive
+        Every joint sits under a stack of SDK groups - one per control,
+        plus one for its own FK control. Each control writes into its own
+        layer, so influences accumulate through the hierarchy instead of
+        fighting over a channel. See create_sdk_groups.
+    Weighting
+        weight = max(0, 1 - |joint_pos - ctrl_pos| / falloff)
+        A symmetric linear tent, normalised by the number of joints in
+        range, so widening the falloff spreads the same total bend further
+        rather than adding more of it. See falloff_rotation.
+    Layering
+        A control also carries the rotation of every control before it, so
+        the chain reads as FK: bending control 1 carries 2 and 3 with it.
+    Twist / roll / offset
+        A separate network on the same SDK stack, so the basectrl dials
+        that drive the IK spline handle work in FK mode too. The BN chain
+        blends between the FK and IK drivers (rig_tail_matrix), so there
+        is no switching network here. See connect_twist_roll.
+
+TWO METRICS, easily confused
+    position   what the animator reads - a fraction of TAIL LENGTH, so 5
+               is halfway down the tail.
+    joint_pos  what the network compares against - a fraction of the
+               curve's PARAMETER range (a normalised Greville abscissa),
+               which is what a pointOnCurveInfo needs to land on a joint.
+    The two diverge wherever joints are unevenly spaced. A remapValue per
+    control converts the first into the second (set_curveinfo_fk); always
+    read it through control_position_plug, never off the raw dial.
+
+KEY DECISIONS
+    Stock nodes, wired with maya.cmds. Everything here is built from nodes
+    that ship with Maya. The module installs by copying scripts: no
+    compiled plugin, no per-Maya-version or per-platform builds, and a rig
+    opens on any machine that can open Maya - including render nodes that
+    were never set up for it. Every intermediate value stays an
+    inspectable plug, so the network can be debugged in the Node Editor
+    and fixed in a scene without a rebuild.
+
+    The cost is node count, which scales with controls x joints, so the
+    weighting is kept deliberately lean - four nodes per joint per control.
+    For the compiled alternative see Serguei Kalentchouk's write-up in the
+    credits below: the same job as one C++ node, at the price of a build
+    matrix and scenes that will not open without the plugin.
+
+    Rotation only. Controls transmit rotation; position along the chain,
+    stretch and twist come from their own networks, which keeps each on a
+    separate channel of the SDK stack.
+
+    Falloff stays in joint_pos units while position reads in tail length.
+    A width cannot pass through a point-wise remap, and joint units are
+    what make num_joints a meaningful joint count.
+
+FUNCTIONS
+    control_position_plug   Plug carrying a control's position in joint_pos units
+    set_curveinfo_fk        Wire controls to slide along the curve
+    falloff_rotation        Distribute one control's rotation across joints in range
+    create_sdk_groups       Build the per-joint SDK stack, one layer per control
+    get_sdk_groups          Collect existing SDK groups, grouped by layer
+    put_jnt_under_sdk_groups  Nest a joint into its stack, keeping its rest pose
+    connect_twist_roll      Give the FK chain twist, roll and offset
+    offset_unit_scale       Scene units per unit of offset, so FK matches IK
 
 Credits:
 - Variable FK based on elephant trunk rig by Jeff Brodsky (vimeo.com/72424469)
-- Test world colinearity by Chris Evans
-  (http://www.chrisevans3d.com/pub_blog/maya-python-vector-math-primer/)
+- Serguei Kalentchouk, 'Variable FK Revisited' - the same method built as a
+  compiled C++ node, worth reading if you want to go that way:
+  https://medium.com/@k_serguei/variable-fk-revisited-9e8435c0c337
 '''
 
 import maya.cmds as cmds
@@ -45,12 +107,13 @@ def control_position_plug(control):
     '''
     Output plug carrying a control's position in joint_pos units.
 
-    The `position` dial is in tail-length units and joint_pos is a Greville
-    (parameter) fraction, so everything that compares the two has to read
-    the remapValue's output, never the raw scaled dial. Falls back to the
-    scaled dial when no remap exists (an FK build that never ran
-    set_curveinfo_fk), which reproduces the old behaviour rather than
-    erroring.
+    Anything comparing a control against jnt.joint_pos must read this, not
+    the raw dial: the dial is in tail length, joint_pos is a curve
+    parameter fraction, and set_curveinfo_fk's remapValue is what converts
+    between them.
+
+    Falls back to the scaled dial on an FK-only build that never ran
+    set_curveinfo_fk, so there is no remap to read.
 
     Arguments
         control (str): Control node-name stem, e.g. 'FK_tail_01'
@@ -66,14 +129,32 @@ def control_position_plug(control):
 
 def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     '''
-    Slide each variable-FK control along the curve from its position attr.
+    Slide each variable-FK control along the curve from its position dial.
 
     Node network per control:
-    1. multDoubleLinear (ctrlpos): Scales position attribute (0-10) to range (0-1)
+    1. multDoubleLinear (ctrlpos): position dial (0-10) -> fraction (0-1)
     2. remapValue (remap): tail-length fraction -> curve parameter fraction
-    3. pointOnCurveInfo (poci): Gets world position on curve at parameter
-    4. pointMatrixMult (pmm): Converts world position to local space
-    5. Connection: pmm.output -> control_group.translate
+    3. pointOnCurveInfo (poci): world position on the curve at that parameter
+    4. pointMatrixMult (pmm): world position -> basectrl local space
+    5. pmm.output -> control_group.translate
+
+    The remap is what keeps a control drawn on the joints it actually
+    rotates. poci.turnOnPercentage takes a fraction of the curve's
+    PARAMETER range, not of its length, and the two diverge wherever the
+    bones are uneven - on an 8:1 taper badly enough to draw a control a
+    sixth of a tail away from its own bend. So the ramp carries one point
+    per joint, mapping that joint's length fraction to its Greville
+    fraction. Points are sampled off the curve itself, so degree and CV
+    count cannot drift out of step with create_curve.
+
+    falloff_rotation reads the same remap output through
+    control_position_plug, which is what holds the two together.
+
+    The ramp is built from the REST curve, so a curve stretching under
+    animation drifts the mapping slightly - the same class of static
+    approximation as offset_unit_scale.
+
+    Position, joint_pos and the curve parameter all run base to tip.
 
     Also creates FK_{rigname}_curveInfo, which nothing reads. It is
     vestigial - the length it measures is not used by this network (the
@@ -81,31 +162,6 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     stretch builds its own _scale_curveInfo. Left in place rather than
     removed here because it is one idle node per rig part and deleting it
     changes what an existing scene contains; safe to drop when convenient.
-
-    The remap is the fix for controls drawn away from the joints they drive.
-    `poci.turnOnPercentage` takes a fraction of the curve's PARAMETER range,
-    not of its length - those differ wherever the bones are uneven, and on
-    the squid fintails (8:1 taper) feeding it a length fraction drew the
-    first control at 60% of the tail while its rotation landed at 44%.
-    turnOnPercentage was never wrong; what it was being fed was.
-
-    So the ramp maps each joint's length fraction to that joint's Greville
-    fraction, one point per joint, sampled off the curve itself (so degree
-    and CV count cannot drift out of step with create_curve). Downstream,
-    falloff_rotation reads the SAME remap output via control_position_plug,
-    which is what keeps the drawn position and the rotated joints together.
-
-    Two deliberate asymmetries:
-    - `position` reads in tail length, `falloff` stays in joint_pos units. A
-      width cannot go through a point-wise remap, and leaving it in joint
-      units is what makes num_joints (a joint count) consistent.
-    - the ramp is built from the REST curve. If the curve stretches under
-      animation the mapping drifts slightly - the same class of static
-      approximation as offset_unit_scale, and invisible next to what it
-      replaces.
-
-    The old `1 - ctrlpos` reversal is gone: position, joint_pos and the
-    curve parameter now all run base to tip.
 
     Called after setting control attributes.
 
@@ -181,66 +237,41 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
 
 def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     '''
-    Remap control's rotation to joint rotations with falloff.
+    Distribute one control's rotation across the joints within its falloff.
 
-    Falloff Algorithm:
-    - Each control affects joints within its falloff range
-    - Rotation is distributed using a linear ramp within the falloff range
-    - Multiple controls' rotations accumulate on each joint
+    Each joint in range receives a share of the control's rotation on this
+    control's SDK layer:
 
-    Control Attributes:
-        position (0-10): Control position along curve (0=base, 10=tip),
-            in TAIL-LENGTH units
-        falloff (0.1-10): Range of influence (default 2), in joint_pos
-            (Greville) units - a width cannot go through the position
-            remap, and joint units are what make num_joints consistent
-        num_joints (calculated): Number of joints affected by falloff
-
-    The comparison against jnt.joint_pos reads control_position_plug(), i.e.
-    the remapValue output rather than the raw scaled dial, so the joints a
-    control rotates are the joints it is drawn on. See set_curveinfo_fk.
-
-    Weight:
         weight = max(0, 1 - |joint_pos - ctrl_pos| / falloff)
+        joint_rotation = rotation * weight / num_joints
 
-        A symmetric linear tent: full strength where the joint sits under
-        the control, falling to zero at either edge of the falloff and
-        staying there.
+    A symmetric linear tent - full strength under the control, fading to
+    zero at either edge of the falloff and staying there. Dividing by
+    num_joints means widening the falloff spreads the same total bend over
+    more joints rather than adding more of it.
 
-        This was built as two mirrored halves - (ctrl - jnt + f)/f for
-        joints one side, (jnt - ctrl + f)/f for the other, a condition to
-        pick between them, two more to test each half's range and a fourth
-        to zero the result outside it. Both halves expand to the same
-        1 - |d|/f, and the conditions only clamp that at zero, so the whole
-        arrangement collapses to one tent. Twelve nodes per joint per
-        control became four.
+    `rotation` is this control's rotation plus that of every control before
+    it, so the chain reads as FK: bending control 1 carries 2 and 3 along.
 
-        The algebra is exact; the wiring is not quite. remapValue samples
-        its ramp in SINGLE precision where the old chain of divides stayed
-        double, so the weight now carries ~1e-7 relative rounding. Measured
-        against the old network in Maya 2024 across the falloff x position
-        x joint_pos space, on the 36-joint squid fintail values: worst case
-        2e-6 degrees on a control rotated 30, 6e-5 at 720 - it scales with
-        the rotation rather than sitting at a fixed floor, and stays orders
-        of magnitude under what the curve editor will even display. So this
-        is a rewiring, not a retune: existing animation reads the same.
-
-        At the exact falloff edge the old network could leak ~3e-7 of a
-        degree through its gate condition. The tent returns a clean zero.
-
-    Final Rotation:
-        joint_rotation = control_rotation * weight
-
-        The 1/num_joints normalisation rides on the remapValue's outputMax
-        rather than a per-joint divide, so widening the falloff still
-        spreads a fixed total rotation across more joints instead of adding
-        more of it.
+    Control attributes:
+        position (0-10)   where the control sits, in TAIL-LENGTH units
+        falloff (0.1-10)  reach along the chain, in joint_pos units
+                          (default 2)
+        num_joints        joints currently in range, computed here from
+                          falloff and reported back to the animator
 
     Node network per joint:
     1. plusMinusAverage (delta): joint_pos - ctrl_pos, signed
     2. multiplyDivide (ratio): delta / falloff -> -1 .. +1 across the range
-    3. remapValue (weight): tent over that range, scaled by 1/num_joints
-    4. multiplyDivide (rotmult): rotsum * weight -> sdk_grp.rotate
+    3. remapValue (weight): the tent over that range, scaled by 1/num_joints
+    4. multiplyDivide (rotmult): rotation * weight -> sdk_grp.rotate
+
+    Comparisons against jnt.joint_pos go through control_position_plug, so
+    a control rotates the joints it is drawn on. See set_curveinfo_fk.
+
+    The remapValue samples its ramp in single precision, which puts ~1e-7
+    relative rounding on the weight - well under a millionth of a degree at
+    any rotation an animator will dial in.
 
     Arguments
         rigname (str): Name of rig component
@@ -298,10 +329,9 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         i += 1
     # Output: f'{rotsum}.output3D' = accumulated rotation
 
-    # 1 / num_joints, once per control instead of once per joint. The old
-    # per-joint `percentage` divide put three connections into num_joints
-    # for every joint (324 of them on a 36-joint tail with 3 controls), so
-    # nudging falloff dirtied that many plugs directly. Now it is one.
+    # 1 / num_joints, once per control. It rides on the weight ramp's
+    # outputMax below, so no per-joint divide is needed and num_joints
+    # keeps a single downstream connection.
     inv_numjnt = f'{control}_inv_num_joints_multiplyDivide'
     if not cmds.objExists(inv_numjnt):
         cmds.createNode('multiplyDivide', n=inv_numjnt, s=1, ss=1)
@@ -316,9 +346,9 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         NN = rt_naming.get_index_from_name(jnt)
         sdk_name = f'{control}_{NN:02d}'
 
-        # (jnt - ctrl): signed distance along the chain, in joint_pos units.
-        # Sign carries which side of the control the joint is on; the tent
-        # below is symmetric, so nothing downstream has to branch on it.
+        # (jnt - ctrl): signed distance along the chain, in joint_pos
+        # units. The tent below is symmetric, so nothing downstream has to
+        # branch on which side of the control the joint sits.
         delta = f'{sdk_name}_delta_plusMinusAverage'
         cmds.createNode('plusMinusAverage', n=delta, s=1, ss=1)
         cmds.setAttr(f'{delta}.operation', 2) # subtract
@@ -327,24 +357,22 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
 
         # (jnt - ctrl) / falloff: -1 at one edge of the range, 0 under the
         # control, +1 at the other. falloff bottoms out at 0.01 (attr min
-        # 0.1, scaled by 0.1 above), so this never divides by zero either.
+        # 0.1, scaled by 0.1 above), so this never divides by zero.
         ratio = f'{sdk_name}_ratio_multiplyDivide'
         cmds.createNode('multiplyDivide', n=ratio, s=1, ss=1)
         cmds.setAttr(f'{ratio}.operation', 2) # divide
         cmds.connectAttr(f'{delta}.output1D', f'{ratio}.input1X', f=1)
         cmds.connectAttr(f'{falloff}.output', f'{ratio}.input2X', f=1)
 
-        # The tent. remapValue normalises inputValue from [inputMin,
-        # inputMax] to [0,1] and clamps it there, then samples the ramp -
-        # and a ramp clamps at its end points regardless, so a joint past
-        # the falloff reads 0 by both mechanisms. Three linear points
-        # running 0 -> 1 -> 0 give max(0, 1 - |jnt - ctrl|/falloff) with no
-        # condition nodes at all - to single precision, the one thing the
-        # ramp costs us over the old divides (see the docstring).
+        # The tent. remapValue normalises inputValue from [-1, 1] to [0, 1]
+        # and clamps it there, then samples the ramp - which clamps at its
+        # end points too - so a joint past the falloff reads 0. Three
+        # linear points running 0 -> 1 -> 0 draw the whole weight curve
+        # with no condition nodes.
         #
-        # outputMax carries the 1/num_joints normalisation: remapValue
+        # outputMax carries the 1/num_joints normalisation: the node
         # returns outputMin + (outputMax - outputMin) * ramp, and outputMin
-        # is 0, so the whole tent comes out pre-divided.
+        # is 0, so the tent arrives pre-divided.
         weight = f'{sdk_name}_weight_remapValue'
         cmds.createNode('remapValue', n=weight, s=1, ss=1)
         cmds.setAttr(f'{weight}.inputMin', -1)
@@ -356,9 +384,8 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         cmds.connectAttr(f'{ratio}.outputX', f'{weight}.inputValue', f=1)
         cmds.connectAttr(f'{inv_numjnt}.outputX', f'{weight}.outputMax', f=1)
 
-        # Apply the weight to the accumulated rotation, and that is the
-        # joint's share. No threshold node: out of range the weight is
-        # already 0, which zeroes the product on its own.
+        # The joint's share. Out of range the weight is already 0, which
+        # zeroes the product, so no gate node is needed.
         rotmult = f'{sdk_name}_rotmult_multiplyDivide'
         cmds.createNode('multiplyDivide', n=rotmult, s=1, ss=1)
         cmds.setAttr(f'{rotmult}.operation', 1) # multiply
@@ -374,15 +401,20 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
 
 def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
     '''
-    Create NUM_CTRL_FK+1 SDK groups above each joint for rotation distribution.
+    Build the stack of SDK groups that every FK joint hangs from.
 
-    SDK Group Structure (per joint):
-    - NUM_CTRL_FK SDK groups (one per Variable FK control)
-    - 1 control SDK group (for FK joint control rotation)
-    - Nested hierarchy: sdk_01 > sdk_02 > sdk_03 > ctrl_sdk > joint
+    One group per variable-FK control, plus one for the joint's own FK
+    control, nested and topped by the joint:
 
-    Each SDK layer accumulates rotation from one Variable FK control.
-    The control SDK receives direct rotation from FK joint control.
+        sdk_01 > sdk_02 > sdk_03 > ctrl_sdk > joint
+
+    Giving each control its own layer is what lets their influences
+    accumulate through the hierarchy without contending for a channel:
+    falloff_rotation writes one control's weighted rotation into one layer,
+    and twist/roll/stretch each own a different channel of the same stack.
+
+    Each layer also carries a copy of the joint's joint_pos, so the
+    weighting network can read it locally.
 
     Arguments
         rigname (str): Name of rig component
@@ -437,12 +469,12 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
                 rt_maya.create_group(sdk_grp)
 
             if idx > 0:
-                # Set joint_pos attribute on SDK group (copy from joint).
-                # The channel-box and lock flags go through the API
-                # (rt_maya.set_channel_flags): this runs NUM_CTRL_FK times
-                # per joint per rig part, so it is the hottest loop in the
-                # build, and a flag write there is a command spent on
-                # display state.
+                # Copy the joint's joint_pos onto the layer so the
+                # weighting network can read it locally. Flags go through
+                # rt_maya.set_channel_flags (API): this runs NUM_CTRL_FK
+                # times per joint per rig part, the hottest loop in the
+                # build, where a flag write is a command spent on display
+                # state.
                 v = joint_pos
                 if cmds.attributeQuery('joint_pos', n=sdk_grp, ex=1):
                     rt_maya.set_channel_flags(sdk_grp, ['joint_pos'], l=False)
@@ -474,18 +506,19 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
 
 def get_sdk_groups(joints):
     '''
-    Get SDK groups for all joints.
-    Returns multidimensional list organized by SDK layer.
+    Collect the SDK groups above each joint, grouped by layer.
+
+    Walks up from each joint through the stack create_sdk_groups built.
+    falloff_rotation takes one row of this: all the joints' groups for a
+    single control.
 
     Arguments
         joints (list): List of FK joints
 
     Return
-        sdk_list (list of lists): SDK groups organized by layer
-            sdk_list[0] = [first SDK group for each joint]
-            sdk_list[1] = [second SDK group for each joint]
-            ...
-            sdk_list[NUM_CTRL_FK] = [control SDK group for each joint]
+        sdk_list (list of lists): SDK groups by layer, outermost first
+            sdk_list[0]             = [first SDK group for each joint]
+            sdk_list[NUM_CTRL_FK]   = [control SDK group for each joint]
     '''
     logger.trace('Get lists of SDK groups for all joints')
     sdk_list = [list() for n in range(rt_constants.NUM_CTRL_FK+1)]
@@ -503,8 +536,13 @@ def get_sdk_groups(joints):
 
 def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
     '''
-    Nest joint under SDK group hierarchy.
-    Preserves joint transforms while reparenting.
+    Nest a joint into its SDK stack without moving it.
+
+    The stack is slotted in where the joint was, and the joint's rest
+    transform is baked into the top group's offsetParentMatrix so local
+    rotate stays at zero - falloff_rotation drives that channel, and a rest
+    orientation left sitting there would be overwritten the moment the
+    connection is made.
 
     Arguments
         jnt (str): Joint to nest
@@ -531,12 +569,8 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         rt_maya.reset_opm(first_sdk_grp)
         rt_maya.reset_transforms(first_sdk_grp)
         cmds.matchTransform(first_sdk_grp, jnt)
-        # Bake the joint's rest transform into offsetParentMatrix, which
-        # leaves local rotate at zero. falloff_rotation connects the
-        # variable-FK output to this group's rotate, so a rest
-        # orientation left there would be overwritten the moment that
-        # connection is made - silently flattening any chain whose joints
-        # are not already aligned with their parent.
+        # Bake the rest transform into offsetParentMatrix so local rotate
+        # stays at zero - see the docstring for why that matters here.
         rt_maya.opm(first_sdk_grp)
 
         # Move joint under last_sdk_grp
@@ -556,44 +590,37 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
 
 def connect_twist_roll(rigname, joints):
     '''
-    Give the FK chain its own twist/roll/offset network, so the same three
-    basectrl attributes that drive the IK spline handle also work in FK
-    mode. The BN chain follows a blendMatrix of the FK and IK drivers
-    (rig_tail_matrix), so building both is what makes the dials switch
-    with the IKFK mode - there is no separate switching network.
+    Give the FK chain twist, roll and offset from the basectrl dials.
 
-    Sources come from rt_ctrlall.resolved_plug, NOT the basectrl attribute
-    directly: with the Main Controller dashboard active the tail's own
-    value is only one input of its override condition, and reading the
-    basectrl behind that condition's back is what makes the cog's
-    'All Twist' appear to do nothing while the rig sits in FK mode.
+    Builds the FK-side equivalent of what those three dials do to the IK
+    spline handle, so they work in either mode. The BN chain blends between
+    the FK and IK drivers (rig_tail_matrix), so there is no switching
+    network here - both sides simply exist.
 
-    twist - linear world-space ramp, 0 at the base to full value at the
-        tip. Every joint gets the SAME local increment (twist / N) about
-        the aim axis, on its SDK_JNT layer. A serial FK chain's local
-        rotations compound additively down the hierarchy about one
-        consistent (Setup-guaranteed twist-free) aim axis, so a constant
-        per-joint increment integrates into a linear world ramp on its
-        own. Weighting by joint index would double-compound into a curved
-        ramp - do not do that.
-    roll - uniform rigid roll of the whole chain, no ramp. Only the FIRST
-        joint receives the full value; everything below inherits it
-        through the hierarchy. Adding it to every joint (as twist does)
-        would stack into a staircase instead.
-    offset - slides the chain along its own length, on the base joint's
-        SDK_GRP layer-1 translate (aim axis). This is an APPROXIMATION of
-        the IK meaning: on the spline handle, offset re-samples the joints
-        along the curve, which has no exact analog in a chain whose shape
-        comes from rotations rather than a curve. Here it is a rigid slide
-        along the base joint's aim axis - visually close on a straight or
-        gently curved tail, not on a tight curl.
+    twist   linear world-space ramp, zero at the base to full at the tip.
+        Every joint gets the SAME local increment (twist / N) about the aim
+        axis, on its SDK_JNT layer: local rotations compound down a serial
+        chain, so a constant increment integrates into a linear ramp by
+        itself. Weighting by joint index would double-compound it into a
+        curve - do not do that.
+    roll    rigid roll of the whole chain, no ramp. Only the FIRST joint
+        takes the value; the rest inherit it through the hierarchy. Adding
+        it per joint, as twist does, would stack into a staircase.
+    offset  slides the chain along its own length, on the base joint's
+        layer-1 translate. An APPROXIMATION of the IK meaning: on the
+        spline handle offset re-samples joints along the curve, which has
+        no exact analog in a chain shaped by rotations. Close on a straight
+        or gently curved tail, not on a tight curl.
 
-    Channel choice is deliberate: layer-1 translateX of joints 1..N is
-    already driven by FK stretch (connect_fk_stretch_to_joints), which
-    skips joint 0 - so the base joint's layer-1 translate is the one free
-    channel of its kind, and offset can use it without contending with
-    stretch. SDK_JNT.rotate may already be driven by an individual FK
-    control under INDIV_FK, so twist/roll reroute that through an add node
+    Sources come from rt_ctrlall.resolved_plug, never the basectrl
+    attribute directly - with the Main Controller dashboard active the
+    tail's own value is only one input of its override condition, and
+    reading behind that makes the cog's 'All Twist' look dead in FK mode.
+
+    Channels are chosen to avoid contention: FK stretch drives layer-1
+    translate on joints 1..N but skips joint 0, leaving the base joint's
+    free for offset. SDK_JNT.rotate may already carry an individual FK
+    control under INDIV_FK, so twist and roll route through an add node
     rather than overwriting it.
 
     Arguments
@@ -678,22 +705,20 @@ def connect_twist_roll(rigname, joints):
 
 def offset_unit_scale(rigname):
     '''
-    Scene units the chain must slide per 1.0 of `offset`, so FK offset
-    matches what IK offset does at the same dial value.
+    Scene units the chain slides per 1.0 of `offset`, so FK and IK offset
+    read the same at the same dial value.
 
     The two are not natively in the same units. On the spline handle
-    `.offset` is a CURVE PARAMETER shift: the joints re-sample along the
-    curve, so one unit of offset moves them by one parameter's worth of
-    arc length. The FK network instead writes scene units straight onto a
-    translate. Measured on a 9-joint tail the same dial value gave 1.0
-    unit per joint in FK against ~3.3 in IK, so switching mode with
-    offset dialled in visibly jumped.
+    `.offset` is a CURVE PARAMETER shift - one unit moves the joints by one
+    parameter's worth of arc length - while the FK network writes scene
+    units straight onto a translate. Left unconverted, switching mode with
+    offset dialled in jumps.
 
-    Converting needs the curve the IK handle actually solves against
-    (its parameter range is what offset indexes) - the FK curve is only
-    the fallback for an FK-only build, where there is no IK to match and
-    the scale merely has to stay sane. Returns 1.0 when no curve is
-    available, leaving the raw behaviour rather than guessing.
+    Measured against the curve the IK handle solves against, since its
+    parameter range is what offset indexes. The FK curve is the fallback
+    for an FK-only build, where there is no IK to match and the scale only
+    has to stay sane. Returns 1.0 if neither curve is available, leaving
+    the raw behaviour rather than guessing.
 
     Arguments
         rigname (str): Name of rig component

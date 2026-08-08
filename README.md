@@ -373,6 +373,13 @@ decision: [rig_tail_documentation.md](rig_tail_documentation.md).
 
 ## Credits
 
+Variable FK follows the elephant-trunk rig Jeff Brodsky presented for
+*Tembo* ([vimeo.com/72424469](https://vimeo.com/72424469)). Serguei
+Kalentchouk's [Variable FK Revisited](https://medium.com/@k_serguei/variable-fk-revisited-9e8435c0c337)
+covers the same method built as a compiled C++ node — worth reading if you
+want that route; this rig stays on stock Maya nodes so it installs by
+copying scripts and opens on any machine.
+
 Shelf icon: [Octopus](https://icons8.com/icons/set/octopus) icon by
 [Icons8](https://icons8.com). Free use requires this link; keep it if you
 ship the icon, or replace `icons/octopus*.png` with your own art.

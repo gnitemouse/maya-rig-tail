@@ -616,6 +616,26 @@ joints by position and falloff. Each joint carries a stack of SDK groups
 attribute moves it along the FK curve and Falloff widens or narrows the
 joints it affects. Based on Jeff Brodsky's elephant-trunk rig.
 
+Each joint in a control's range takes a share of its rotation:
+
+```
+weight = max(0, 1 - |joint_pos - ctrl_pos| / falloff)
+joint_rotation = rotation * weight / num_joints
+```
+
+A symmetric linear tent — full strength under the control, fading to zero
+at the edge of the falloff. Dividing by `num_joints` means widening the
+falloff spreads the same total bend further rather than adding more of it.
+A control also carries the rotation of every control before it, so the
+chain reads as FK: bending control 1 carries 2 and 3 with it.
+
+Four nodes per joint per control draw that curve: a `plusMinusAverage` for
+`joint_pos - ctrl_pos`, a `multiplyDivide` to scale it by falloff, a
+`remapValue` holding the tent (its `outputMax` carries the `1/num_joints`
+normalisation), and a `multiplyDivide` applying the result to the
+accumulated rotation. No condition nodes — the ramp clamps out-of-range
+input to zero on its own.
+
 **Two metrics meet here and must not be confused.**
 
 - `position` (0–10, base to tip) is animator-facing: a fraction of **tail
@@ -637,9 +657,29 @@ tail while its rotation landed at 44%.
 through a point-wise remap, and joint units are what make `num_joints` (a
 joint count) consistent.
 
+`connect_twist_roll` builds the FK-side equivalent of the three basectrl
+dials that drive the IK spline handle, so twist, roll and offset work in
+either mode; the BN chain blends between the FK and IK drivers, so there
+is no switching network. FK offset is an approximation — the IK handle
+re-samples joints along the curve, which has no exact analog in a chain
+shaped by rotations — and `offset_unit_scale` converts between the two so
+the same dial value reads the same in both modes.
+
+**Why stock nodes.** The whole system is built from nodes that ship with
+Maya and wired with `maya.cmds`. That keeps the module install-by-copy: no
+compiled plugin, no per-Maya-version or per-platform builds, and a rig
+opens anywhere Maya does, render nodes included. Every intermediate value
+stays an inspectable plug, so the network can be debugged in the Node
+Editor and repaired in a scene without a rebuild. The cost is node count,
+which scales with controls × joints — hence the deliberately lean
+four-node weighting. For the compiled alternative, Serguei Kalentchouk's
+[Variable FK Revisited](https://medium.com/@k_serguei/variable-fk-revisited-9e8435c0c337)
+does the same job as a single C++ node, at the price of a build matrix and
+scenes that will not open without the plugin.
+
 Key functions: `control_position_plug`, `set_curveinfo_fk`,
 `falloff_rotation`, `create_sdk_groups`, `get_sdk_groups`,
-`put_jnt_under_sdk_groups`.
+`put_jnt_under_sdk_groups`, `connect_twist_roll`, `offset_unit_scale`.
 
 ---
 
