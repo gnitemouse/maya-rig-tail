@@ -226,7 +226,11 @@ def rig_tail_ik(rigname, typ=rt_constants.TYPE_IK):
     with rt_maya.timed('build.ik.spline'):
         spline_list = rt_curve.create_spline_handle(rigname, joints, curve_ik_spline, typ)
         # Connect curves
-        rt_curve.connect_driver_to_solver_curve(rigname, curve_ik, curve_ik_spline, typ)
+        # jnt_pos is what makes the solver curve rest on the JOINTS rather
+        # than on the low-CV driver curve's smoothed version of them
+        rt_curve.connect_driver_to_solver_curve(rigname, curve_ik,
+                                                curve_ik_spline, typ,
+                                                jnt_pos=jnt_pos)
 
     # Create controls
     with rt_maya.timed('build.ik.controls'):

@@ -15,13 +15,20 @@ successive rebuilds).
 Method D breaks the loop on its input. It captures each BN joint's rest
 world matrix once, on the first build while BN is still at true rest,
 stores it on the joint, and builds the IK curve from that stored rest on
-every rebuild. The curve still smooths the shape, but by the same amount
-each time, so rebuilds reproduce the same setup instead of compounding.
+every rebuild, so rebuilds reproduce the same setup instead of
+compounding.
+
+Method D only ever made the smoothing REPRODUCIBLE, not smaller: a
+one-time loss remained, and on the squid C_fintail it was severe (the base
+joint's aim 22.3 deg off, 8% of the base bend surviving, the curve 0.48
+units shorter than the joint chain). The smoothing itself is now gone -
+rig_tail_curve.connect_driver_to_solver_curve drives the solver curve as
+an offset from rest, so at rest it is the joint chain exactly. This module
+is still load-bearing: that correction is measured against these stored
+positions, so a stale or drifted capture would define a wrong rest.
 
 Scope is deliberately minimal: it fixes only the curve input. It does not
-restore BN and does not stamp FK, so FK re-duplicated from an
-already-smoothed BN settles to the smoothed value. An accepted trade-off
-for keeping this small.
+restore BN and does not stamp FK.
 
 Swap point: the build touches this module in two places. build_rig_tail
 calls capture_rest_pose once at build start, and rig_tail_ik calls

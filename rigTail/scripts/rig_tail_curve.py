@@ -5,16 +5,28 @@ author: Daisy Jane @gnitemouse
 Curves, spline IK handles and clusters for Rig Tail.
 
 The FK curve follows the joint positions exactly (the variable-FK
-controls read their position from it); the IK curve carries one CV per
-cluster control plus two for the up-vector ends, and a driver/solver
-curve pair keeps the solver's input independent of what the clusters
-deform. Construction history is deleted at creation so curve length
-never re-evaluates through stale history. Handles and clusters are
+controls read their position from it). The IK side is a pair: a DRIVER
+curve carrying one CV per cluster control plus two for the up-vector
+ends, and a SOLVER curve with one CV per joint, which is what the
+ikHandle reads. Construction history is deleted at creation so curve
+length never re-evaluates through stale history. Handles and clusters are
 found and renamed rather than duplicated on rebuild.
 
+The driver curve is deliberately low-resolution - one CV per control is
+what gives each control a single CV to move - so it cannot describe the
+chain's real shape. It therefore drives the solver curve as an OFFSET
+FROM REST, not as an absolute position: at rest the solver curve is the
+joint chain exactly, and the clusters deform it from there. Driving
+absolute positions is what used to flatten the base of a tail (8% of the
+bend surviving on the squid fintails) and shorten the curve below the
+chain length, kinking the last joints. See
+connect_driver_to_solver_curve.
+
 Functions:
+    driver_curve_positions: the driver curve's rest CVs, from joint rest
     create_curve: NURBS curve from joint positions, FK or IK flavour
     connect_driver_to_solver_curve: wire the driver curve into the solver
+        as an offset from rest
     create_spline_handle: spline ikHandle on the chain, reusing existing
     rename_spline_handle: bring a found handle/effector/curve onto the
         naming template
@@ -35,6 +47,28 @@ logger = logger_setup(__name__)
 
 
 # CURVE ================================================================
+
+def driver_curve_positions(jnt_pos):
+    '''
+    CV positions of the IK driver curve: NUM_CTRL_IK joints sampled evenly
+    by index, with the first and last duplicated for the upvec clusters.
+
+    Factored out so create_curve and connect_driver_to_solver_curve derive
+    the same rest CVs from the same joint positions. The second needs them
+    to know where the driver curve sits AT REST, and must not read that off
+    the live curve: on a rebuild the clusters are already constrained to the
+    controls, so a live read picks up the current pose and bakes it in as
+    rest.
+
+    Arguments
+        jnt_pos (list): Joint world positions, base to tip
+
+    Return
+        list: NUM_CTRL_IK + 2 CV positions
+    '''
+    indices = rt_math.linspace(0, len(jnt_pos)-1, rt_constants.NUM_CTRL_IK)
+    return [jnt_pos[0]] + [jnt_pos[round(i)] for i in indices] + [jnt_pos[-1]]
+
 
 def create_curve(rigname, jnt_pos, typ, tag=''):
     '''
@@ -80,14 +114,24 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
 
     elif typ == rt_constants.TYPE_IK:
         if tag:
-            # IK Spline solver curve: Duplicate end CVs for upvec clusters
-            all_pos = [jnt_pos[0]] + jnt_pos + [jnt_pos[-1]]
-            degree = min(3, len(all_pos)-1)
-            curve = cmds.curve(n=curve, d=degree, p=all_pos)
+            # IK Spline solver curve: one CV per joint, ends NOT duplicated.
+            # The duplicated ends belong on the driver curve, where the upvec
+            # clusters live (see driver_curve_positions). Nothing is attached
+            # to this curve - every CV is driven by a pointOnCurveInfo - so
+            # doubling its ends bought nothing and cost the tip: coincident
+            # end CVs give a degenerate end tangent, and the solver places
+            # joints by DISTANCE along the curve, so in that parked zone the
+            # joints crowd up and their aim direction comes from a tangent
+            # that is going to zero. Measured on the squid C_fintail, CV
+            # spacing over the last few CVs collapsed 0.34 -> 0.0002, and the
+            # last joints came out kinked by 30 and 16 degrees.
+            degree = min(3, len(jnt_pos)-1)
+            curve = cmds.curve(n=curve, d=degree, p=jnt_pos)
         else:
-            # IK driver curve: Evenly spaced control CVs + duplicate ends for upvec
-            indices = rt_math.linspace(0, len(jnt_pos)-1, rt_constants.NUM_CTRL_IK)
-            all_pos = [jnt_pos[0]] + [jnt_pos[round(i)] for i in indices] + [jnt_pos[-1]]
+            # IK driver curve: control CVs + duplicated ends for the upvec
+            # clusters. Low CV count on purpose - one cluster per CV is what
+            # gives each IK control a single CV to move.
+            all_pos = driver_curve_positions(jnt_pos)
             degree = min(3, len(all_pos)-1)
             curve = cmds.curve(n=curve, d=degree, p=all_pos)
     else:
@@ -107,28 +151,57 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     logger.trace(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
     return curve
 
-def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
+def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
+                                   jnt_pos=None):
     '''
-    Connect driver curve to solver curve using pointOnCurveInfo sampling.
+    Wire the cluster-deformed driver curve into the solver curve, as an
+    OFFSET FROM REST rather than an absolute position.
 
-    This connection system:
-    - Allows cluster-deformed driver curve to control the IK solver curve
-    - Samples positions along driver curve at parameterized locations
-    - Uses pointOnCurveInfo nodes to get world positions from driver curve
-    - Feeds these positions directly to solver curve CV positions
-    - Maintains real-time deformation transfer from clusters to IK solver
+    Each solver CV gets a pointOnCurveInfo sampling the driver curve at a
+    fixed parameter, exactly as before. What changed is what that sample
+    means. It used to be written straight onto the CV, which made the tail's
+    rest shape 'whatever a NUM_CTRL_IK+2 CV curve can express' - and it
+    cannot express much. On the squid C_fintail, 50 joints collapsed to 7
+    CVs, of which the first two and last two are coincident: the base bend
+    (joints 1-5 carry 28.5 of the tail's 38.2 degrees) is spanned by a
+    single CV interval, so the curve simply cut the corner. Only 8% of that
+    bend survived, the base joint's aim was 22.3 degrees off, and cutting
+    the corner made the curve 0.48 units SHORTER than the joint chain, which
+    pushed the last joints clean off the end of it.
 
-    Design rationale:
-    - Driver curve can have any number of CVs (flexible for user control)
-    - Solver curve has minimal CVs (optimized for IK solver)
-    - No dependency on ikHandle's automatic curve rebuilding
-    - Preserves user control over deformation resolution
+    Now each CV is driven as::
+
+        solver_cv[i] = driver_sample(t_i) + (rest_cv[i] - driver_rest(t_i))
+
+    The bracketed term is a constant worked out at build time: how far the
+    low-CV driver curve falls short of the real shape at that CV. At rest
+    the two cancel and the solver curve IS the joint chain, so there is no
+    flattening and its length matches the chain. Move a cluster and the
+    falloff is unchanged from before - sampling a B-spline at a parameter is
+    a weighted sum of its CVs, so this is the same blend it always was, just
+    measured from the right place.
+
+    driver_rest is computed in Python (rt_math.bspline_point over
+    driver_curve_positions) rather than read off the live curve, so a
+    rebuild over a posed rig cannot bake the pose in as rest.
+
+    The correction is a fixed world-space offset, so it does not rotate when
+    a control swings the base hard, and at extreme poses a small residual
+    shape error remains. Removing that means letting the controls deform the
+    full-resolution curve directly (weighted clusters, or a skinCluster on
+    NUM_CTRL_IK+2 influences) - which additionally needs maintainOffset on
+    the control-to-deformer constraints in rig_tail_connect, because those
+    are only safe today thanks to every cluster being a single CV sitting on
+    its own handle's pivot.
 
     Arguments
         rigname (str): Name of rig component
-        driver_curve (str): Curve with clusters (full CV set)
-        solver_curve (str): Curve used by ikHandle (minimal CV set)
+        driver_curve (str): Curve with clusters (low CV set)
+        solver_curve (str): Curve used by ikHandle (one CV per joint)
         typ (str): Type identifier (TYPE_IK)
+        jnt_pos (list): Joint rest positions the curves were built from. The
+            rest correction needs them; without them this falls back to
+            driving absolute positions, i.e. the old flattening behaviour.
     '''
     logger.trace(f"Connect driver curve '{driver_curve}' to solver curve '{solver_curve}'")
 
@@ -154,6 +227,21 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
     logger.trace(f'Solver param range: {solver_min_param:.3f} to {solver_max_param:.3f}')
     logger.trace(f'Driver param range: {driver_min_param:.3f} to {driver_max_param:.3f}')
 
+    # Rest reference for the offset. Both sides are derived from jnt_pos, not
+    # read from the scene, so this is identical on every rebuild. Lengths
+    # must line up: the solver curve is one CV per joint (see create_curve),
+    # so anything else means the two were built from different joint sets and
+    # a correction would be guesswork.
+    rest_cv = None
+    if jnt_pos and len(jnt_pos) == solver_num_cv:
+        rest_cv = jnt_pos
+        driver_rest_cv = driver_curve_positions(jnt_pos)
+    elif jnt_pos:
+        logger.warning(
+            f'{rigname}: {len(jnt_pos)} joint positions against '
+            f'{solver_num_cv} solver CVs - skipping the rest correction, so '
+            f'the IK rest shape will be the low-CV driver curve as before')
+
     # Create pointOnCurveInfo nodes for each solver curve CV (reuse existing)
     for cv_i in range(solver_num_cv):
         # Create pointOnCurveInfo node to sample driver curve
@@ -174,13 +262,29 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ):
         cmds.setAttr(f'{poci}.parameter', driver_param)
         logger.trace(f'CV {cv_i}: parameter {driver_param:.3f}')
 
+        src = poci
+        src_attr = ('positionX', 'positionY', 'positionZ')
+        if rest_cv is not None:
+            # rest correction: what the low-CV driver curve cannot express
+            # at this CV. Constant, so one add node carries it.
+            sample = rt_math.bspline_point(driver_rest_cv, driver_param)
+            offset = [rest_cv[cv_i][k] - sample[k] for k in range(3)]
+            restfix = f'{typ}_{rigname}_restfix_{cv_i:02d}_plusMinusAverage'
+            if not cmds.objExists(restfix):
+                cmds.createNode('plusMinusAverage', n=restfix, s=1, ss=1)
+            cmds.setAttr(f'{restfix}.operation', 1) # add
+            rt_maya.ensure_connect(f'{poci}.position', f'{restfix}.input3D[0]')
+            cmds.setAttr(f'{restfix}.input3D[1]', *offset, type='double3')
+            src = restfix
+            src_attr = ('output3Dx', 'output3Dy', 'output3Dz')
+            if cv_i == 0 or cv_i == solver_num_cv-1:
+                logger.trace(f'CV {cv_i}: rest offset {offset}')
+
         # Connect position to solver curve CV
-        rt_maya.ensure_connect(f'{poci}.positionX',
-                              f'{solver_shape}.controlPoints[{cv_i}].xValue')
-        rt_maya.ensure_connect(f'{poci}.positionY',
-                              f'{solver_shape}.controlPoints[{cv_i}].yValue')
-        rt_maya.ensure_connect(f'{poci}.positionZ',
-                              f'{solver_shape}.controlPoints[{cv_i}].zValue')
+        for attr, axis in zip(src_attr, 'xyz'):
+            rt_maya.ensure_connect(
+                f'{src}.{attr}',
+                f'{solver_shape}.controlPoints[{cv_i}].{axis}Value')
 
     logger.trace(f'Created {solver_num_cv} pointOnCurveInfo connections')
 

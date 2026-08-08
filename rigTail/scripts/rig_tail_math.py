@@ -10,6 +10,8 @@ Functions:
     cumulative_lengths / length_fractions: distance along a point chain
     nearest_index: index of the entry closest to a target value
     greville_fractions: normalised Greville abscissae of a clamped curve
+    clamp_degree / clamped_uniform_knots: the curve create_curve builds
+    bspline_point: evaluate a clamped uniform B-spline off-scene
     get_axis_orientation: Guess axis from position bounding box
     get_local_orientation: Determine chain direction from joint orientations
     get_local_pos: Get local position
@@ -140,15 +142,90 @@ def greville_fractions(num, degree=3):
         return []
     if num == 1:
         return [0.0]
-    d = max(1, min(degree, num - 1))
-    spans = num - d
-    knots = ([0.0] * (d + 1)
-             + [float(i) for i in range(1, spans)]
-             + [float(spans)] * (d + 1))
+    d = clamp_degree(num, degree)
+    knots = clamped_uniform_knots(num, d)
     grev = [sum(knots[j+1:j+1+d]) / d for j in range(num)]
     if grev[-1] <= 0:
         return [0.0] * num
     return [g / grev[-1] for g in grev]
+
+
+def clamp_degree(num, degree=3):
+    """
+    Curve degree for num CVs, clamped the way create_curve clamps it.
+
+    Arguments:
+        num (int): Number of CVs
+        degree (int): Requested degree
+
+    Return:
+        int: Usable degree, at least 1
+    """
+    return max(1, min(degree, num - 1))
+
+
+def clamped_uniform_knots(num, degree=3):
+    """
+    Full knot vector for the curve cmds.curve(p=...) builds: clamped ends,
+    unit-spaced interior, num+degree+1 knots.
+
+    Maya's own .knots data omits the outermost knot at each end; this
+    returns the mathematical vector, which is what an evaluator needs.
+
+    Arguments:
+        num (int): Number of CVs
+        degree (int): Curve degree (clamped against num)
+
+    Return:
+        list: num+degree+1 knot values, 0 .. num-degree
+    """
+    d = clamp_degree(num, degree)
+    spans = num - d
+    return ([0.0] * (d + 1)
+            + [float(i) for i in range(1, spans)]
+            + [float(spans)] * (d + 1))
+
+
+def bspline_point(cvs, u, degree=3):
+    """
+    Evaluate a clamped uniform B-spline at parameter u, by de Boor.
+
+    Used to work out, in Python, where the low-CV IK driver curve sits at a
+    given parameter WITHOUT reading the scene. That matters because the
+    figure is needed as a rest reference: reading it off the live curve
+    would pick up whatever the animator has the controls doing on a
+    rebuild, and bake a posed shape in as rest.
+
+    Arguments:
+        cvs (list): CV positions, each an [x, y, z]
+        u (float): Parameter, clamped into the curve's range
+        degree (int): Curve degree (clamped against the CV count)
+
+    Return:
+        list: [x, y, z] point on the curve
+    """
+    n = len(cvs)
+    if n == 0:
+        return [0.0, 0.0, 0.0]
+    if n == 1:
+        return list(cvs[0])
+    d = clamp_degree(n, degree)
+    knots = clamped_uniform_knots(n, d)
+    lo, hi = knots[d], knots[n]
+    u = min(max(u, lo), hi)
+    # Span containing u. The last span is closed on the right so u == hi
+    # lands on the final CV instead of falling off the end.
+    k = d
+    while k < n - 1 and u >= knots[k+1]:
+        k += 1
+    pts = [list(cvs[k-d+j]) for j in range(d+1)]
+    for r in range(1, d+1):
+        for j in range(d, r-1, -1):
+            i = k - d + j
+            den = knots[i+d-r+1] - knots[i]
+            a = 0.0 if den == 0 else (u - knots[i]) / den
+            pts[j] = [(1.0-a)*pts[j-1][c] + a*pts[j][c] for c in range(3)]
+    return pts[d]
 
 
 def get_axis_orientation(nodes, secondary_axis=False):
