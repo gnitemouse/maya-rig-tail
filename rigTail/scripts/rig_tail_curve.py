@@ -74,11 +74,16 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     '''
     Create NURBS curve from joint positions with proper parameterization.
 
-    The curve creation ensures:
-    - FK curves match joint positions exactly for accurate skinCluster binding
-    - IK curves have proper CV count for cluster control (NUM_CTRL_IK + 2 upvec CVs)
-    - Both maintain consistent CV indexing for cluster creation
-    - Construction history is deleted to prevent length evaluation issues
+    Three flavours, by typ and tag:
+    - FK (no tag): one CV per joint, for the skinCluster and for the varFK
+      controls to read their position from
+    - IK driver (no tag): NUM_CTRL_IK CVs plus two duplicated ends for the
+      upvec clusters - one CV per cluster, so each control owns exactly one
+    - IK solver (tag='spline'): one CV per joint, ends NOT duplicated, this
+      is what the ikHandle reads
+
+    Construction history is deleted so curve length never re-evaluates
+    through stale history.
 
     Arguments
         rigname (str): Name of rig component for curve naming
@@ -345,13 +350,19 @@ Against a skinCluster on the same controls, this is not an approximation
 
 def create_spline_handle(rigname, joints, curve, typ=rt_constants.TYPE_IK):
     '''
-    Create spline IK handle with separated driver/solver curve system.
+    Create spline IK handle reading our own solver curve.
 
-    Maya's ikSplineSolver automatically rebuilds the curve it's given,
-    which changes curve parameters. This function:
-    1. Creates ikHandle with temporary curve
-    2. Replaces ikHandle's curve with our solver curve
-    3. Returns components for further connection setup
+    Left to itself, cmds.ikHandle builds its OWN curve and simplifies it
+    down to a handful of CVs. That is the thing people mean by "the spline
+    solver reduces the curve" - it is the curve-creation step, not the
+    solver, and it is avoided here rather than lived with:
+    1. Creates ikHandle with its temporary curve
+    2. Disconnects that and connects our solver curve to .inCurve instead
+    3. Deletes the temporary curve, renames the rest
+
+    So the solver happily solves against one CV per joint. Any smoothing
+    left in the result comes from the low-CV DRIVER curve upstream, which
+    connect_driver_to_solver_curve corrects for - not from the solver.
 
     Note: Driver curve (with clusters) connects to solver curve (with ikHandle)
           via pointOnCurveInfo nodes in connect_driver_to_solver_curve()

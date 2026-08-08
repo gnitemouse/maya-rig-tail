@@ -98,9 +98,9 @@ def connect_rig_tail(fk, ik):
     # geometry that never bound is easy to spot and rename.
     rt_maya.report_missing_geometry(parts)
 
-    # After everything is connected the IK spline has reached its final
-    # (low-CV driver) shape, so the IK joints now read their true rest -- match
-    # FK onto it so the two modes agree and the tail does not pop on a switch.
+    # After everything is connected the IK spline has settled onto its final
+    # shape, so the IK joints now read their true rest -- match FK onto it so
+    # the two modes agree and the tail does not pop on a switch.
     # Timed separately: it forces a full-scene dirty and evaluation, which is
     # the one step here whose cost is set by the whole scene rather than by
     # this rig.
@@ -133,10 +133,17 @@ def match_fk_to_ik_rest(fk, ik):
     rest pose and the tail does not pop when the ikfk switch moves between them.
 
     Runs at the END of the build (called from connect_rig_tail). The IK spline
-    only reaches its final low-CV shape once the IK system is fully connected,
-    so this is the first point the IK joints reliably read their true rest -- an
-    earlier read, even after a forced eval, catches the sharper raw-solver pose
-    (~more bend) that the joints briefly sit on.
+    only settles onto its final shape once the IK system is fully connected --
+    in particular once connect_driver_to_solver_curve's rest correction is
+    wired, without which the solver curve is still the low-CV driver's
+    smoothed shape -- so this is the first point the IK joints reliably read
+    their true rest. An earlier read, even after a forced eval, catches the
+    raw-solver pose the joints briefly sit on.
+
+    Now that the IK rest IS the joint chain, this should be close to a no-op
+    on a clean build; it still matters after a rebuild, and for the residual
+    where a curve with CVs at the joints approximates rather than
+    interpolates them.
 
     The FK joint sits at the bottom of the variable-FK SDK stack, and the
     controls drive the groups ABOVE it, so moving the joint itself shifts only

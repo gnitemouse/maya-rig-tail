@@ -575,13 +575,36 @@ Key functions: `create_root_cog`, `create_basectrl`, `create_controls_fk`,
 ## rig_tail_curve.py (rt_curve)
 
 Curves, spline IK handles and clusters. The FK curve follows the joints
-exactly; the IK curve carries one CV per cluster plus two up-vector CVs,
-with a driver/solver curve pair keeping the solver input independent of
-the cluster deformation. Handles and clusters are found and renamed
-rather than duplicated on rebuild.
+exactly. The IK side is a pair: a **driver** curve carrying one CV per
+cluster plus two up-vector CVs, and a **solver** curve with one CV per
+joint, which is what the ikHandle reads. Handles and clusters are found
+and renamed rather than duplicated on rebuild.
 
-Key functions: `create_curve`, `connect_driver_to_solver_curve`,
-`create_spline_handle`, `get_spline_handle`, `create_clusters_on_curve`.
+The driver curve is deliberately low-resolution — one CV per control is
+what gives each control a single CV to move — so it cannot describe the
+chain's real shape. It therefore drives the solver curve as an **offset
+from rest**, not as an absolute position:
+
+```
+solver_cv[i] = driver_sample(t_i) + (rest_cv[i] - driver_rest(t_i))
+```
+
+The bracketed term is a build-time constant: how far the low-CV driver
+curve falls short at that CV. At rest the two cancel and the solver curve
+*is* the joint chain, so there is no flattening and its length matches
+the chain's. The constant is held in the base control's local space and
+multiplied back out through `basectrl.worldMatrix`, so it turns, scales
+and travels with the rig.
+
+Because sampling a B-spline at a parameter is a weighted sum of its CVs
+whose weights total 1, this reduces to `rest[i] + SUM_j w_ij * (control
+j's translation)` — which is exactly linear blend skinning for
+translating influences. Driving absolute positions instead is what used
+to flatten a tail's base and shorten the curve below the chain length.
+
+Key functions: `driver_curve_positions`, `create_curve`,
+`connect_driver_to_solver_curve`, `create_spline_handle`,
+`get_spline_handle`, `create_clusters_on_curve`.
 
 ---
 
@@ -593,8 +616,30 @@ joints by position and falloff. Each joint carries a stack of SDK groups
 attribute moves it along the FK curve and Falloff widens or narrows the
 joints it affects. Based on Jeff Brodsky's elephant-trunk rig.
 
-Key functions: `set_curveinfo_fk`, `falloff_rotation`,
-`create_sdk_groups`, `get_sdk_groups`, `put_jnt_under_sdk_groups`.
+**Two metrics meet here and must not be confused.**
+
+- `position` (0–10, base to tip) is animator-facing: a fraction of **tail
+  length**, so 5 is genuinely halfway down the tail.
+- `joint_pos` (0–1, base to tip) is what the network compares against: a
+  normalised **Greville abscissa**, i.e. a fraction of the curve's
+  *parameter* range, which is what a `pointOnCurveInfo` needs in order to
+  land on a given joint.
+
+A `remapValue` per control converts the first into the second, and both
+`set_curveinfo_fk` (which draws the control) and `falloff_rotation`
+(which rotates the joints) read that same output via
+`control_position_plug`. That is what keeps a control drawn on the joints
+it actually moves. Feeding a length fraction straight to
+`turnOnPercentage` is what used to draw the first control at 60% of the
+tail while its rotation landed at 44%.
+
+`falloff` deliberately stays in `joint_pos` units — a width cannot go
+through a point-wise remap, and joint units are what make `num_joints` (a
+joint count) consistent.
+
+Key functions: `control_position_plug`, `set_curveinfo_fk`,
+`falloff_rotation`, `create_sdk_groups`, `get_sdk_groups`,
+`put_jnt_under_sdk_groups`.
 
 ---
 
@@ -686,6 +731,13 @@ Remove stale dashboard nodes, or all of them when the dashboard is off.
 Rest-pose store for the IK rebuild-degradation fix (Method D). Captures
 each BN joint's rest world matrix once and builds the IK curve from it on
 every rebuild, so rebuilds reproduce the same shape instead of compounding.
+
+Method D only ever made the smoothing *reproducible*, not smaller. The
+smoothing itself is gone now —
+`rig_tail_curve.connect_driver_to_solver_curve` drives the solver curve
+as an offset from rest — but this module is still load-bearing: that
+correction is measured against the positions stored here, so a stale or
+drifted capture would define a wrong rest.
 
 ### Functions
 
@@ -1310,7 +1362,10 @@ Get all joints under root.
 Get world positions for joint list.
 
 #### `set_joint_attributes(joints)`
-Configure joint display and attributes.
+Stamp each joint's `joint_pos` (0 at the base, 1 at the tip): its
+normalised Greville abscissa on the FK curve, **not** a distance. See
+`rig_tail_fk.py` for why that is the metric and how the animator-facing
+`position` dial converts into it.
 
 #### `is_equal_joint(jnt1, jnt2)`
 Compare joint transforms for equality.
@@ -1325,6 +1380,43 @@ Vector and matrix math utilities.
 
 #### `linspace(start, stop, num)`
 Generate evenly spaced values.
+
+#### `cumulative_lengths(points)` / `length_fractions(points)`
+Running distance along a chain of points, raw and normalised to 0–1. The
+metric an animator reads as "how far along the tail" — evenly spaced in
+space, unlike joint index, which on a tapered chain (8:1 bone ratio on
+the squid fintails) bunches badly toward the tip.
+
+#### `nearest_index(values, target)`
+Index of the entry closest to a target value.
+
+#### `transform_vector(vec, matrix)`
+Transform a displacement by a matrix, 3×3 part only (no translation).
+Row-major, `v * M` — the convention `pointMatrixMult` uses in
+`vectorMultiply` mode, so a value baked with this comes back out of that
+node unchanged when the matrix is the inverse of the one used here.
+
+#### `clamp_degree(num, degree)` / `clamped_uniform_knots(num, degree)`
+The degree and full knot vector of the curve `create_curve` builds.
+Maya's own `.knots` data omits the outermost knot at each end; this
+returns the mathematical vector, which is what an evaluator needs.
+
+#### `greville_fractions(num, degree=3)`
+Normalised Greville abscissae. A CV does not sit at one parameter — it
+influences a stretch of curve; its Greville abscissa is the parameter
+where its basis function peaks. On a curve with one CV per joint, joint
+*j*'s Greville fraction is the parameter fraction that lands on joint
+*j*, which is what makes `joint_pos` and the varFK control placement one
+metric. Computed analytically, so it is strictly increasing by
+construction — `joint_pos` must be monotonic or `falloff_rotation`'s ramp
+hands one control's rotation to two separate stretches of tail.
+
+#### `bspline_point(cvs, u, degree=3)`
+Evaluate a clamped uniform B-spline at parameter *u*, by de Boor. Used to
+work out where the low-CV IK driver curve sits **without reading the
+scene** — reading it off the live curve would pick up whatever the
+animator has the controls doing on a rebuild, and bake a posed shape in
+as rest.
 
 #### `get_axis_orientation(node)`
 Get primary axis orientation.

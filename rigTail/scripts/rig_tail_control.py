@@ -34,7 +34,9 @@ Functions:
     get_control_hierarchy: controls under a control, in DAG order
     add_fk_attributes_to_controls: position/falloff attrs on FK controls
     set_attributes_visibility_fk / _ik: lock and hide unused channels
-    get_control_position: param position of a control along the chain
+    get_control_position: a control's position along the chain, as a
+        fraction of TAIL LENGTH from the base (the animator-facing dial;
+        see rig_tail_fk for how it converts into joint_pos units)
     orient_control_aims / orient_aim_controls_nulls: aim controls at
         each other via throwaway nulls
 '''
