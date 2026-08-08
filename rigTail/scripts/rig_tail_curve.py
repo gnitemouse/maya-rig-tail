@@ -195,17 +195,28 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
     vectorMultiply mode (3x3 only: this is a displacement, not a position).
     Rotate, scale or translate the rig and the correction goes with it.
 
-    What is left is genuinely fixed: the correction does not respond to one
-    INDIVIDUAL control moving relative to its neighbours. In practice that
-    is a small residual, because a cluster here owns a single CV sitting on
-    its own handle's pivot, which makes control rotation a no-op on the
-    curve and the whole deformation translation-only - and for translation
-    this network is algebraically identical to skinning the curve to the
-    controls (same basis weights, same rest, same blend). Closing the gap
-    entirely means weighted clusters or a skinCluster on NUM_CTRL_IK+2
-    influences, which additionally needs maintainOffset on the
-    control-to-deformer constraints in rig_tail_connect - those are only
-    safe today because of that same one-CV-on-the-pivot property.
+Against a skinCluster on the same controls, this is not an approximation
+    for anything the rig can currently do. Sampling a B-spline at a
+    parameter is a weighted sum of its CVs whose weights total 1, so with
+    the rest term restored the network computes::
+
+        cv[i] = rest[i] + SUM_j w_ij * (control j's translation)
+
+    which is exactly what linear blend skinning reduces to when influences
+    translate. The two differ only when an influence ROTATES or SCALES -
+    and here rotating an IK control moves nothing at all, because a cluster
+    owns a single CV and the handle's rotate pivot sits on it (verified in
+    the scene: IK_C_fintail_02_clusterHandle.rp is its own CV). Rotating a
+    point about itself is a no-op, so the deformation is translation-only
+    and the two agree everywhere.
+
+    A weighted deformer (weighted clusters, or a skinCluster on
+    NUM_CTRL_IK+2 influences) would therefore not correct anything here; it
+    would ADD the ability for a control to twist the curve, which no
+    control has today. It also needs maintainOffset on the
+    control-to-deformer constraints in rig_tail_connect first - those are
+    only safe because of that same one-CV-on-the-pivot property, and a
+    weighted deformer loses it.
 
     Arguments
         rigname (str): Name of rig component
