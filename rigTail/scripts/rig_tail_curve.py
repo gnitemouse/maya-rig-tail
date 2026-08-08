@@ -185,14 +185,27 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
     driver_curve_positions) rather than read off the live curve, so a
     rebuild over a posed rig cannot bake the pose in as rest.
 
-    The correction is a fixed world-space offset, so it does not rotate when
-    a control swings the base hard, and at extreme poses a small residual
-    shape error remains. Removing that means letting the controls deform the
-    full-resolution curve directly (weighted clusters, or a skinCluster on
-    NUM_CTRL_IK+2 influences) - which additionally needs maintainOffset on
-    the control-to-deformer constraints in rig_tail_connect, because those
-    are only safe today thanks to every cluster being a single CV sitting on
-    its own handle's pivot.
+    The correction CANNOT be a fixed world vector. Every cluster handle is
+    parentConstrained to controls that live under the cog, so turning the
+    character rotates the whole set of driver CVs in world space - and an
+    offset that stayed put while they rotated would deform the tail by up to
+    its own length the moment the rig faced a different way. So it is stored
+    in the base control's local space at build time and multiplied back out
+    through basectrl.worldMatrix each evaluation, by a pointMatrixMult in
+    vectorMultiply mode (3x3 only: this is a displacement, not a position).
+    Rotate, scale or translate the rig and the correction goes with it.
+
+    What is left is genuinely fixed: the correction does not respond to one
+    INDIVIDUAL control moving relative to its neighbours. In practice that
+    is a small residual, because a cluster here owns a single CV sitting on
+    its own handle's pivot, which makes control rotation a no-op on the
+    curve and the whole deformation translation-only - and for translation
+    this network is algebraically identical to skinning the curve to the
+    controls (same basis weights, same rest, same blend). Closing the gap
+    entirely means weighted clusters or a skinCluster on NUM_CTRL_IK+2
+    influences, which additionally needs maintainOffset on the
+    control-to-deformer constraints in rig_tail_connect - those are only
+    safe today because of that same one-CV-on-the-pivot property.
 
     Arguments
         rigname (str): Name of rig component
@@ -232,10 +245,21 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
     # must line up: the solver curve is one CV per joint (see create_curve),
     # so anything else means the two were built from different joint sets and
     # a correction would be guesswork.
+    # The correction rides the base control, so it turns with the rig (see
+    # the docstring). Without a basectrl there is nothing to ride and the
+    # correction would break the moment the character turned, so skip it
+    # rather than bake a world-locked offset.
     rest_cv = None
-    if jnt_pos and len(jnt_pos) == solver_num_cv:
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    if jnt_pos and len(jnt_pos) == solver_num_cv and cmds.objExists(basectrl):
         rest_cv = jnt_pos
         driver_rest_cv = driver_curve_positions(jnt_pos)
+        base_inv = cmds.getAttr(f'{basectrl}.worldInverseMatrix[0]')
+    elif jnt_pos and not cmds.objExists(basectrl):
+        logger.warning(
+            f"{rigname}: No base control '{basectrl}' to anchor the IK rest "
+            f'correction to - skipping it, so the IK rest shape will be the '
+            f'low-CV driver curve as before')
     elif jnt_pos:
         logger.warning(
             f'{rigname}: {len(jnt_pos)} joint positions against '
@@ -266,19 +290,31 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
         src_attr = ('positionX', 'positionY', 'positionZ')
         if rest_cv is not None:
             # rest correction: what the low-CV driver curve cannot express
-            # at this CV. Constant, so one add node carries it.
+            # at this CV, held in the base control's local space so it turns
+            # with the rig
             sample = rt_math.bspline_point(driver_rest_cv, driver_param)
             offset = [rest_cv[cv_i][k] - sample[k] for k in range(3)]
+            local = rt_math.transform_vector(offset, base_inv)
+
+            # pointMatrixMult, vectorMultiply: local offset back out to world
+            restvec = f'{typ}_{rigname}_restfix_{cv_i:02d}_pointMatrixMult'
+            if not cmds.objExists(restvec):
+                cmds.createNode('pointMatrixMult', n=restvec, s=1, ss=1)
+            cmds.setAttr(f'{restvec}.vectorMultiply', 1)
+            cmds.setAttr(f'{restvec}.inPoint', *local, type='double3')
+            rt_maya.ensure_connect(f'{basectrl}.worldMatrix[0]',
+                                   f'{restvec}.inMatrix')
+
             restfix = f'{typ}_{rigname}_restfix_{cv_i:02d}_plusMinusAverage'
             if not cmds.objExists(restfix):
                 cmds.createNode('plusMinusAverage', n=restfix, s=1, ss=1)
             cmds.setAttr(f'{restfix}.operation', 1) # add
             rt_maya.ensure_connect(f'{poci}.position', f'{restfix}.input3D[0]')
-            cmds.setAttr(f'{restfix}.input3D[1]', *offset, type='double3')
+            rt_maya.ensure_connect(f'{restvec}.output', f'{restfix}.input3D[1]')
             src = restfix
             src_attr = ('output3Dx', 'output3Dy', 'output3Dz')
             if cv_i == 0 or cv_i == solver_num_cv-1:
-                logger.trace(f'CV {cv_i}: rest offset {offset}')
+                logger.trace(f'CV {cv_i}: rest offset {offset} local {local}')
 
         # Connect position to solver curve CV
         for attr, axis in zip(src_attr, 'xyz'):

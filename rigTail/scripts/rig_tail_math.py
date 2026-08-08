@@ -9,6 +9,7 @@ Functions:
     linspace: Generate evenly spaced values
     cumulative_lengths / length_fractions: distance along a point chain
     nearest_index: index of the entry closest to a target value
+    transform_vector: transform a displacement by a matrix (3x3 only)
     greville_fractions: normalised Greville abscissae of a clamped curve
     clamp_degree / clamped_uniform_knots: the curve create_curve builds
     bspline_point: evaluate a clamped uniform B-spline off-scene
@@ -184,6 +185,25 @@ def clamped_uniform_knots(num, degree=3):
     return ([0.0] * (d + 1)
             + [float(i) for i in range(1, spans)]
             + [float(spans)] * (d + 1))
+
+
+def transform_vector(vec, matrix):
+    """
+    Transform a DISPLACEMENT by a matrix: the 3x3 part only, no translation.
+
+    Maya matrices are row-major and vectors multiply on the left (v * M),
+    which is the convention pointMatrixMult uses in vectorMultiply mode - so
+    a value baked with this comes back out of that node unchanged when the
+    matrix is the inverse of the one used here.
+
+    Arguments:
+        vec (list): [x, y, z] displacement
+        matrix (list): 16 floats, row-major, as cmds.getAttr returns
+
+    Return:
+        list: [x, y, z] transformed displacement
+    """
+    return [sum(vec[k] * matrix[k*4 + c] for k in range(3)) for c in range(3)]
 
 
 def bspline_point(cvs, u, degree=3):
