@@ -24,6 +24,7 @@ connect_driver_to_solver_curve.
 
 Functions:
     driver_curve_positions: the driver curve's rest CVs, from joint rest
+    solver_curve_cvs: solve the solver curve's CVs so the joints land right
     create_curve: NURBS curve from joint positions, FK or IK flavour
     connect_driver_to_solver_curve: wire the driver curve into the solver
         as an offset from rest
@@ -68,6 +69,70 @@ def driver_curve_positions(jnt_pos):
     '''
     indices = rt_math.linspace(0, len(jnt_pos)-1, rt_constants.NUM_CTRL_IK)
     return [jnt_pos[0]] + [jnt_pos[round(i)] for i in indices] + [jnt_pos[-1]]
+
+
+SOLVER_CV_PASSES = 4
+
+
+def solver_curve_cvs(jnt_pos, degree=3, passes=SOLVER_CV_PASSES):
+    '''
+    CV positions whose curve puts the joints back where they belong.
+
+    A degree-3 curve does not pass through its own CVs, so putting CVs AT
+    the joints leaves the spline settling them somewhere else - 1.7 degrees
+    off at the base of the squid C_fintail, and 0.014 units short overall,
+    enough to drop the last joint off the end. It also leaves the rebuild
+    loop open: each build reads joints that are slightly off the last
+    build's input, and that compounds (base aim drifting 1.7, 2.9, 3.8 deg
+    over successive rebuilds without a rest anchor).
+
+    So solve for the CVs instead. This is an interpolation problem, but not
+    the usual one: the ikSpline places joints by ARCLENGTH, not at a
+    parameter, so 'the curve passes through the joints' is not the
+    condition - 'the joints, placed by their own bone lengths, land on the
+    joints' is. Fixed-point iteration on exactly that::
+
+        P = joints
+        repeat:  P += joints - place_by_arclength(curve(P))
+
+    The smoothing is a contraction, so this converges; measured on the
+    C_fintail the base error roughly halves per pass (0.51, 0.23, 0.12,
+    0.07, and 0.028 by six). SOLVER_CV_PASSES=4 is where it stops paying:
+    0.07 deg against 1.68 unsolved, worst joint 0.005 units, and the curve
+    lands at 24.040 against a 24.025 chain - comfortably long enough that
+    no joint runs off the end, without over-lengthening. Costs ~0.03s per
+    rig part, all at build time, and NO extra nodes: the offset network in
+    connect_driver_to_solver_curve already writes an arbitrary constant per
+    CV, so this only changes what that constant aims at.
+
+    Iterating cannot make the shape worse: pass 1 already beats the
+    unsolved CVs on every measure, and each pass strictly reduces the
+    residual it is correcting.
+
+    Arguments
+        jnt_pos (list): Joint rest positions, base to tip
+        degree (int): Curve degree (clamped against the CV count)
+        passes (int): Correction passes; 0 returns jnt_pos unchanged
+
+    Return
+        list: CV positions, one per joint
+    '''
+    if len(jnt_pos) < 3 or passes <= 0:
+        return [list(p) for p in jnt_pos]
+
+    bones = [rt_math.cumulative_lengths(jnt_pos[i-1:i+1])[-1]
+             for i in range(1, len(jnt_pos))]
+    cvs = [list(p) for p in jnt_pos]
+    for _ in range(passes):
+        points, table = rt_math.bspline_arclength_table(cvs, degree)
+        acc = 0.0
+        landed = [points[0]]
+        for bone in bones:
+            acc += bone
+            landed.append(rt_math.bspline_at_arclength(points, table, acc))
+        cvs = [[cvs[i][k] + (jnt_pos[i][k] - landed[i][k]) for k in range(3)]
+               for i in range(len(cvs))]
+    return cvs
 
 
 def create_curve(rigname, jnt_pos, typ, tag=''):
@@ -268,7 +333,11 @@ Against a skinCluster on the same controls, this is not an approximation
     rest_cv = None
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     if jnt_pos and len(jnt_pos) == solver_num_cv and cmds.objExists(basectrl):
-        rest_cv = jnt_pos
+        # NOT jnt_pos itself: a degree-3 curve does not pass through its own
+        # CVs, so aiming the correction at the joints leaves the spline
+        # settling them off it. solver_curve_cvs solves for the CVs that put
+        # the joints where they belong (see there).
+        rest_cv = solver_curve_cvs(jnt_pos, min(3, len(jnt_pos)-1))
         driver_rest_cv = driver_curve_positions(jnt_pos)
         base_inv = cmds.getAttr(f'{basectrl}.worldInverseMatrix[0]')
     elif jnt_pos and not cmds.objExists(basectrl):
@@ -526,10 +595,18 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     '''
     Create clusters on NURBS curve CVs for deformation control.
 
-    Cluster placement strategy:
-    - FK: Clusters only at first (CV 0) and last (CV N-1) CVs
-      Provides end control while individual joints are controlled by FK hierarchy
+    IK ONLY. The FK curve carries no clusters: nothing deforms it, the varFK
+    controls only READ positions off it (set_curveinfo_fk), and FK twist and
+    roll come from their own SDK-layer network (connect_twist_roll), not from
+    up-vector clusters. The up-vector pair is IK machinery specifically - its
+    controls are created by create_controls_ik, hidden in FK mode by
+    setup_switch_ik, and consumed by build_advanced_twist as the spline
+    handle's world-up objects, which needs an ikHandle to exist at all. So an
+    FK-only build has no up-vectors by design, and this function had an
+    unreachable FK branch (clusters on the first and last CV) for a long time
+    before it was removed.
 
+    Cluster placement strategy:
     - IK: Clusters for each control CV + upvec clusters at ends
       - First two CVs (0, 1): Upvec clusters for twist control at base
       - Interior CVs: NUM_CTRL_IK control clusters for main deformation
@@ -544,8 +621,8 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     Return
         clusters (list): List of (cluster_node, cluster_handle) tuples
     '''
-    if typ not in [rt_constants.TYPE_FK, rt_constants.TYPE_IK]:
-        logger.error(f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
+    if typ != rt_constants.TYPE_IK:
+        logger.error(f'Invalid TYPE {typ}. Clusters are IK only.')
         return []
 
     logger.debug(f"Create clusters on curve '{curve}'")
@@ -568,33 +645,22 @@ def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     num_cv, _spans, _degree = rt_maya.get_num_cv(curve)
     logger.trace(f"Curve '{curve}' has {num_cv} CVs, {_spans} spans, degree {_degree}")
 
-    # Create clusters based on type
-    if typ == rt_constants.TYPE_FK:
-        # FK: Clusters at first and last CVs only
-        for i in [0, num_cv-1]:
-            cluster_node = rt_naming.fstr(rigname, rt_constants.CLUSTER, typ, i)
-            cluster_handle = rt_naming.fstr(rigname, rt_constants.CLUSTER_HANDLE, typ, i)
-            cluster = create_cluster([cluster_node, cluster_handle], curve, i)
-            clusters.append(cluster)
+    # IK: Create upvec clusters at first and last CVs
+    cluster_upv_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='base')
+    cluster_handle_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='base')
+    cluster_upv_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='end')
+    cluster_handle_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='end')
 
-    elif typ == rt_constants.TYPE_IK:
-        # IK: Create upvec clusters at first and last CVs
-        cluster_upv_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='base')
-        cluster_handle_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='base')
-        cluster_upv_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV, typ, TAG='end')
-        cluster_handle_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='end')
+    clusters.append(create_cluster([cluster_upv_bse, cluster_handle_bse], curve, 0))
+    clusters.append(create_cluster([cluster_upv_end, cluster_handle_end], curve, num_cv-1))
 
-        upv_bse = create_cluster([cluster_upv_bse, cluster_handle_bse], curve, 0)
-        upv_end = create_cluster([cluster_upv_end, cluster_handle_end], curve, num_cv-1)
-        clusters.append(upv_bse)
-        clusters.append(upv_end)
-
-        # IK: Control clusters for interior CVs (1 to num_cv-2)
-        for i in range(1, num_cv-1):
-            cluster_node = rt_naming.fstr(rigname, rt_constants.CLUSTER, typ, i)
-            cluster_handle = rt_naming.fstr(rigname, rt_constants.CLUSTER_HANDLE, typ, i)
-            cluster = create_cluster([cluster_node, cluster_handle], curve, i)
-            clusters.append(cluster)
+    # Control clusters for interior CVs (1 to num_cv-2). The order matters:
+    # create_controls_ik takes handles[0:2] as the upvec pair and handles[2:]
+    # as the control set (its duplicate_ends flag).
+    for i in range(1, num_cv-1):
+        cluster_node = rt_naming.fstr(rigname, rt_constants.CLUSTER, typ, i)
+        cluster_handle = rt_naming.fstr(rigname, rt_constants.CLUSTER_HANDLE, typ, i)
+        clusters.append(create_cluster([cluster_node, cluster_handle], curve, i))
 
     # Organize under cluster group. Created here if missing rather than
     # assumed: the callers make it, but a build that switched modes (or

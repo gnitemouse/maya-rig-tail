@@ -123,7 +123,7 @@ greps for it on every test pass.
 | `rig_tail_matrix` | `rt_matrix` | Matrix offset network builder |
 | `rig_tail_cache` | `rt_cache` | Control caching and validation |
 | `rig_tail_joint` | `rt_joint` | Joint chain utilities |
-| `rig_tail_restpose` | `rt_rest` | Rest-pose store for the IK rebuild fix (Method D) |
+| `rig_tail_restpose` | `rt_rest` | The rest anchor: canonical rest pose the IK curve is built from |
 | `logger_config` | - | Shared logging setup |
 
 Every module imports its dependencies as `import rig_tail_x as rt_x`, using
@@ -229,7 +229,7 @@ again by templated name.
 - **Rebuild-safe by name.** Every node is looked up by its templated name
   and reused; the joint cache decides per part whether a rebuild needs a
   full teardown or just re-wiring (`rig_tail_cache`, `rig_tail_cleanup`).
-- **Rest-pose store (Method D).** The IK curve is built from a stored rest
+- **The rest anchor.** The IK curve is built from a stored rest
   pose, so repeated rebuilds reproduce the same rig instead of compounding
   curve smoothing (`rig_tail_restpose`).
 - **Skin preservation.** With `PRESERVE_SKIN` on, rebuilds and Setup
@@ -591,8 +591,26 @@ solver_cv[i] = driver_sample(t_i) + (rest_cv[i] - driver_rest(t_i))
 
 The bracketed term is a build-time constant: how far the low-CV driver
 curve falls short at that CV. At rest the two cancel and the solver curve
-*is* the joint chain, so there is no flattening and its length matches
-the chain's. The constant is held in the base control's local space and
+puts the joints where they belong, so there is no flattening and its
+length matches the chain's.
+
+`rest_cv` is **not** the joint positions — a degree-3 curve does not pass
+through its own CVs, so aiming there leaves the spline settling the joints
+off it (1.7° at the base of the squid C_fintail, and 0.014 units short
+overall, enough to drop the last joint off the end). `solver_curve_cvs`
+solves for the CVs that put the joints where they belong, by fixed-point
+iteration on the condition that actually matters — not "the curve passes
+through the joints" but "the joints, placed by their own bone lengths,
+land on the joints", since the ikSpline places by arclength:
+
+```
+P = joints
+repeat:  P += joints - place_by_arclength(curve(P))
+```
+
+Four passes takes the base error to 0.06° and the worst joint to 0.005
+units, costs ~40 ms per rig part, and needs **no extra nodes** — it only
+changes what the constant above aims at. The constant is held in the base control's local space and
 multiplied back out through `basectrl.worldMatrix`, so it turns, scales
 and travels with the rig.
 
@@ -602,8 +620,13 @@ j's translation)` — which is exactly linear blend skinning for
 translating influences. Driving absolute positions instead is what used
 to flatten a tail's base and shorten the curve below the chain length.
 
-Key functions: `driver_curve_positions`, `create_curve`,
-`connect_driver_to_solver_curve`, `create_spline_handle`,
+Clusters are **IK only**, up-vectors included: nothing deforms the FK
+curve (the varFK controls only read positions off it), and FK twist/roll
+comes from its own SDK-layer network. `create_clusters_on_curve` carried
+an unreachable FK branch for a long time before it was removed.
+
+Key functions: `driver_curve_positions`, `solver_curve_cvs`,
+`create_curve`, `connect_driver_to_solver_curve`, `create_spline_handle`,
 `get_spline_handle`, `create_clusters_on_curve`.
 
 ---
@@ -768,21 +791,20 @@ Remove stale dashboard nodes, or all of them when the dashboard is off.
 
 ## rig_tail_restpose.py (rt_rest)
 
-Rest-pose store for the IK rebuild-degradation fix (Method D). Captures
+The rest anchor: the canonical rest pose the IK curve is built from. Captures
 each BN joint's rest world matrix once and builds the IK curve from it on
 every rebuild, so rebuilds reproduce the same shape instead of compounding.
 
-Method D only ever made the smoothing *reproducible*, not smaller. Most
+The anchor only ever made the smoothing *reproducible*, not smaller. Most
 of it is gone now — `rig_tail_curve.connect_driver_to_solver_curve`
 drives the solver curve as an offset from rest — but **this module is
 still necessary**, for two reasons.
 
-The degradation loop is slowed, not closed: a curve with CVs *at* the
-joints does not pass through them, so each rebuild still settles the
-joints slightly off what it was built from. Measured on the squid
-C_fintail without this module, total turn angle goes 60.2° → 56.9 → 55.0
-→ 53.6 → 52.4 over successive rebuilds, with the base aim drifting to
-7.1° by the tenth. With it, rebuild 1 repeats forever.
+The degradation loop is slowed, not closed. `solver_curve_cvs` reduced
+the per-rebuild loss by roughly 25× (base aim drifting 0.05°, 0.10°,
+0.16° over rebuilds instead of 1.7°, 2.9°, 3.8°), but it still
+accumulates toward a straight line without an anchor. With one, rebuild 1
+repeats forever.
 
 And the rest correction is now *measured against* these stored positions,
 so they define what "rest" means rather than merely seeding it.
@@ -1463,6 +1485,14 @@ where its basis function peaks. On a curve with one CV per joint, joint
 metric. Computed analytically, so it is strictly increasing by
 construction — `joint_pos` must be monotonic or `falloff_rotation`'s ramp
 hands one control's rotation to two separate stretches of tail.
+
+#### `bspline_arclength_table(cvs, degree=3, samples=0)` / `bspline_at_arclength(points, cumulative, target)`
+Arclength along a clamped uniform B-spline, and its inverse. The B-spline
+counterpart of `rig_tail_chain_spacing.arclength_table`, which is
+Catmull–Rom (an interpolating curve) and cannot describe this one. The
+inverse interpolates *inside* the sample interval — snapping to the
+nearest sample quantises the result enough to stop `solver_curve_cvs`
+converging.
 
 #### `bspline_point(cvs, u, degree=3)`
 Evaluate a clamped uniform B-spline at parameter *u*, by de Boor. Used to

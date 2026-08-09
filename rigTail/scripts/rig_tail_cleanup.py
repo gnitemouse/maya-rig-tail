@@ -857,6 +857,10 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_*pointOnCurveInfo',
             # set_curveinfo_fk's position remap (tail length -> parameter)
             f'{typ}_{rigname}_*remapValue',
+            # the curveInfo set_curveinfo_fk used to create and never read.
+            # Exact name, not '*curveInfo': that would also match stretch's
+            # _scale_curveInfo, which caches its rest length and must live.
+            f'{typ}_{rigname}_curveInfo',
         ]
         # One scene scan for all eight patterns, one disconnect pass and one
         # delete for everything it finds (see cleanup_rigname)

@@ -156,13 +156,6 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
 
     Position, joint_pos and the curve parameter all run base to tip.
 
-    Also creates FK_{rigname}_curveInfo, which nothing reads. It is
-    vestigial - the length it measures is not used by this network (the
-    remap ramp carries the length information, baked at build time) and
-    stretch builds its own _scale_curveInfo. Left in place rather than
-    removed here because it is one idle node per rig part and deleting it
-    changes what an existing scene contains; safe to drop when convenient.
-
     Called after setting control attributes.
 
     Arguments
@@ -172,7 +165,6 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     '''
     logger.trace(f"{rigname}: Add control curveInfo")
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
-    curveinfo = rt_maya.create_curveinfo(rigname, curve, rt_constants.TYPE_FK)
     crvshape = cmds.listRelatives(curve, s=True, ni=True)[0]
 
     # Ramp points read off the curve, not off the joint list: the FK curve

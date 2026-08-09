@@ -304,7 +304,7 @@ def _clear_rest_pose():
     Clear any rest pose a previous build stamped on the BN joints.
 
     Re-orienting or moving the skeleton invalidates the stored rest pose
-    (Method D, rig_tail_restpose): the stored restMatrix describes the OLD
+    (the rest anchor, rig_tail_restpose): the stored restMatrix describes the OLD
     orientation, so the next build would drive the IK curve from a stale
     pose and the chain would jump. Clearing it makes the build recapture
     from the corrected skeleton. Best-effort; logs and continues on failure.

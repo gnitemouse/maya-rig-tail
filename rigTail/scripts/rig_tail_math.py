@@ -13,6 +13,7 @@ Functions:
     greville_fractions: normalised Greville abscissae of a clamped curve
     clamp_degree / clamped_uniform_knots: the curve create_curve builds
     bspline_point: evaluate a clamped uniform B-spline off-scene
+    bspline_arclength_table / bspline_at_arclength: arclength along one
     get_axis_orientation: Guess axis from position bounding box
     get_local_orientation: Determine chain direction from joint orientations
     get_local_pos: Get local position
@@ -23,10 +24,11 @@ Functions:
     axis_vector_colinearity: Find which local axis aligns with vector
 """
 
+import bisect
+import math
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 from logger_config import logger_setup, abort_build
-import math
 
 logger = logger_setup(__name__)
 
@@ -246,6 +248,71 @@ def bspline_point(cvs, u, degree=3):
             a = 0.0 if den == 0 else (u - knots[i]) / den
             pts[j] = [(1.0-a)*pts[j-1][c] + a*pts[j][c] for c in range(3)]
     return pts[d]
+
+
+def bspline_arclength_table(cvs, degree=3, samples=0):
+    """
+    Sample a clamped uniform B-spline and accumulate arclength along it.
+
+    The B-spline counterpart of rig_tail_chain_spacing.arclength_table (which
+    is Catmull-Rom, an interpolating curve, and cannot describe this one).
+
+    Arguments:
+        cvs (list): CV positions, each an [x, y, z]
+        degree (int): Curve degree (clamped against the CV count)
+        samples (int): Sample count; 0 picks 8 per CV, floor 200, which
+            measures length to well under a thousandth of a unit on a tail
+
+    Return:
+        (list, list): (points, cumulative) - cumulative[i] is the arclength
+            from the start to points[i], so cumulative[-1] is the total
+    """
+    n = len(cvs)
+    if n < 2:
+        return ([list(cvs[0])] if n else [[0.0, 0.0, 0.0]]), [0.0]
+    d = clamp_degree(n, degree)
+    knots = clamped_uniform_knots(n, d)
+    lo, hi = knots[d], knots[n]
+    if samples <= 0:
+        samples = max(200, 8 * n)
+    points = [bspline_point(cvs, lo + (hi - lo) * i / samples, d)
+              for i in range(samples + 1)]
+    cumulative = [0.0]
+    for i in range(1, len(points)):
+        a, b = points[i-1], points[i]
+        cumulative.append(cumulative[-1]
+                          + math.sqrt(sum((b[k]-a[k])**2 for k in range(3))))
+    return points, cumulative
+
+
+def bspline_at_arclength(points, cumulative, target):
+    """
+    Point at a given arclength along a sampled curve.
+
+    Interpolates INSIDE the sample interval rather than snapping to the
+    nearest sample. Snapping quantises the result to the table spacing,
+    which is enough to stop solver_curve_cvs' iteration converging - it
+    ends up chasing the quantisation instead of the shape.
+
+    Clamps to the curve's end when target runs past it.
+
+    Arguments:
+        points (list): Sampled positions from bspline_arclength_table
+        cumulative (list): Matching cumulative arclengths
+        target (float): Arclength to find
+
+    Return:
+        list: [x, y, z] position on the curve
+    """
+    if target <= 0 or len(points) < 2:
+        return list(points[0])
+    if target >= cumulative[-1]:
+        return list(points[-1])
+    k = max(1, min(bisect.bisect_left(cumulative, target), len(points) - 1))
+    span = cumulative[k] - cumulative[k-1]
+    t = 0.0 if span <= 0 else (target - cumulative[k-1]) / span
+    return [points[k-1][c] + t * (points[k][c] - points[k-1][c])
+            for c in range(3)]
 
 
 def get_axis_orientation(nodes, secondary_axis=False):

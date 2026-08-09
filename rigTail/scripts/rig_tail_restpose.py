@@ -2,8 +2,13 @@
 rig_tail_restpose.py
 author: Daisy Jane @gnitemouse
 
-Rest-pose store for the IK rebuild-degradation fix (Method D, the
-curve-input fix).
+The REST ANCHOR: the canonical rest pose the IK curve is built from.
+
+Not a cache. A cache may be discarded and recomputed at will; recomputing
+this is precisely the failure mode it exists to prevent - a second capture
+would record the pose the last build left the joints in, which is the
+feedback loop, not the fix. It is captured once and then treated as the
+definition of rest.
 
 The problem: rig_tail_ik builds the IK driver curve from the joints'
 current world positions, and the spline solves the joints back onto that
@@ -12,13 +17,13 @@ output, so a curved chain flattens a little more each time (measured on
 the squid fintails: total bend 22.5, then 14.9, then 9.8 deg over
 successive rebuilds).
 
-Method D breaks the loop on its input. It captures each BN joint's rest
+The anchor breaks the loop on its input. It captures each BN joint's rest
 world matrix once, on the first build while BN is still at true rest,
 stores it on the joint, and builds the IK curve from that stored rest on
 every rebuild, so rebuilds reproduce the same setup instead of
 compounding.
 
-Method D only ever made the smoothing REPRODUCIBLE, not smaller: a
+The anchor only ever made the smoothing REPRODUCIBLE, not smaller: a
 one-time loss remained, and on the squid C_fintail it was severe (the base
 joint's aim 22.3 deg off, 8% of the base bend surviving, the curve 0.48
 units shorter than the joint chain). Most of that is now gone -
@@ -71,7 +76,7 @@ import rig_tail_joint as rt_joint
 logger = logger_setup(__name__)
 
 # Locked world-matrix attribute holding a BN joint's captured rest pose. A
-# full matrix (not just the position Method D uses) is stored so a future
+# full matrix (not just the position the anchor uses) is stored so a future
 # method can read the rest orientation too without a re-capture. Capturing
 # again after the first build would store the already-smoothed pose and
 # defeat the whole fix.
@@ -140,7 +145,7 @@ def rest_positions(rigname, joints):
 
 def curve_source_positions(rigname, joints):
     '''
-    Positions the IK curve should be built from (Method D's swap point).
+    Positions the IK curve should be built from (the anchor's swap point).
 
     Returns the stored rest pose when available, so every rebuild traces the
     same source and cannot compound. Falls back to the joints' live world

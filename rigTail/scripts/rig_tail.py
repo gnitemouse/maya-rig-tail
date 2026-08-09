@@ -113,7 +113,7 @@ def build_rig_tail(fk, ik):
         fk (bool): Build FK components
         ik (bool): Build IK components
     '''
-    # Method D (rebuild-degradation fix): record each BN joint's rest pose once,
+    # Rest anchor (see rig_tail_restpose): record each BN joint's rest pose once,
     # now, while BN is still at true rest -- cleanup/setup have run but the IK
     # curve/spline (which smooths) and the OPM network (which drives BN off
     # rest) have not. rig_tail_ik then builds the curve from this stored rest
@@ -153,13 +153,13 @@ def rig_tail_fk(rigname, typ=rt_constants.TYPE_FK):
 
     # Create groups
     rig_systems_grp = rt_naming.fstr('', rt_constants.RIG_SYSTEMS_GRP)
-    clusters_grp = rt_naming.fstr('', rt_constants.CLUSTERS_GRP)
     spline_grp_fk = rt_naming.fstr(rigname, rt_constants.SPLINE_GRP, typ)
-    cluster_grp_fk = rt_naming.fstr(rigname, rt_constants.CLUSTER_GRP, typ)
     scale_grp = rt_naming.fstr(rigname, rt_constants.SCALE_GRP)
     rt_maya.create_group(spline_grp_fk, parent=rig_systems_grp)
-    rt_maya.create_group(cluster_grp_fk, parent=clusters_grp)
     rt_maya.create_group(scale_grp, parent=rig_systems_grp)
+    # No FK cluster group: nothing deforms the FK curve. Clusters are IK
+    # only, up-vectors included - see rig_tail_curve.create_clusters_on_curve.
+    # cleanup still removes the group, so older scenes lose their empty one.
 
     # Create curve
     curve_fk = rt_curve.create_curve(rigname, jnt_pos, typ)
@@ -199,7 +199,7 @@ def rig_tail_ik(rigname, typ=rt_constants.TYPE_IK):
     logger.trace(f'joints {rt_constants.JOINTS_IK[rigname]}')
 
     joints = rt_constants.JOINTS_IK[rigname]
-    # Method D swap point: build the IK curve from the captured rest pose so
+    # Rest anchor: build the IK curve from the captured rest pose so
     # rebuilds don't compound (falls back to live positions when no rest is
     # stored). See rig_tail_restpose.
     jnt_pos = rt_rest.curve_source_positions(rigname, joints)
