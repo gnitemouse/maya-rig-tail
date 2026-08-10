@@ -80,26 +80,34 @@ MAIN_CONTROLLER = True
 FORCE_REBUILD = False
 
 # SKIN =================================================================
-# Keep existing skinClusters and their painted weights.
+# Two independent questions about the geometry, in the order they are
+# asked: does this tool touch the skinning at all, and if it does, what
+# happens to the weights already painted on it.
 #
-# The rig binds geometry named after each rig part to that part's BN
-# joints, with a plain closest-distance bind. That is only ever right the
-# FIRST time: once weights have been painted, a rebind throws the paint
-# work away, and a mesh shared with the rest of the character (a body
-# skinned to head and limb joints as well as to a tail) loses those
-# influences entirely.
+# BIND_GEOMETRY - bind geometry named after each rig part to that part's
+# BN joints (a plain closest-distance bind). Off means the tool never
+# touches a skinCluster: it does not bind, and it does not unbind either -
+# neither in the build nor in Setup - so a mesh someone else owns, a mesh
+# driven by wraps or blendshapes, and a model that is not final yet all
+# come through a build exactly as they went in. The rig still builds and
+# still drives its joints; only the geometry is left alone.
 #
-# With this on:
+# KEEP_WEIGHTS - what happens when the tool WOULD unbind. On:
 #   - Setup does NOT unbind before re-orienting. It re-baselines instead,
 #     writing each moved joint's new world matrix into the skinCluster's
 #     bindPreMatrix so the new pose becomes the rest pose (weights kept).
 #   - A rebuild does NOT unbind, and binding a mesh that is already
 #     skinned adds any missing rig joints as influences at weight 0
 #     instead of deleting the cluster. New influences start weightless, so
-#     paint them in - the mesh will not follow the tail until you do.
-# With it off the old behaviour returns: unbind, re-orient, rebind from
-# scratch, weights lost.
-PRESERVE_SKIN = True
+#     paint them in - the mesh will not follow the tail until you do. This
+#     is why a joint count change deserves a look: the mesh keeps
+#     following the joints it was painted to and the new ones do nothing.
+# Off is the old rebind-clean behaviour: unbind, re-orient, rebind from
+# scratch, weights lost. It only means anything while BIND_GEOMETRY is on -
+# unbinding without a rebind to follow is destruction with no upside, so it
+# never happens.
+BIND_GEOMETRY = True
+KEEP_WEIGHTS = True
 
 # SETUP PHASE ==========================================================
 # Skeleton-prep options, run by the separate 'Tail Rig Setup' step
@@ -593,7 +601,8 @@ def get_user_editable_config():
         'ORIENT_AIM_AXIS': ORIENT_AIM_AXIS,
         'ORIENT_UP_AXIS': ORIENT_UP_AXIS,
         'ORIENT_UP_MODE': ORIENT_UP_MODE,
-        'PRESERVE_SKIN': PRESERVE_SKIN,
+        'BIND_GEOMETRY': BIND_GEOMETRY,
+        'KEEP_WEIGHTS': KEEP_WEIGHTS,
         'JOINT_POS_TOLERANCE': JOINT_POS_TOLERANCE,
         'COLOR_SKELETON': COLOR_SKELETON,
         'BN_COLOR': BN_COLOR,
@@ -729,7 +738,7 @@ def load_config(filepath=None):
     '''
     global LOADED_CONFIG
     global RIGPARTS, RIGPARTS_EXCLUDE, ROOT, EFFECTS, INDIV_FK
-    global MAIN_CONTROLLER, PRESERVE_SKIN
+    global MAIN_CONTROLLER, BIND_GEOMETRY, KEEP_WEIGHTS
     global ORIENT_JOINTS, MIRROR_ORIENT, MIRROR_JOINTS, MIRROR_DRYRUN, MIRROR_AXIS
     global MIRROR_SOURCE_SIDE, MIRROR_BEHAVIOR, ORIENT_AIM_AXIS, ORIENT_UP_AXIS
     global ORIENT_UP_MODE
@@ -809,7 +818,13 @@ def load_config(filepath=None):
         # FORCE_REBUILD is deliberately not loaded: forcing is a per-click
         # action of the Build UI's button, and a config saved by an older
         # version with it stuck on must not make every build a teardown.
-        PRESERVE_SKIN = config.get('PRESERVE_SKIN', PRESERVE_SKIN)
+        # 'PRESERVE_SKIN' is the legacy key: one boolean over what are now
+        # two settings. It only ever meant the weight half - a config saved
+        # under it was written by code that always bound - so it migrates
+        # to KEEP_WEIGHTS and leaves BIND_GEOMETRY at its default (on).
+        BIND_GEOMETRY = config.get('BIND_GEOMETRY', BIND_GEOMETRY)
+        KEEP_WEIGHTS = config.get(
+            'KEEP_WEIGHTS', config.get('PRESERVE_SKIN', KEEP_WEIGHTS))
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
         COLOR_SKELETON = config.get('COLOR_SKELETON', COLOR_SKELETON)
         BN_COLOR = config.get('BN_COLOR', BN_COLOR)

@@ -19,9 +19,14 @@ to skeleton + geometry (destructive, confirms first), Build Rig keeps
 unchanged tails as they are (the joint cache decides), and Force Rebuild
 tears everything down first. The force flag lasts exactly one click - it
 is never persisted, so a saved config can never leave every build
-forcing. The other options, including Preserve skinClusters
-(PRESERVE_SKIN), are committed to rig_tail_constants on build AND on
-close, so they survive reopening.
+forcing. The other options, including the two geometry settings Bind
+Geometry (BIND_GEOMETRY) and Keep Weights (KEEP_WEIGHTS), are committed
+to rig_tail_constants on build AND on close, so they survive reopening.
+
+A build that would add rig joints to an already-painted skinCluster at
+weight 0 - the joint-count-change case, where the rig looks built and the
+mesh still follows the joints it was painted to - confirms first
+(confirm_unpainted_influences).
 
 All edited values live in rig_tail_constants and can be imported or
 exported through a user-chosen JSON config file (Load/Save Config).
@@ -50,8 +55,11 @@ class RigTailUI(QtWidgets.QDialog):
         self.setMinimumWidth(500)
         self.setup_ui()
         self.load_current_values()
-        # Fit height to content so no dead space is left under the buttons
-        self.resize(500, self.sizeHint().height())
+        # Fit height to content so no dead space is left under the buttons.
+        # Opens wider than the 500 minimum: the three geometry/cog toggles
+        # very nearly fill a 500px row on their own, and at that width they
+        # would sit shoulder to shoulder with no gap to group them.
+        self.resize(560, self.sizeHint().height())
 
     def setup_ui(self):
         '''Build the main window layout.'''
@@ -271,30 +279,45 @@ class RigTailUI(QtWidgets.QDialog):
         options_layout.addLayout(features_layout)
         options_layout.addSpacing(8)
 
+        # Geometry: two questions, asked in the order they matter. Bind
+        # Geometry decides whether the build touches skinClusters at all;
+        # Keep Weights only means something once it does, so it reads as
+        # the sub-option it is and greys out when binding is off.
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_main = QtWidgets.QCheckBox('Control All Tails (cog)')
+        self.chk_main = QtWidgets.QCheckBox('All Tail Controls on Cog')
         self.chk_main.setEnabled(len(rt_constants.RIGPARTS) > 1)
         self.chk_main.setToolTip(
             'Drive every tail from one ALL section on the cog, with a '
             'per-tail Override flag to opt out. Needs 2+ rig parts.')
-        self.chk_preserve = QtWidgets.QCheckBox('Preserve skinClusters')
-        self.chk_preserve.setToolTip(
-            'Keep existing skinClusters when rebuilding: rig joints are '
-            'added to the cluster (new ones at weight 0) and painted '
-            'weights survive. Off unbinds and rebinds from scratch, '
-            'losing the weights.')
+        self.chk_bind = QtWidgets.QCheckBox('Bind Geometry')
+        self.chk_bind.setToolTip(
+            'Bind each mesh named after a rig part to that part\'s BN '
+            'joints. Off leaves the geometry completely alone - nothing '
+            'is bound and nothing is unbound, in the build or in Setup - '
+            'for meshes another department owns, wrap/blendshape setups, '
+            'weights coming from an imported file, or a model that is '
+            'not final. The rig still builds and still drives its joints.')
+        self.chk_keep = QtWidgets.QCheckBox('Keep Weights (skinClusters)')
+        self.chk_keep.setToolTip(
+            'Keep existing skinClusters and their painted weights: rig '
+            'joints are added to the cluster (new ones at weight 0) and '
+            'the paint survives. Off unbinds and rebinds from scratch, '
+            'losing the weights. Only applies while Bind Geometry is on.')
+        self.chk_bind.toggled.connect(self.on_bind_geometry_changed)
         self.style_checkbox(self.chk_main)
-        self.style_checkbox(self.chk_preserve)
-        # Stretch shares of the row's slack: 3/20 before Control All
-        # Tails, 13/20 between, 4/20 after. Leading + middle still comes
-        # to 80%, the same as the previous 4:12:4, so nudging Control All
-        # Tails left moves only that checkbox - Preserve skinClusters
-        # keeps its position and the gap between them widens.
-        toggles_layout.addStretch(3)
+        self.style_checkbox(self.chk_bind)
+        self.style_checkbox(self.chk_keep, sub=True)
+        # Stretch shares of whatever slack the row has left. The three
+        # labels nearly fill it at the window's minimum width, so the
+        # weights only decide where the last few pixels go: a little
+        # before the first box, the rest split between the pairs.
+        toggles_layout.addStretch(2)
         toggles_layout.addWidget(self.chk_main)
-        toggles_layout.addStretch(13)
-        toggles_layout.addWidget(self.chk_preserve)
-        toggles_layout.addStretch(4)
+        toggles_layout.addStretch(5)
+        toggles_layout.addWidget(self.chk_bind)
+        toggles_layout.addStretch(3)
+        toggles_layout.addWidget(self.chk_keep)
+        toggles_layout.addStretch(2)
         options_layout.addLayout(toggles_layout)
 
         options_group.setLayout(options_layout)
@@ -527,9 +550,16 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_loop.setChecked(rt_constants.EFFECTS.get('loop', False))
         self.chk_fk.setChecked(getattr(rt_constants, 'BUILD_FK', True))
         self.chk_ik.setChecked(getattr(rt_constants, 'BUILD_IK', True))
-        # getattr: a session started before PRESERVE_SKIN existed has a
-        # stale constants module without it (constants are never reloaded)
-        self.chk_preserve.setChecked(getattr(rt_constants, 'PRESERVE_SKIN', True))
+        # getattr: a session started before these existed has a stale
+        # constants module without them (constants are never reloaded).
+        # KEEP_WEIGHTS falls back through PRESERVE_SKIN, the single
+        # boolean it was split out of, so such a session keeps the answer
+        # its user actually gave.
+        self.chk_bind.setChecked(getattr(rt_constants, 'BIND_GEOMETRY', True))
+        self.chk_keep.setChecked(
+            getattr(rt_constants, 'KEEP_WEIGHTS',
+                    getattr(rt_constants, 'PRESERVE_SKIN', True)))
+        self.on_bind_geometry_changed(self.chk_bind.isChecked())
         self.chk_main.setChecked(rt_constants.MAIN_CONTROLLER)
         self.update_display()
 
@@ -552,7 +582,13 @@ class RigTailUI(QtWidgets.QDialog):
         setattr(rt_constants, 'BUILD_FK', fk)
         setattr(rt_constants, 'BUILD_IK', ik)
         rt_constants.INDIV_FK = self.chk_indiv_fk.isChecked() and fk
-        rt_constants.PRESERVE_SKIN = self.chk_preserve.isChecked()
+        rt_constants.BIND_GEOMETRY = self.chk_bind.isChecked()
+        # Stored as ticked, not as 'ticked and binding'. Keep Weights is
+        # inert while Bind Geometry is off rather than wrong, and folding
+        # the dependency in here would turn a build with binding off into
+        # a silent instruction to throw the weights away next time it is
+        # turned back on.
+        rt_constants.KEEP_WEIGHTS = self.chk_keep.isChecked()
         rt_constants.MAIN_CONTROLLER = self.chk_main.isChecked()
         rt_constants.EFFECTS = {
             'stretchy': self.chk_stretchy.isChecked() and ik,
@@ -659,6 +695,17 @@ class RigTailUI(QtWidgets.QDialog):
             self.chk_indiv_fk.setChecked(False)
         if rt_constants.update_ikfk_modes(fk, ik):
             self.update_display()
+
+    def on_bind_geometry_changed(self, checked):
+        '''
+        Keep Weights only decides what happens to the weights on a mesh
+        the build is about to touch, so it greys out when Bind Geometry is
+        off. Deliberately NOT unchecked with it (unlike Stretchy, which
+        cannot be built without IK): the setting is inert here, not
+        invalid, and clearing it would quietly rewrite the answer for the
+        next build that turns binding back on.
+        '''
+        self.chk_keep.setEnabled(checked)
 
     def config_start_path(self):
         '''Config path to preselect in file dialogs: the textbox path if
@@ -783,8 +830,13 @@ class RigTailUI(QtWidgets.QDialog):
                 'these parts in RIGPARTS, then build again.')
             return
 
-        # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, PRESERVE_SKIN,
-        # MAIN_CONTROLLER, EFFECTS) the same way closeEvent does. The
+        # A preserving bind onto a chain that has grown builds a rig that
+        # looks right and deforms wrong, so ask before it happens
+        if not self.confirm_unpainted_influences(parts):
+            return
+
+        # Commit the checkbox state (BUILD_FK/IK, INDIV_FK, BIND_GEOMETRY,
+        # KEEP_WEIGHTS, MAIN_CONTROLLER, EFFECTS) as closeEvent does. The
         # force flag is per-click, not a setting: it lasts exactly one
         # build and is never persisted.
         self.save_current_values()
@@ -801,6 +853,79 @@ class RigTailUI(QtWidgets.QDialog):
             self.close()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to build rig:\n{str(e)}')
+
+    def confirm_unpainted_influences(self, parts):
+        '''
+        Warn before a preserving bind adds rig joints to an existing
+        skinCluster at weight 0, and let the build be called off.
+
+        This is the joint-count-change trap. Nothing errors: the painted
+        weights stay on the joints that had them, the joints the chain has
+        gained since join the cluster weightless, and the mesh goes on
+        following the old joints while the new ones do nothing. The rig
+        looks built and the tail deforms wrong, which is the worst way for
+        a build to fail - so it is said out loud, before the build, while
+        the two checkboxes that decide it are still on screen.
+
+        Reads the chains from the scene (detect_joints_bn) because the
+        cached JOINTS_BN is empty in a fresh session; it is the same
+        non-destructive detection Setup and the build both start from.
+        Best-effort - a scene this cannot read is not a reason to block a
+        build, and the build's own log warning still covers it.
+
+        Arguments:
+            parts (list): Rig parts this build will act on
+
+        Return:
+            bool: True to go ahead with the build
+        '''
+        import rig_tail_maya as rt_maya
+        import rig_tail_cleanup as rt_cleanup
+
+        if not (self.chk_bind.isChecked() and self.chk_keep.isChecked()):
+            return True
+        # A session started before this feature has a stale rig_tail_maya
+        # (modules are only reloaded by TailReload); skip rather than die
+        if not hasattr(rt_maya, 'joints_missing_from_skin'):
+            return True
+
+        try:
+            rt_cleanup.detect_joints_bn()
+            affected = [(part, geo, missing) for part in parts
+                        for geo, missing in
+                        rt_maya.joints_missing_from_skin(part)]
+        except Exception as err:
+            # Said out loud rather than swallowed: a check that quietly
+            # stops running is indistinguishable from one that found
+            # nothing, which is the wrong way round for a warning.
+            cmds.warning(f'Could not check skinned geometry for missing '
+                         f'influences: {err}')
+            return True
+        if not affected:
+            return True
+
+        detail = '\n'.join(
+            f"  {geo}: {len(missing)} joint(s) - "
+            f"{', '.join(missing[:4])}{' ...' if len(missing) > 4 else ''}"
+            f"   ({part})"
+            for part, geo, missing in affected[:8])
+        if len(affected) > 8:
+            detail += f'\n  ... and {len(affected) - 8} more mesh(es)'
+
+        answer = QtWidgets.QMessageBox.warning(
+            self, 'Skinned Geometry Has Fewer Joints',
+            f'{len(affected)} already-skinned mesh(es) are missing rig '
+            f'joints as influences:\n\n{detail}\n\n'
+            'Keep Weights will add them to the existing skinCluster at '
+            'WEIGHT 0. Every painted weight survives, but the mesh keeps '
+            'following the joints it was painted to and the new ones do '
+            'nothing - the rig will look built and deform as though the '
+            'chain had not changed.\n\n'
+            'Build anyway (then paint the new joints in), or Cancel and '
+            'turn Keep Weights off to rebind these meshes from scratch.',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
+            QtWidgets.QMessageBox.Cancel)
+        return answer == QtWidgets.QMessageBox.Yes
 
     def remove_rig(self):
         '''

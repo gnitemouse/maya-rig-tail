@@ -66,12 +66,14 @@ mirroring altogether. The same exclusion holds the part back from the
 build, so a tail can be set up and rigged once and then left alone while
 the rest of the roster is iterated on.
 
-Re-orienting or moving a bound joint would drag the mesh. With
-PRESERVE_SKIN on (the default) the skin stays bound and is RE-BASELINED
-afterwards - each moved joint's new world matrix is written into the
-skinCluster's bindPreMatrix, so the new pose becomes the rest pose and
-every painted weight survives. With it off, the affected geometry is
-unbound first and left for the build to rebind, losing its weights.
+Re-orienting or moving a bound joint would drag the mesh. With KEEP_WEIGHTS
+on (the default) the skin stays bound and is RE-BASELINED afterwards - each
+moved joint's new world matrix is written into the skinCluster's
+bindPreMatrix, so the new pose becomes the rest pose and every painted
+weight survives. With it off, the affected geometry is unbound first and
+left for the build to rebind, losing its weights - unless BIND_GEOMETRY is
+also off, in which case nothing would rebind it and Setup preserves and
+re-baselines regardless.
 
 Functions:
     setup_tails: entry point; detect joints, run the phase, re-baseline skin
@@ -118,8 +120,24 @@ _CST_DEFAULTS = {
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
     'ORIENT_UP_AXIS': 'z',          # local axis aligned to the up reference
     'ORIENT_UP_MODE': 'cascade',    # up reference: 'cascade' | 'best-fit'
-    'PRESERVE_SKIN': True,          # re-baseline skinned meshes, never unbind
+    'BIND_GEOMETRY': True,          # the build may bind (and unbind) meshes
+    'KEEP_WEIGHTS': True,           # re-baseline skinned meshes, never unbind
 }
+# KEEP_WEIGHTS was split out of PRESERVE_SKIN. A session started before the
+# split holds only the old name, and letting the default below install over
+# the top would quietly flip a user who had turned it OFF back to
+# preserving - so carry their answer across first.
+#
+# The old name is then kept in step rather than deleted: a stale constants
+# module still names PRESERVE_SKIN as a global in its own load_config and
+# get_user_editable_config, so removing it would turn that session's Load
+# and Save Config into a NameError. Mirroring also stops this block, on the
+# next reload, copying a superseded value back over a newer answer.
+if hasattr(rt_constants, 'PRESERVE_SKIN'):
+    if not hasattr(rt_constants, 'KEEP_WEIGHTS'):
+        rt_constants.KEEP_WEIGHTS = bool(rt_constants.PRESERVE_SKIN)
+    rt_constants.PRESERVE_SKIN = bool(rt_constants.KEEP_WEIGHTS)
+
 for _name, _value in _CST_DEFAULTS.items():
     if not hasattr(rt_constants, _name):
         setattr(rt_constants, _name, _value)
@@ -153,7 +171,7 @@ def setup_tails(root=None, dry_run=None):
     Detects the BN chains for every RIGPART, builds any mirror target chain
     that is missing (MIRROR_JOINTS), then runs the enabled orientation steps
     (run_setup). Re-orienting a bound joint distorts the mesh, so skinned
-    geometry is re-baselined onto the new pose afterwards (PRESERVE_SKIN,
+    geometry is re-baselined onto the new pose afterwards (KEEP_WEIGHTS,
     weights kept) or, with that off, unbound first and left for the build to
     rebind. Run this once on the raw skeleton, verify, then build.
 
@@ -228,7 +246,7 @@ def setup_tails(root=None, dry_run=None):
         if not preview:
             # Excluded parts are deliberately left bound: nothing is going
             # to move their joints, so unbinding would only throw away
-            # their skin. With PRESERVE_SKIN on, already-skinned meshes are
+            # their skin. With KEEP_WEIGHTS on, already-skinned meshes are
             # left bound too and re-baselined below instead of losing their
             # painted weights.
             with timer.phase('unbind'):
@@ -1194,7 +1212,7 @@ def roll_chain(rigname, degrees):
 
     Meant to be run on demand from the UI after the batch orient/mirror.
     A bound joint would drag the mesh, so the chain's geometry is either
-    re-baselined onto the rolled pose (PRESERVE_SKIN, weights kept) or
+    re-baselined onto the rolled pose (KEEP_WEIGHTS, weights kept) or
     unbound and left for the build to rebind. Clears the stored rest pose
     either way.
 

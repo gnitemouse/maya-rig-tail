@@ -232,9 +232,11 @@ again by templated name.
 - **The rest anchor.** The IK curve is built from a stored rest
   pose, so repeated rebuilds reproduce the same rig instead of compounding
   curve smoothing (`rig_tail_restpose`).
-- **Skin preservation.** With `PRESERVE_SKIN` on, rebuilds and Setup
-  re-baseline existing skinClusters instead of unbinding, so painted
-  weights survive (`rig_tail_maya`, `rig_tail_setup`).
+- **The geometry is opt-in, twice over.** `BIND_GEOMETRY` decides whether
+  the tool touches skinClusters at all; with it off nothing is bound and
+  nothing is unbound. `KEEP_WEIGHTS` decides what happens when it would
+  unbind: on, rebuilds and Setup re-baseline the existing cluster instead,
+  so painted weights survive (`rig_tail_maya`, `rig_tail_setup`).
 - **Session state lives in `rig_tail_constants`,** which the per-tool
   buttons deliberately leave loaded; modules install missing defaults onto
   it so new features work in a stale session (see "How the modules get
@@ -284,8 +286,8 @@ Launch the Tail Rig Setup UI.
 
 Build UI (Tail Rig Builder window). Shows the loaded config and a summary
 of the current settings, the build options (FK/IK, Indiv FK, Stretchy,
-FX, Main Controller, Preserve skinClusters), and buttons opening pop-up
-editors for RIGPARTS, the naming templates and the numeric constants.
+FX, All Tail Controls on Cog, Bind Geometry, Keep Weights), and buttons
+opening pop-up editors for RIGPARTS, naming templates and constants.
 Settings live in `rig_tail_constants` and round-trip through JSON configs
 (Load/Save Config); the main-window checkboxes are committed on build and
 on close, so they survive reopening the window.
@@ -293,12 +295,26 @@ on close, so they survive reopening the window.
 Two build buttons: **Build Rig** keeps unchanged tails as they are (the
 joint cache decides what changed), **Force Rebuild** tears every included
 part down first. The force flag lasts one click and is never saved, so a
-config cannot leave every build forcing. **Preserve skinClusters**
-(`PRESERVE_SKIN`) keeps existing skins and painted weights across
-rebuilds; off rebinds from scratch.
+config cannot leave every build forcing.
+
+**Bind Geometry** (`BIND_GEOMETRY`) decides whether the build touches
+skinClusters at all; off, nothing is bound and nothing is unbound, and the
+rig builds around the geometry untouched. **Keep Weights (skinClusters)**
+(`KEEP_WEIGHTS`) decides what happens when it would unbind: on keeps
+existing skins and painted weights across rebuilds, off rebinds from
+scratch. Keep Weights greys out while Bind Geometry is off — it stays
+ticked, because clearing it would rewrite the answer for the next build
+that turns binding back on.
 
 #### `show_ui()`
 Build and show the Builder window, closing any previous instance.
+
+#### `RigTailUI.confirm_unpainted_influences(parts)`
+Warn, and offer to cancel, before a preserving bind adds rig joints to an
+already-painted skinCluster at weight 0. The joint-count-change case:
+nothing errors, the mesh keeps following the joints it was painted to, and
+the rig looks built while deforming as though the chain had not changed.
+Only asked when both Bind Geometry and Keep Weights are on.
 
 ---
 
@@ -402,21 +418,24 @@ correctly-oriented-but-wrong-facing chain onto the right plane.
 
 Orientation is written into `jointOrient` with `rotate` left at zero.
 Re-orienting or moving a bound joint would drag the mesh, so affected geometry
-is re-baselined onto the new pose afterwards (`PRESERVE_SKIN`, painted weights
+is re-baselined onto the new pose afterwards (`KEEP_WEIGHTS`, painted weights
 kept — see Skin Preservation under rig_tail_maya) or, with that off, unbound and
-left for the build to rebind. Any stored rest pose is cleared either way, so the
-build recaptures it.
+left for the build to rebind. With `BIND_GEOMETRY` off there is no rebind to
+follow, so Setup preserves and re-baselines regardless. Any stored rest pose is
+cleared either way, so the build recaptures it.
 
 > Note: these constants were renamed. `MIRROR_ORIENT` previously meant the
 > aim-orient (now `ORIENT_JOINTS`) and `MIRROR_JOINTS` previously meant the
-> orientation mirror (now `MIRROR_ORIENT`). Older config files are migrated
-> automatically on load.
+> orientation mirror (now `MIRROR_ORIENT`). `PRESERVE_SKIN` was split into
+> `BIND_GEOMETRY` and `KEEP_WEIGHTS`, and migrates to the latter. Older
+> config files are migrated automatically on load.
 
 ### Functions
 
 #### `setup_tails(root=None, dry_run=None)`
 Detect BN chains, run the enabled steps, then re-baseline the skinned meshes
-(or, with `PRESERVE_SKIN` off, unbind them up front instead).
+(or, with `KEEP_WEIGHTS` off and `BIND_GEOMETRY` on, unbind them up front
+instead).
 
 #### `run_setup(dry_run=None)`
 Run the enabled batch orient/mirror steps on `rt_constants.JOINTS_BN`.
@@ -1360,11 +1379,14 @@ Add enum attribute to node.
 ### Geometry Binding
 
 #### `bind_geometry(rigname)`
-Search for geometry matching rigname and bind to BN joints.
+Search for geometry matching rigname and bind to BN joints. A no-op with
+`BIND_GEOMETRY` off.
 
 #### `unbind_geometry(rigname, force=False)`
-Unbind geometry from rig. With `PRESERVE_SKIN` on, already-skinned meshes are
-left bound and returned instead; `force=True` unbinds regardless.
+Unbind geometry from rig. Already-skinned meshes are left bound and returned
+instead whenever an unbind would not be made good again — with `KEEP_WEIGHTS`
+on (the paint is worth keeping) or with `BIND_GEOMETRY` off (nothing would
+rebind them). `force=True` unbinds regardless.
 
 #### `unbind_geometry_all()`
 Unbind all geometry in scene.
@@ -1377,15 +1399,27 @@ part, in two phases.
 
 ### Skin Preservation
 
-`PRESERVE_SKIN` (default on) stops the rig throwing away painted weights. A
+`KEEP_WEIGHTS` (default on) stops the rig throwing away painted weights. A
 closest-distance rebind is only ever right the first time: afterwards it wipes
 the paint work, and on a mesh the rig shares with the rest of the character it
-drops the other influences entirely.
+drops the other influences entirely. `BIND_GEOMETRY` (default on) is the
+question asked before it — whether the tool touches the skinning at all.
 
-#### `preserve_skin()`
-Read the `PRESERVE_SKIN` setting, defaulting to on (the reload sweep skips
-constants, so a session that predates the setting lacks it — `TailReload`
-re-imports it).
+#### `bind_enabled()`
+Read the `BIND_GEOMETRY` setting, defaulting to on.
+
+#### `keep_weights()`
+Read the `KEEP_WEIGHTS` setting, falling back to the legacy `PRESERVE_SKIN`
+before the default (the reload sweep skips constants, so a session that
+predates the split still holds the old name and the answer its user gave —
+`TailReload` re-imports it).
+
+#### `joints_missing_from_skin(rigname)`
+The BN joints an already-skinned mesh does not yet have as influences —
+exactly the joints a preserving bind is about to add at weight 0. Reads the
+cached `JOINTS_BN`. The Build UI asks this before building, so a chain that
+has grown since the mesh was painted is caught before it produces a rig that
+looks built and deforms wrong.
 
 #### `find_skincluster(node)`
 First skinCluster in a node's history.

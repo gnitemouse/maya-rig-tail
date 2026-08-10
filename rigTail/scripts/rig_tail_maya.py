@@ -54,10 +54,12 @@ Functions:
     report_missing_geometry: Warn about rig parts with no matching mesh
     unbind_geometry: Unbind geometry from rig
     unbind_geometry_all: Unbind all geometry in scene
-    preserve_skin: Read the PRESERVE_SKIN setting
+    bind_enabled: Read the BIND_GEOMETRY setting
+    keep_weights: Read the KEEP_WEIGHTS setting
     find_skincluster: First skinCluster in a node's history
     skin_influence_indices: Influence -> sparse logical index map
     add_missing_influences: Add rig joints to a cluster at weight 0
+    joints_missing_from_skin: BN joints a preserving bind would add at 0
     rebaseline_skin: Accept the joints' current pose as the skin's rest
     bind_skincluster: Create skinCluster binding
     unbind_skincluster: Unbind skinCluster from node
@@ -1855,11 +1857,15 @@ def bind_geometry(rigname):
     the part but missing the geo term ('tail', 'tail_01') are bound
     with a naming warning. Skips meshes that belong to other parts
     ('R_tail_geo' is not bound by 'tail').
-    Skips if no geometry found.
+    Skips if no geometry found, and skips entirely with BIND_GEOMETRY off.
 
     Arguments:
         rigname (str): Rig component name
     '''
+    if not bind_enabled():
+        logger.debug(f'{rigname}: BIND_GEOMETRY off, geometry left alone')
+        return
+
     if rigname not in rt_constants.JOINTS_BN or not rt_constants.JOINTS_BN[rigname]:
         logger.warning(f'No BN joints found for {rigname}, skipping geometry bind')
         return
@@ -1875,7 +1881,7 @@ def bind_geometry(rigname):
             geo_leaf = geo.split('|')[-1]
             bind_skincluster(rt_constants.JOINTS_BN[rigname], geo,
                              f'{geo_leaf}_skinCluster',
-                             preserve=preserve_skin())
+                             preserve=keep_weights())
             bound.append(geo_leaf)
     if not bound:
         logger.trace(f'{rigname}: No geometry named after rig part, skip bind')
@@ -1968,23 +1974,29 @@ def unbind_geometry(rigname, force=False):
     '''
     Get geometry and unbind skinclusters.
 
-    With rt_constants.PRESERVE_SKIN on, geometry that already carries a
-    skinCluster is LEFT BOUND and returned instead: its weights are paint
-    work that an unbind destroys. The caller is responsible for the pose
-    those meshes are left in -- Setup re-baselines them (rebaseline_skin)
-    after moving the joints, and the build's bind_geometry reuses the
-    cluster rather than rebuilding it.
+    Geometry that already carries a skinCluster is LEFT BOUND and returned
+    instead whenever an unbind would not be made good again:
+
+      - KEEP_WEIGHTS on: its weights are paint work that an unbind
+        destroys. The caller is responsible for the pose those meshes are
+        left in -- Setup re-baselines them (rebaseline_skin) after moving
+        the joints, and the build's bind_geometry reuses the cluster
+        rather than rebuilding it.
+      - BIND_GEOMETRY off: nothing is going to rebind afterwards, so an
+        unbind here is destruction with no upside. 'Leave my geometry
+        alone' has to mean the unbind too, or the setting would strip the
+        skin off every mesh it was meant to protect.
 
     Arguments:
         rigname (str): Rig component name
-        force (bool): Unbind even when PRESERVE_SKIN is on
+        force (bool): Unbind regardless of either setting
 
     Return:
         list: geometry deliberately left bound (empty when everything was
         unbound).
     '''
     logger.trace(f"{rigname}: Unbind geometry")
-    preserve = not force and preserve_skin()
+    preserve = not force and (keep_weights() or not bind_enabled())
     kept = []
     for geo in find_geometry_for_rigname(rigname):
         if preserve and find_skincluster(geo):
@@ -1992,7 +2004,8 @@ def unbind_geometry(rigname, force=False):
             continue
         unbind_skincluster(geo)
     if kept:
-        logger.debug(f'{rigname}: PRESERVE_SKIN, keeping the skin on '
+        why = 'KEEP_WEIGHTS' if keep_weights() else 'BIND_GEOMETRY off'
+        logger.debug(f'{rigname}: {why}, keeping the skin on '
                      f'{len(kept)} mesh(es): '
                      f'{", ".join(g.split("|")[-1] for g in kept)}')
     return kept
@@ -2031,18 +2044,34 @@ def _delete_orphan_bindposes(poses):
 
 # SKIN PRESERVATION ----------------------------------------------------
 
-def preserve_skin():
+def bind_enabled():
     '''
-    Read rt_constants.PRESERVE_SKIN, defaulting to on.
+    Read rt_constants.BIND_GEOMETRY, defaulting to on.
 
     rig_tail_constants is never reloaded (it holds session state), so a
     Maya session started before this setting existed does not have it;
-    fall back to the shipped default rather than silently rebinding.
+    fall back to the shipped default, which is the behaviour that session
+    has been getting all along.
 
     Return:
-        bool: True when existing skinClusters must be kept.
+        bool: True when the build may bind (and unbind) geometry.
     '''
-    return bool(getattr(rt_constants, 'PRESERVE_SKIN', True))
+    return bool(getattr(rt_constants, 'BIND_GEOMETRY', True))
+
+
+def keep_weights():
+    '''
+    Read rt_constants.KEEP_WEIGHTS, defaulting to on.
+
+    Falls back to the legacy PRESERVE_SKIN before the default: constants
+    are never reloaded, so a session started before the setting was split
+    still holds the old name, and a user who turned it OFF there means it.
+
+    Return:
+        bool: True when existing skinClusters and their weights are kept.
+    '''
+    return bool(getattr(rt_constants, 'KEEP_WEIGHTS',
+                        getattr(rt_constants, 'PRESERVE_SKIN', True)))
 
 
 def find_skincluster(node):
@@ -2128,6 +2157,45 @@ def add_missing_influences(skincluster, joints):
             logger.warning(f"Could not add '{jnt}' as an influence of "
                            f"'{skincluster}': {err}")
     return added
+
+
+def joints_missing_from_skin(rigname):
+    '''
+    BN joints that are not yet influences of an already-skinned mesh --
+    exactly the joints a preserving bind is about to add at WEIGHT 0.
+
+    This is the joint-count-change trap made visible. A chain that has
+    grown since the mesh was painted still has a cluster holding the old
+    influences; preserving keeps every painted weight on those, adds the
+    new joints weightless, and the mesh goes on following the joints it
+    was painted to. Nothing errors, the rig builds, and the tail deforms
+    as though the new joints were not there.
+
+    Meshes with no skinCluster are not reported: those get a clean bind to
+    the whole chain, which is correct. Reads the cached chain, so
+    JOINTS_BN must be populated (detect_joints_bn) for this to see
+    anything.
+
+    Arguments:
+        rigname (str): Rig component name
+
+    Return:
+        list: (mesh short name, [joint short names]) per affected mesh
+    '''
+    joints = rt_constants.JOINTS_BN.get(rigname) or []
+    if not joints:
+        return []
+    affected = []
+    for geo in find_geometry_for_rigname(rigname):
+        skincluster = find_skincluster(geo)
+        if not skincluster:
+            continue
+        existing = {_leaf(i) for i in
+                    (cmds.skinCluster(skincluster, q=True, inf=True) or [])}
+        missing = [_leaf(j) for j in joints if _leaf(j) not in existing]
+        if missing:
+            affected.append((_leaf(geo), missing))
+    return affected
 
 
 def _chain_influence_joints(rigname):
@@ -2314,12 +2382,13 @@ def bind_skincluster(joints, node, name, preserve=False):
             if added:
                 logger.warning(
                     f"'{_leaf(node)}' is already skinned "
-                    f"('{existing_skin[0]}'), so PRESERVE_SKIN kept its "
+                    f"('{existing_skin[0]}'), so KEEP_WEIGHTS kept its "
                     f"weights and added {len(added)} rig joint(s) as "
                     f"influences at WEIGHT 0 - the mesh will not follow "
-                    f"this rig part until they are painted in. Set "
-                    f"PRESERVE_SKIN = False to rebind from scratch instead "
-                    f"(which deletes the existing weights).")
+                    f"this rig part until they are painted in. Turn Keep "
+                    f"Weights off to rebind from scratch instead (which "
+                    f"deletes the existing weights), or Bind Geometry off "
+                    f"to leave the mesh alone entirely.")
             else:
                 logger.debug(f'Reusing existing skinCluster (superset of the '
                              f'rig joints): {existing_skin[0]}')

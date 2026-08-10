@@ -278,9 +278,24 @@ tails whose joints are unchanged since the last build are kept as they are,
 so iterating is fast. **Force Rebuild** tears everything down first — a
 one-click action that is never saved as a setting.
 
-**Preserve skinClusters** (on by default) keeps existing skins across
-rebuilds: rig joints are added to the cluster (new ones at weight 0) and
-painted weights survive. Turn it off to unbind and rebind from scratch.
+Two checkboxes decide what happens to the geometry, both on by default.
+**Bind Geometry** binds each mesh named after a rig part to that part's BN
+joints; turn it off and the tool never touches a skinCluster at all —
+nothing is bound and nothing is unbound, in the build or in Setup — for
+meshes another department owns, wrap or blendshape setups, weights coming
+from an imported file, or a model that is not final yet. The rig still
+builds and still drives its joints.
+
+**Keep Weights (skinClusters)** decides what happens when the tool *would*
+unbind: on, existing skins survive a rebuild (rig joints are added to the
+cluster, new ones at weight 0, and painted weights are untouched); off,
+the mesh is unbound and rebound from scratch. It only applies while Bind
+Geometry is on — unbinding with no rebind to follow never happens.
+
+A build that would add rig joints to an already-painted cluster at weight
+zero — the joint-count-change case, where the mesh keeps following the
+joints it was painted to and the rig deforms as though the chain had not
+changed — asks for confirmation first.
 
 ### Highlights
 

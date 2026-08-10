@@ -68,7 +68,7 @@ Functions:
         for either MIRROR_BEHAVIOR
     test_mirror_joints: MIRROR_JOINTS makes the sides mirror positions
     test_roll: roll_chain keeps positions and aim, rotates up by the angle
-    test_skin_rebaseline: PRESERVE_SKIN keeps a bound mesh and its weights
+    test_skin_rebaseline: KEEP_WEIGHTS keeps a bound mesh and its weights
         exactly where they were through a re-orient
     test_rigname_from_selection: a selected joint resolves to its RIGPART
   Reports (read-only)
@@ -814,7 +814,7 @@ def _sample_weights(skincluster, geo, count=20):
 
 def test_skin_rebaseline(rigname=DEFAULT_CHAIN):
     '''
-    PRESERVE_SKIN: re-orienting a BOUND chain must not move the mesh or
+    KEEP_WEIGHTS: re-orienting a BOUND chain must not move the mesh or
     touch its weights.
 
     The point of the re-baseline. Snapshots the deformed mesh and a sample
@@ -828,8 +828,8 @@ def test_skin_rebaseline(rigname=DEFAULT_CHAIN):
     mesh first, or run this on a part that is bound.
     '''
     import rig_tail_maya as rt_maya
-    if not rt_maya.preserve_skin():
-        print('  test_skin_rebaseline: PRESERVE_SKIN is off, skipping')
+    if not rt_maya.keep_weights():
+        print('  test_skin_rebaseline: Keep Weights is off, skipping')
         return None
     geos = [g for g in rt_maya.find_geometry_for_rigname(rigname)
             if rt_maya.find_skincluster(g)]
@@ -888,7 +888,8 @@ def check_skin(rigname=DEFAULT_CHAIN):
         if _chain_joints(rigname) else []
     geos = rt_maya.find_geometry_for_rigname(rigname)
     print(f'\n--- SKIN CHECK ({rigname}) ---')
-    print(f'PRESERVE_SKIN={rt_maya.preserve_skin()}, '
+    print(f'BIND_GEOMETRY={rt_maya.bind_enabled()}, '
+          f'KEEP_WEIGHTS={rt_maya.keep_weights()}, '
           f'{len(joints)} chain joint(s), {len(geos)} matching mesh(es)')
     if not geos:
         print('  no geometry matches this rig part '
@@ -900,7 +901,10 @@ def check_skin(rigname=DEFAULT_CHAIN):
         leaf = geo.split('|')[-1]
         skincluster = rt_maya.find_skincluster(geo)
         if not skincluster:
-            print(f"  {leaf}: NOT SKINNED - the build will bind it fresh")
+            print(f'  {leaf}: NOT SKINNED - the build will bind it fresh'
+                  if rt_maya.bind_enabled() else
+                  f'  {leaf}: NOT SKINNED - Bind Geometry is off, so the '
+                  f'build will leave it unbound')
             continue
         indices = rt_maya.skin_influence_indices(skincluster)
         total = len(cmds.skinCluster(skincluster, q=True, inf=True) or [])

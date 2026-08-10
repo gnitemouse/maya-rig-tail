@@ -95,8 +95,11 @@ def connect_rig_tail(fk, ik):
             rt_maya.bind_geometry(rigname)
 
     # Consolidated warning for parts whose mesh name did not match, so the
-    # geometry that never bound is easy to spot and rename.
-    rt_maya.report_missing_geometry(parts)
+    # geometry that never bound is easy to spot and rename. Nothing bound
+    # at all with BIND_GEOMETRY off, so a report on which meshes missed out
+    # would be noise about a step that was never going to run.
+    if rt_maya.bind_enabled():
+        rt_maya.report_missing_geometry(parts)
 
     # After everything is connected the IK spline has settled onto its final
     # shape, so the IK joints now read their true rest -- match FK onto it so
