@@ -396,7 +396,7 @@ def setup_tails(root=None, dry_run=None):
 
 def main():
     '''
-    Launch the Tail Rig Builder UI (the build phase).
+    Launch the Tail Builder UI (the build phase).
     '''
     # Reloaded here, not left to the import: the shelf button already
     # purges the UI module, but a hand-typed rt.main() in the Script
@@ -408,7 +408,7 @@ def main():
 
 def main_setup():
     '''
-    Launch the Tail Rig Setup UI (skeleton orient / mirror, pre-build).
+    Launch the Tail Setup UI (skeleton orient / mirror, pre-build).
     '''
     import importlib
     import rig_tail_setup_ui as rt_setup_ui

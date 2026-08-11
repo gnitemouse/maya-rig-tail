@@ -7,7 +7,7 @@ Setup phase: prepare the tail skeleton before the build.
 Runs on the BN skeleton only, before any rig components exist. The build
 later duplicates the FK and IK chains from this skeleton, so orienting it
 here is enough. This phase is optional and never runs during the build;
-launch it from the Tail Rig Setup UI (rig_tail_setup_ui) or call
+launch it from the Tail Setup UI (rig_tail_setup_ui) or call
 setup_tails() directly, then build as usual.
 
 Two families of operations. The batch ones run from setup_tails and each

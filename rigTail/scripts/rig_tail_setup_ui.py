@@ -2,8 +2,8 @@
 rig_tail_setup_ui.py
 author: Daisy Jane @gnitemouse
 
-PySide2 UI for the Tail Rig Setup phase, the optional skeleton-prep step
-that runs before the Tail Rig Builder. Nothing here affects the build; it
+PySide2 UI for the Tail Setup phase, the optional skeleton-prep step
+that runs before the Tail Builder. Nothing here affects the build; it
 only re-orients the raw BN skeleton so tails move coherently.
 
 Three batch operations, exposed as checkboxes:
@@ -62,7 +62,7 @@ import rig_tail_build_ui as rt_build_ui  # reuse RigPartsEditor
 
 
 class RigTailSetupUI(QtWidgets.QDialog):
-    '''Tail Rig Setup window: orient / mirror the skeleton before build.'''
+    '''Tail Setup window: orient / mirror the skeleton before build.'''
 
     AXES = ['x', 'y', 'z']
     SIDES = ['R', 'L']
@@ -98,7 +98,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Rig Tail Setup')
+        self.setWindowTitle('Tail Setup')
         self.setMinimumWidth(500)
         self.setup_ui()
         self.load_current_values()
@@ -115,7 +115,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # in their own tight layout instead of taking the main 10px spacing.
         title_layout = QtWidgets.QVBoxLayout()
         title_layout.setSpacing(2)
-        title = QtWidgets.QLabel('TAIL RIG SETUP')
+        title = QtWidgets.QLabel('TAIL SETUP')
         title.setStyleSheet('font-size: 18px; font-weight: bold; color: #FFFFFF;')
         title.setAlignment(QtCore.Qt.AlignCenter)
         title_layout.addWidget(title)
@@ -894,7 +894,7 @@ def get_maya_window():
 
 
 def show_ui():
-    '''Show the Tail Rig Setup window, closing any previous instance.'''
+    '''Show the Tail Setup window, closing any previous instance.'''
     global rig_tail_setup_window
     try:
         rig_tail_setup_window.close()

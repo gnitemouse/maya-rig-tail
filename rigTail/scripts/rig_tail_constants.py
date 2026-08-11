@@ -110,7 +110,7 @@ BIND_GEOMETRY = True
 KEEP_WEIGHTS = True
 
 # SETUP PHASE ==========================================================
-# Skeleton-prep options, run by the separate 'Tail Rig Setup' step
+# Skeleton-prep options, run by the separate 'Tail Setup' step
 # (rig_tail_setup) BEFORE the build, never during it. Three batch
 # operations, each independent:
 #

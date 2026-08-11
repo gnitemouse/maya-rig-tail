@@ -1066,7 +1066,7 @@ def setup_rig(fk, ik):
     rt_maya.ensure_plugins()
 
     # NOTE: joint orientation and L/R mirroring are NOT done here. They are
-    # a separate Setup phase (rig_tail_setup, run from the Tail Rig Setup UI
+    # a separate Setup phase (rig_tail_setup, run from the Tail Setup UI
     # or rig_tail_setup.setup_tails) that the user runs on the skeleton
     # before building. Keeping it out of the build means a rebuild never
     # silently re-orients joints.

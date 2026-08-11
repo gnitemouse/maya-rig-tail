@@ -42,7 +42,7 @@ import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 
 class RigTailUI(QtWidgets.QDialog):
-    '''Main Tail Rig Builder window.'''
+    '''Main Tail Builder window.'''
 
     # Label column of the configuration summary's list settings, sized to
     # its longest label so their values line up. The counts and control
@@ -51,7 +51,7 @@ class RigTailUI(QtWidgets.QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Rig Tail')
+        self.setWindowTitle('Tail Builder')
         self.setMinimumWidth(500)
         self.setup_ui()
         self.load_current_values()
@@ -71,7 +71,7 @@ class RigTailUI(QtWidgets.QDialog):
         # in their own tight layout instead of taking the main 10px spacing.
         title_layout = QtWidgets.QVBoxLayout()
         title_layout.setSpacing(2)
-        title = QtWidgets.QLabel('TAIL RIG BUILDER')
+        title = QtWidgets.QLabel('TAIL BUILDER')
         title.setStyleSheet('font-size: 18px; font-weight: bold; color: #FFFFFF;')
         title.setAlignment(QtCore.Qt.AlignCenter)
         title_layout.addWidget(title)
@@ -1788,7 +1788,7 @@ def get_maya_window():
 
 def show_ui():
     '''
-    Show the Tail Rig Builder, closing any previous instance.
+    Show the Tail Builder, closing any previous instance.
 
     Settings are not held by the window. Every editor writes straight to
     rig_tail_constants, and the window reads them back when it is built,

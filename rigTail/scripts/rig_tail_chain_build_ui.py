@@ -320,7 +320,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.chk_orient.setToolTip(
             'Aim-orient the joints down the chain after placing them, so they '
             'point at their new neighbours instead of their old ones. Off by '
-            'default: Tail Rig Setup owns orientation, and this saves a trip '
+            'default: Tail Setup owns orientation, and this saves a trip '
             'there for a chain that needs nothing else.\n\n'
             'A rebuild keeps the roll the chain already has (Setup\'s '
             'cascade), so a mirrored pair stays mirrored and a Roll Chain '
@@ -335,7 +335,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
             'Finish the chain with an end joint, one segment out past the '
             'tip along the chain\'s final direction. The tail gets longer by '
             'that segment; the joints already placed do not move.\n\n'
-            'Tail Rig Setup aims the last real joint at the end joint rather '
+            'Tail Setup aims the last real joint at the end joint rather '
             'than guessing a final direction, and from the next rebuild on '
             'the end joint is treated as the end of the tail\'s length - so '
             'the chain re-spaces up to it rather than past it.\n\n'

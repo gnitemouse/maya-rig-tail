@@ -5,8 +5,8 @@ author: Daisy Jane @gnitemouse
 Install Rig Tail as a Maya module and add shelf launchers.
 
 Drag this file into Maya, choose an install location, and tick the shelf
-buttons you want. The Tail Rig Builder is always installed; the Joint Chain
-Builder, Tail Rig Setup and Tail Rig Reload launchers are optional. Installing
+buttons you want. The Tail Builder is always installed; the Joint Chain
+Builder, Tail Setup and Tail Reload launchers are optional. Installing
 to a folder copies only the files the ticked buttons need -- running in place
 copies nothing at all. The module registration and install manifest are
 written under ~/Documents/maya/modules/. Reinstalling updates files in place.
@@ -145,7 +145,7 @@ for mod in list(sys.modules):
         del sys.modules[mod]
 '''
 
-LAUNCH_BUILD_COMMAND = '''# Launch Rig Tail Builder
+LAUNCH_BUILD_COMMAND = '''# Launch Tail Builder
 #@TOOL_DIR@
 
 #@PURGE@
@@ -165,7 +165,7 @@ import rig_tail_chain_test as rt_chain_test
 rt_chain_ui.show_ui()
 '''
 
-LAUNCH_SETUP_COMMAND = '''# Launch Rig Tail Setup
+LAUNCH_SETUP_COMMAND = '''# Launch Tail Setup
 #@TOOL_DIR@
 
 #@PURGE@
@@ -451,18 +451,18 @@ def _choose_destination(src_dir, modules_dir):
             label='Opens the Chain Build UI to create and re-space joint chains.',
             align='left')
         boxes[SETUP] = cmds.checkBox(
-            label='Add a "Tail Rig Setup" shelf button', value=True)
+            label='Add a "Tail Setup" shelf button', value=True)
         cmds.text(
             label='Opens the Setup UI to orient and mirror the raw skeleton.',
             align='left')
         # Ticked and greyed out: the Builder is the tool itself, so the user
         # can see it is going in rather than wonder where its option went.
         boxes[BUILD] = cmds.checkBox(
-            label='Add a "Tail Rig Builder" shelf button', value=True,
+            label='Add a "Tail Builder" shelf button', value=True,
             enable=False)
         cmds.text(label='The main tool -- always installed.', align='left')
         boxes[RELOAD] = cmds.checkBox(
-            label='Add a "Tail Rig Reload" shelf button', value=True)
+            label='Add a "Tail Reload" shelf button', value=True)
         cmds.text(
             label='Reloads every module and lays the workflow out in the '
                   'Script Editor.',
@@ -650,7 +650,7 @@ def _add_shelf_buttons(icons_dir, tool_dir, selection):
         cmds.shelfButton(
             parent=shelf,
             label=SHELF_SETUP_LABEL,
-            annotation='Launch the Rig Tail Setup UI (skeleton orient / mirror)',
+            annotation='Launch the Tail Setup UI (skeleton orient / mirror)',
             image=icon,
             image1=icon,
             imageOverlayLabel=SHELF_ICON_LABEL_SETUP,
@@ -662,7 +662,7 @@ def _add_shelf_buttons(icons_dir, tool_dir, selection):
     cmds.shelfButton(
         parent=shelf,
         label=SHELF_BUILD_LABEL,
-        annotation='Launch the Rig Tail Builder UI',
+        annotation='Launch the Tail Builder UI',
         image=icon,
         image1=icon,
         imageOverlayLabel=SHELF_ICON_LABEL_BUILD,

@@ -2,6 +2,20 @@
 
 A modular Maya rigging system for creating stretchy tails with IK/FK modes.
 
+> **Naming.** The toolset is **Rig Tail**. It ships four sub-tools, each with
+> its own shelf button:
+>
+> | Sub-tool | Shelf button | Required |
+> | --- | --- | --- |
+> | **Joint Chain Builder** | `ChainBuild` | optional |
+> | **Tail Setup** | `TailSetup` | optional |
+> | **Tail Builder** | `TailBuild` | yes |
+> | **Tail Reload** | `TailReload` | utility |
+>
+> The repository is `maya-rig-tail`, the Maya module folder is `rigTail/`, and
+> every script and import alias keeps the `rig_tail_*` / `rt_*` prefix. Those
+> identifiers are load-bearing and do not change.
+
 Three tools, run in order. Only the last one is required:
 
 ```
@@ -267,7 +281,7 @@ if the skeleton is already oriented.
 | Module | Alias | Purpose |
 |--------|-------|---------|
 | `rig_tail_setup` | `rt_setup` | Orient / mirror / roll the BN skeleton |
-| `rig_tail_setup_ui` | `rt_setup_ui` | Tail Rig Setup window |
+| `rig_tail_setup_ui` | `rt_setup_ui` | Tail Setup window |
 | `rig_tail_setup_test` | `rt_setup_test` | Tests for the Setup phase |
 
 ## Tail Build
@@ -313,7 +327,7 @@ changed — asks for confirmation first.
 | Module | Alias | Purpose |
 |--------|-------|---------|
 | `rig_tail` | `rt` | Entry point and build orchestration |
-| `rig_tail_build_ui` | `rt_build_ui` | Tail Rig Builder window |
+| `rig_tail_build_ui` | `rt_build_ui` | Tail Builder window |
 | `rig_tail_cleanup` | `rt_cleanup` | Teardown + build-structure setup |
 | `rig_tail_control` | `rt_control` | Control creation |
 | `rig_tail_curve` | `rt_curve` | Curve/spline creation |

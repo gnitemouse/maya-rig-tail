@@ -5,6 +5,12 @@ Daisy Jane @gnitemouse
 
 Complete API reference for the Maya Tail Rig system.
 
+> **Naming.** The toolset is **Rig Tail**, and it ships four sub-tools:
+> **Joint Chain Builder** (`ChainBuild`), **Tail Setup** (`TailSetup`),
+> **Tail Builder** (`TailBuild`) and **Tail Reload** (`TailReload`). The
+> repository is `maya-rig-tail`, the Maya module folder is `rigTail/`, and
+> every script and import alias keeps the `rig_tail_*` / `rt_*` prefix.
+
 ---
 
 ## Three tools: Chain Builder, Tail Setup, Tail Build
@@ -93,7 +99,7 @@ greps for it on every test pass.
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
 | `rig_tail_setup` | `rt_setup` | Skeleton orient / mirror / roll, run before the build |
-| `rig_tail_setup_ui` | `rt_setup_ui` | Setup UI (Tail Rig Setup) |
+| `rig_tail_setup_ui` | `rt_setup_ui` | Setup UI (Tail Setup) |
 | `rig_tail_setup_test` | `rt_setup_test` | Tests for the Setup phase (math + scene) |
 
 ### Tail Build
@@ -101,7 +107,7 @@ greps for it on every test pass.
 | Module | Import Alias | Description |
 |--------|--------------|-------------|
 | `rig_tail` | `rt` | Main entry point, build orchestration, phase launchers |
-| `rig_tail_build_ui` | `rt_build_ui` | Build UI (Tail Rig Builder) |
+| `rig_tail_build_ui` | `rt_build_ui` | Build UI (Tail Builder) |
 | `rig_tail_cleanup` | `rt_cleanup` | Teardown of a previous rig, plus build-structure setup |
 | `rig_tail_control` | `rt_control` | Control creation |
 | `rig_tail_curve` | `rt_curve` | Curve and spline creation |
@@ -275,16 +281,16 @@ Rig tail on user-selected joints.
 Run the pre-build Setup phase (delegates to `rig_tail_setup.setup_tails`).
 
 #### `main()`
-Launch the Tail Rig Builder UI.
+Launch the Tail Builder UI.
 
 #### `main_setup()`
-Launch the Tail Rig Setup UI.
+Launch the Tail Setup UI.
 
 ---
 
 ## rig_tail_build_ui.py (rt_build_ui)
 
-Build UI (Tail Rig Builder window). Shows the loaded config and a summary
+Build UI (Tail Builder window). Shows the loaded config and a summary
 of the current settings, the build options (FK/IK, Indiv FK, Stretchy,
 FX, All Tail Controls on Cog, Bind Geometry, Keep Weights), and buttons
 opening pop-up editors for RIGPARTS, naming templates and constants.
@@ -851,7 +857,7 @@ Remove the stored rest pose (for re-capture or testing).
 
 ## rig_tail_setup_ui.py (rt_setup_ui)
 
-Setup UI (Tail Rig Setup window). Exposes the three batch toggles
+Setup UI (Tail Setup window). Exposes the three batch toggles
 (Orient Joints, Mirror Orient, Mirror Joints), the source-side and axis
 dropdowns, and Dry Run, then calls `rig_tail_setup.setup_tails`. Launched
 by `rig_tail.main_setup()`.
