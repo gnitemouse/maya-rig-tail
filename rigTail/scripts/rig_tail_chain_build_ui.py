@@ -269,6 +269,12 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.cmb_mode.setStyleSheet(self.FIELD_STYLE)
         self.cmb_mode.setFixedSize(self.FIELD_W, self.FIELD_H)
         self.cmb_mode.currentIndexChanged.connect(self._sync_mode)
+        # Power, not Keep: Keep only means anything when there is an existing
+        # spacing pattern to hold, and it is the one mode that silently does
+        # nothing useful on a fresh chain (_sync_mode has to switch away from
+        # it). Set after the signal is connected so the Spacing Value field
+        # picks up K_DEFAULT on the way.
+        self.cmb_mode.setCurrentIndex(self.MODES.index('Power'))
         spacing_row.addWidget(spacing_label)
         spacing_row.addWidget(self.cmb_mode)
         spacing_row.addStretch()

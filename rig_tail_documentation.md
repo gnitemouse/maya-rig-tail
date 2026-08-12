@@ -525,13 +525,40 @@ Strip the rig back to bare skeleton + geometry — the reverse of a build,
 for handing a scene on or starting over. Scoped to the **Included** rig
 parts, the same roster the builder works on: an Excluded part is left built
 and untouched, and when anything is excluded the rig hierarchy stays
-standing (their controls and joints live in it). Keeps the BN joints in their
-current pose (as plain joints) with the geometry still bound to them;
-removes controls, curves, clusters, ikHandles, FX and utility networks,
-the FK/IK duplicate chains and the whole rig hierarchy. **Destructive and
-not an undo:** animation on the controls goes with the controls. Aborts
-rather than deleting the root group when a mesh or joint could not be moved
-out of it first. Verified by `rt_build_test.test_remove_rig()`.
+standing (their controls and joints live in it). Hands back the BN joints as
+plain joints **at rest** with the geometry still bound to them (see
+`capture_bn_poses`); removes controls, curves, clusters, ikHandles, FX and
+utility networks, the FK/IK duplicate chains and the whole rig hierarchy.
+**Destructive and not an undo:** animation on the controls goes with the
+controls. Aborts rather than deleting the root group when a mesh or joint
+could not be moved out of it first. Verified by
+`rt_build_test.test_remove_rig()`.
+
+#### `capture_bn_poses(parts, rest=True)`
+World matrix per BN joint, for restoring the skeleton later.
+
+**Rest, not live, wherever a rest pose is stored.** The rest anchor
+(`rig_tail_restpose`) records each joint's rest world matrix once and never
+re-captures, so it is the one description of the skeleton a posed rig
+cannot corrupt. Reading live instead means Remove Rig clicked on a posed rig
+hands back a skeleton frozen in that pose — correct-looking and wrong — and
+a rebuild re-anchors the whole setup to it. Falls back to the live matrix
+per joint when nothing is stored (a chain never built, or one Joint Chain
+Builder just re-spaced and cleared), which is the old behaviour.
+
+Every matrix is made rigid on the way out (`_rigid`). A BN joint's world
+matrix is not: volume preservation drives `.sy`/`.sz`, so a chain at rest
+reads a scale near 1.0004, and composing the OPM chain leaves shear in the
+low digits. A joint has no shear attribute, so writing that back bakes
+scale into the skeleton.
+
+#### `restore_bn_skeleton(parts, poses=None, bn_paths=None)`
+Turn the BN chains back into plain joints at their captured pose: pose in
+`jointOrient`, `offsetParentMatrix` at identity, no incoming drivers, the
+outgoing skinCluster bind untouched. Callers that tear the rig down must
+capture *before* the teardown and pass `poses` in — by then the live
+matrices are gone. Shared by `remove_rig` and, through
+`rig_tail.restore_bn_for_build`, by every build.
 
 #### `cleanup_dangling_curveinfo()`
 Delete curveInfo nodes with no input curve. `cmds.ikHandle` creates one on
@@ -838,6 +865,16 @@ so they define what "rest" means rather than merely seeding it.
 > curve fix stored an already-degraded pose, and the rig will now
 > reproduce that degraded shape faithfully as rest. On such a scene, call
 > `clear_rest_pose()` and rebuild once from a clean setup skeleton.
+
+**The anchor now also defines what the skeleton is restored to.** It is no
+longer only the IK curve's input: `rig_tail_cleanup.capture_bn_poses` reads
+`restMatrix` first and falls back to live, so Remove Rig and every rebuild
+hand the BN chains back at rest rather than at whatever pose the controls
+were holding. That makes clearing a stored rest pose a heavier act than it
+was — the fallback is the *current* pose, so clearing while a rig is posed
+and then rebuilding anchors the setup to that pose. Both callers that clear
+are scoped accordingly: Setup clears only the included parts it actually
+moved, and Joint Chain Builder clears only the chain it is writing.
 
 ### Functions
 

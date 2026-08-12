@@ -312,12 +312,17 @@ def run_setup(dry_run=None):
     if not dry_run:
         rt_maya.finalize_joint_channels(
             keyable=True, visibility=1, joint_dicts=[rt_constants.JOINTS_BN])
-        _clear_rest_pose()
+        # Only the chains this run actually touched: clearing is destructive
+        # (the anchor is captured once and never re-captured, so a cleared
+        # part rebuilds its rest from whatever pose BN is in), and a run with
+        # every option off, or with parts held back, moved nothing.
+        if do_orient or mir_orient or mir_joints:
+            _clear_rest_pose(rt_cache.active_parts())
 
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
 
 
-def _clear_rest_pose():
+def _clear_rest_pose(rignames=None):
     '''
     Clear any rest pose a previous build stamped on the BN joints.
 
@@ -326,10 +331,18 @@ def _clear_rest_pose():
     orientation, so the next build would drive the IK curve from a stale
     pose and the chain would jump. Clearing it makes the build recapture
     from the corrected skeleton. Best-effort; logs and continues on failure.
+
+    Scoped to the parts the caller actually moved. An excluded part keeps
+    its stored rest, the same way Setup leaves the rest of its skeleton
+    alone - clearing it would silently re-anchor a rig this run was told
+    not to touch, and the anchor cannot be recovered once dropped.
+
+    Arguments
+        rignames (list): Parts to clear, or None for every part in RIGPARTS.
     '''
     try:
         import rig_tail_restpose as rt_rest
-        rt_rest.clear_rest_pose()
+        rt_rest.clear_rest_pose(rignames)
     except Exception as err:
         logger.warning(f'Setup: could not clear stored rest pose: {err}')
 

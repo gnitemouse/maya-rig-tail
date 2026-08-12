@@ -250,6 +250,45 @@ def rig_tail_ik(rigname, typ=rt_constants.TYPE_IK):
 
 # RUN: RIG TAIL ========================================================
 
+def restore_bn_for_build(rignames=None):
+    '''
+    Put the BN skeleton back to plain joints before the build touches it.
+
+    THE PRECONDITION EVERY BUILD ASSUMES. A first-ever build gets a plain
+    posed skeleton and works from it; a rebuild used to get a skeleton whose
+    shape lived only in the previous build's offsetParentMatrix network, and
+    the first thing the pipeline does is delete the FK/IK chains that
+    network reads (rig_tail_cleanup.create_rename_joints), which collapsed
+    the whole chain onto its parent before cleanup had even run.
+
+    Establishing the precondition up front is deliberately not the same fix
+    as reordering the pipeline so chains are rebuilt after teardown. The
+    reorder only holds if disconnecting a joint leaves its
+    offsetParentMatrix on its last value; this holds no matter what
+    disconnect does, because afterwards nothing drives BN at all.
+
+    Restores to the stored REST pose where there is one, so a rebuild fired
+    on a posed rig re-anchors to rest rather than freezing the pose into the
+    skeleton. See rig_tail_cleanup.capture_bn_poses.
+
+    Runs before set_joints/set_joints_auto, and only on the parts being
+    built - an excluded part's rig is still live and still driving its
+    joints.
+
+    Arguments
+        rignames (list): parts to restore, or None for the active roster
+    '''
+    # Chain detection only: fills JOINTS_BN without duplicating FK/IK, which
+    # is the very step that must not run first
+    rt_cleanup.detect_joints_bn()
+    parts = rignames if rignames is not None else rt_cache.active_parts()
+    parts = [p for p in parts if p in rt_constants.JOINTS_BN]
+    if not parts:
+        return
+    with rt_maya.timed('cleanup.restore_bn'):
+        rt_cleanup.restore_bn_skeleton(parts)
+
+
 def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
     '''
     Rig a single tail from a single joint chain.
@@ -269,6 +308,7 @@ def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
             rt_maya.build_timer('rig_tail_single') as timer:
         with timer.phase('cleanup'):
             rt_cleanup.set_root(root)
+            restore_bn_for_build([root])
             rt_cleanup.set_joints(root, start_jnt, end_jnt)
             rt_cleanup.cleanup_rig(fk, ik)
         with timer.phase('setup'):
@@ -293,6 +333,7 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
             rt_maya.build_timer('rig_tail_multiple') as timer:
         with timer.phase('cleanup'):
             rt_cleanup.set_root(root)
+            restore_bn_for_build()
             rt_cleanup.set_joints_auto()
             rt_cleanup.cleanup_rig(fk, ik)
         with timer.phase('setup'):
@@ -323,6 +364,11 @@ def rig_tail_selected(root=None, fk=True, ik=True):
             rt_maya.build_timer('rig_tail_selected') as timer:
         with timer.phase('cleanup'):
             rt_cleanup.set_root(root)
+            # Roster first, then the BN restore, then the chains. set_joints
+            # deletes the FK/IK chains the live rig is driving BN through, so
+            # it must not run until BN can hold its own pose - see
+            # restore_bn_for_build.
+            picked = []
             for jnt in selected:
                 if cmds.objectType(jnt, i='joint'):
                     rigname = rt_naming.get_rigname(jnt, rt_constants.JOINT)
@@ -330,7 +376,10 @@ def rig_tail_selected(root=None, fk=True, ik=True):
                         rt_constants.RIGPARTS.append(rigname)
                     # Selected outright, so build it even if it was excluded
                     rt_cache.include_parts([rigname])
-                    rt_cleanup.set_joints(rigname, jnt)
+                    picked.append((rigname, jnt))
+            restore_bn_for_build([r for r, _ in picked])
+            for rigname, jnt in picked:
+                rt_cleanup.set_joints(rigname, jnt)
             rt_cleanup.cleanup_rig(fk, ik)
         with timer.phase('setup'):
             rt_cleanup.setup_rig(fk, ik)

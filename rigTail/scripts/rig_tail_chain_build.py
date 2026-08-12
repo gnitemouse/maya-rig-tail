@@ -343,6 +343,39 @@ def _apply_radius(joints, radius):
 
 # WRITING THE RESULT ====================================================
 
+def _clear_rest_pose(joints):
+    '''
+    Drop the stored rest pose from joints Chain Builder is about to move.
+
+    Works on the joints in hand rather than calling
+    rig_tail_restpose.clear_rest_pose, which reads rt_constants.JOINTS_BN:
+    Chain Builder runs off the viewport selection and may be pointed at a
+    chain that is not in the roster, or in a session where that cache was
+    never filled, and either way the cache-driven version would silently
+    clear nothing. Best-effort; logs and continues on failure.
+
+    Arguments
+        joints (list): chain joints as full DAG paths, _ee_ included.
+    '''
+    try:
+        import rig_tail_restpose as rt_rest
+        attr = rt_rest.REST_ATTR
+    except Exception as err:
+        logger.warning(f'Chain Builder: could not load the rest pose module: {err}')
+        return
+    for jnt in joints:
+        try:
+            if not cmds.objExists(jnt):
+                continue
+            if not cmds.attributeQuery(attr, node=jnt, exists=True):
+                continue
+            cmds.setAttr(f'{jnt}.{attr}', lock=False)
+            cmds.deleteAttr(f'{jnt}.{attr}')
+            logger.trace(f'Cleared rest pose on {jnt}')
+        except Exception as err:
+            logger.warning(f"Chain Builder: could not clear rest pose on '{jnt}': {err}")
+
+
 def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
                  reserved=None):
     '''
@@ -378,6 +411,15 @@ def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
     old_n = len(bn)
     ee = _find_ee(joints)
     ee_distance = rt_math.get_vec_length(ee, bn[-1]) if ee else 0.0
+
+    # Every write reaches here, so this is the one place that has to drop the
+    # rest anchor (rig_tail_restpose). A stored restMatrix describes where the
+    # joints WERE, and the build treats it as the definition of rest and never
+    # re-captures - so a chain re-spaced under a surviving anchor rebuilds to
+    # its old shape and looks correct doing it. Grow is accidentally safe (the
+    # new joints carry no attribute and rest_positions is all-or-nothing), but
+    # a same-count re-space and a shrink both leave a complete, stale list.
+    _clear_rest_pose(joints)
 
     # Renumber BEFORE the count changes, so the rename pass only ever sees
     # joints that already exist; _grow_chain names what it creates itself.
@@ -948,7 +990,7 @@ def _write_frame(joint, frame, pos):
     cmds.setAttr(f'{joint}.rotate', 0, 0, 0)
 
 
-def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
+def rebuild(root_joint, n, mode='power', param=None, invert=False, snap=True,
             orient=False, start_joint=None, add_ee=False):
     """
     Re-space an existing BN chain at a different joint count.
@@ -1149,7 +1191,7 @@ def rebuild(root_joint, n, mode='keep', param=None, invert=False, snap=True,
         return result
 
 
-def rebuild_selected(n, mode='keep', param=None, invert=False, snap=True,
+def rebuild_selected(n, mode='power', param=None, invert=False, snap=True,
                      orient=False, from_selected=False, add_ee=False):
     """
     Re-space the chain(s) in the current selection.

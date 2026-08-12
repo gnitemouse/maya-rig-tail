@@ -51,8 +51,16 @@ now reproduce that degraded shape faithfully, as rest, and look correct
 doing it. On such a scene call clear_rest_pose() and rebuild once from a
 clean setup skeleton so the capture is the pose you actually want.
 
-Scope is deliberately minimal: it fixes only the curve input. It does not
-restore BN and does not stamp FK.
+Scope is no longer only the curve input. rig_tail_cleanup.capture_bn_poses
+reads the stored rest first and falls back to live, so this is also what
+Remove Rig and every rebuild restore the BN skeleton TO. The module still
+does not restore BN itself and does not stamp FK - it owns the record, not
+the writing - but the record now has a second reader, and clearing it is
+correspondingly heavier: the fallback is the CURRENT pose, so clearing
+while a rig is posed and then rebuilding anchors the setup to that pose.
+Both callers that clear are scoped to what they touched (rig_tail_setup
+clears the included parts it moved, rig_tail_chain_build the chain it
+writes).
 
 Swap point: the build touches this module in two places. build_rig_tail
 calls capture_rest_pose once at build start, and rig_tail_ik calls

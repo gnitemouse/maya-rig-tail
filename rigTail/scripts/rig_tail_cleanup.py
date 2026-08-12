@@ -48,6 +48,7 @@ Functions:
 import fnmatch
 import re
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
@@ -253,17 +254,15 @@ def remove_rig():
         logger.warning('Every rig part is excluded; nothing to remove')
         return False
 
-    # 1. Capture the posed skeleton while the rig still drives it, keyed by
+    # 1. Capture the skeleton while the rig still drives it (see
+    # capture_bn_poses: rest where it is stored, live otherwise), keyed by
     # full path so step 3 cannot re-resolve to a different node
-    poses = {}
-    bn_paths = {}
-    for rigname in parts:
-        bn_paths[rigname] = [p for p in
-                             (unique_path(j)
-                              for j in rt_constants.JOINTS_BN.get(rigname, []))
-                             if p]
-        for path in bn_paths[rigname]:
-            poses[path] = cmds.xform(path, q=True, ws=True, matrix=True)
+    poses = capture_bn_poses(parts)
+    bn_paths = {rigname: [p for p in
+                          (unique_path(j)
+                           for j in rt_constants.JOINTS_BN.get(rigname, []))
+                          if p]
+                for rigname in parts}
     logger.debug(f'Captured {len(poses)} BN joint poses')
 
     # 2. Tear down each part, then the duplicated chains. One conversion
@@ -287,19 +286,7 @@ def remove_rig():
         _DEFER_CONVERSION_SWEEP = False
 
     # 3. Restore the skeleton as plain joints, root to tip
-    for rigname in parts:
-        for jnt in bn_paths[rigname]:
-            if not cmds.objExists(jnt):
-                continue
-            rt_maya.disconnect_all(jnt, source=True, destination=False)
-            rt_maya.reset_opm(jnt)
-            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
-            cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
-            cmds.setAttr(f'{jnt}.scale', 1, 1, 1)
-            cmds.xform(jnt, ws=True, matrix=poses[jnt])
-            rot = cmds.getAttr(f'{jnt}.rotate')[0]
-            cmds.setAttr(f'{jnt}.jointOrient', rot[0], rot[1], rot[2])
-            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+    restore_bn_skeleton(parts, poses=poses, bn_paths=bn_paths)
     # Leave the skeleton keyable and visible, as the Setup phase does.
     # Outside the part loop: it walks the whole BN cache on every call, so
     # calling it per part re-did the same work once per rig part. Scoped to
@@ -369,6 +356,161 @@ def remove_rig():
 
     logger.info(f'Remove Rig complete ({len(poses)} skeleton joints kept)')
     return removed
+
+
+def _rigid(matrix):
+    '''
+    The rigid part of a 4x4 row-major world matrix.
+
+    A BN joint's world matrix is not rigid. Volume preservation drives .sy
+    and .sz (rig_tail_stretch), so a chain at rest still reads a scale near
+    1.0004, and composing the OPM chain leaves shear in the low digits. A
+    joint has no shear attribute, so writing such a matrix straight back
+    bakes scale into the skeleton and hands Maya a transform it cannot
+    store on a joint.
+
+    Gram-Schmidt off X, which is the axis the chain aims down: X keeps its
+    direction exactly, Z is made perpendicular to X and the old Y, and Y is
+    rebuilt from those. Translation is copied untouched, so world positions
+    come back exact; only the scale and the skew go.
+
+    Arguments
+        matrix (list): 16 floats, row-major
+
+    Return
+        list: 16 floats, orthonormal basis and the original translation
+    '''
+    x = om.MVector(matrix[0], matrix[1], matrix[2])
+    y = om.MVector(matrix[4], matrix[5], matrix[6])
+    z = x ^ y
+    # A degenerate basis has no rigid version to find - leave it to the
+    # caller's matrix rather than writing an invalid frame
+    if x.length() < 1e-9 or z.length() < 1e-9:
+        return list(matrix)
+    x.normalize()
+    z.normalize()
+    y = z ^ x
+    return [x.x, x.y, x.z, 0.0,
+            y.x, y.y, y.z, 0.0,
+            z.x, z.y, z.z, 0.0,
+            matrix[12], matrix[13], matrix[14], 1.0]
+
+
+def capture_bn_poses(parts, rest=True):
+    '''
+    World matrix per BN joint, for restoring the skeleton later.
+
+    REST, NOT LIVE, wherever a rest pose is stored. The rest anchor
+    (rig_tail_restpose) records each joint's rest world matrix on the first
+    build and never re-captures, so it is the one description of the
+    skeleton that a posed rig cannot corrupt. Reading live instead means
+    Remove Rig clicked on a posed rig hands back a skeleton frozen in that
+    pose - correct-looking and wrong - and a rebuild re-anchors the whole
+    setup to it. Falls back to the live matrix per joint when nothing is
+    stored (a chain that has never been built, or one Joint Chain Builder
+    just re-spaced and cleared), which is the old behaviour.
+
+    Every matrix is made rigid on the way out (see _rigid).
+
+    Arguments
+        parts (list): rig parts to capture
+        rest (bool): False to force live capture and ignore any stored rest
+
+    Return
+        dict: {joint full path: 16-float world matrix}
+    '''
+    try:
+        import rig_tail_restpose as rt_rest
+        rest_attr = rt_rest.REST_ATTR
+    except Exception as err:
+        logger.warning(f'Could not load the rest pose module, capturing live: {err}')
+        rest_attr = None
+
+    poses = {}
+    stored = 0
+    for rigname in parts:
+        for jnt in rt_constants.JOINTS_BN.get(rigname, []):
+            path = unique_path(jnt)
+            if not path:
+                continue
+            matrix = None
+            if rest and rest_attr and cmds.attributeQuery(rest_attr, node=path,
+                                                          exists=True):
+                try:
+                    matrix = cmds.getAttr(f'{path}.{rest_attr}')
+                    stored += 1
+                except RuntimeError as err:
+                    logger.warning(f"Could not read the rest pose on '{path}': {err}")
+                    matrix = None
+            if matrix is None:
+                matrix = cmds.xform(path, q=True, ws=True, matrix=True)
+            poses[path] = _rigid(matrix)
+    logger.debug(f'Captured {len(poses)} BN poses ({stored} from the stored rest)')
+    return poses
+
+
+def restore_bn_skeleton(parts, poses=None, bn_paths=None):
+    '''
+    Turn the BN chains back into plain joints at their captured pose.
+
+    The build zeroes every BN joint's local TRS and jointOrient and drives
+    the pose through offsetParentMatrix (rig_tail_matrix), so a built
+    skeleton carries its shape ONLY in a live node network. Anything that
+    disturbs that network - deleting the FK/IK chains the blendMatrix reads,
+    tearing the rig down, disconnecting the joints - collapses the chain
+    onto its parent, and there is nothing left to recover it from.
+
+    This puts the shape back where a joint can hold it on its own: pose in
+    jointOrient, offsetParentMatrix at identity, no incoming connections.
+    After it runs the chain is what a first-ever build sees, so the order of
+    everything downstream stops mattering.
+
+    Only INCOMING connections are cut, so the outgoing worldMatrix ->
+    skinCluster geometry bind survives and the mesh keeps deforming (the
+    same rule as cleanup_rigname and remove_rig).
+
+    Arguments
+        parts (list): rig parts to restore
+        poses (dict): captured matrices from capture_bn_poses. Captured here
+            when not given - callers that tear the rig down first must
+            capture BEFORE the teardown and pass the result in, since by
+            then the live matrices are gone.
+        bn_paths (dict): rigname -> joint paths, when the caller already
+            resolved them
+
+    Return
+        int: joints restored
+    '''
+    if poses is None:
+        poses = capture_bn_poses(parts)
+    if bn_paths is None:
+        bn_paths = {rigname: [p for p in
+                              (unique_path(j)
+                               for j in rt_constants.JOINTS_BN.get(rigname, []))
+                              if p]
+                    for rigname in parts}
+
+    restored = 0
+    for rigname in parts:
+        # Root to tip: each joint is written in world space, so a parent has
+        # to be sitting at its own restored pose before its child is placed
+        for jnt in bn_paths.get(rigname, []):
+            if not cmds.objExists(jnt) or jnt not in poses:
+                continue
+            rt_maya.disconnect_all(jnt, source=True, destination=False)
+            rt_maya.reset_opm(jnt)
+            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+            cmds.setAttr(f'{jnt}.jointOrient', 0, 0, 0)
+            cmds.setAttr(f'{jnt}.scale', 1, 1, 1)
+            cmds.xform(jnt, ws=True, matrix=poses[jnt])
+            # The matrix is rigid, so this leaves scale at 1 and shear at 0
+            # rather than re-applying the squash scale the old capture carried
+            rot = cmds.getAttr(f'{jnt}.rotate')[0]
+            cmds.setAttr(f'{jnt}.jointOrient', rot[0], rot[1], rot[2])
+            cmds.setAttr(f'{jnt}.rotate', 0, 0, 0)
+            restored += 1
+    logger.debug(f'Restored {restored} BN joints as plain joints')
+    return restored
 
 
 def unique_path(node):
