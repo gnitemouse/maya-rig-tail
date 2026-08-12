@@ -373,16 +373,34 @@ its aim axis. The aim must keep pointing down the chain (the spline IK and
 the advanced twist both read it), so the roll is the only freedom left, and
 there are exactly two right-handed choices, 180 degrees apart:
 
-| Value | Same channel value on both sides | Equivalent to |
-|-------|----------------------------------|---------------|
-| `symmetric` (default) | Moves the target as the **exact mirror** of the source: both tails curl up together, both curl outward together. | Maya `mirrorJoint -mirrorBehavior` |
-| `parallel` | Moves the two sides **opposite ways**: a splayed pair reads as one curling up while the other curls down. | a plain orientation mirror |
+| Value | Which local axis moves the two sides as mirror images |
+|-------|-------------------------------------------------------|
+| `symmetric` (default) | The **up** axis (`ORIENT_UP_AXIS`, Z by default): the same channel value curls both tails up together, both outward together. |
+| `parallel` | The **third** axis (the one that is neither aim nor up, Y by default). |
 
-Because the two differ only by a 180 degree roll about the aim, running
-**Roll Chain** at 180 on the target side converts one into the other for a
-single chain — useful when one pair wants the opposite convention. Ignored
-when `MIRROR_ORIENT` is off (a positions-only mirror does not touch
-orientation).
+**Only one axis can mirror, and the behavior chooses which.** This is the
+thing the names do not say and it surprises everyone once. A local axis
+moves the two sides as mirror images only when the target's copy of it
+points *opposite* the reflection of the source's; a reflection flips
+handedness, so a right-handed frame can satisfy that on an **odd** number
+of its three axes. The aim axis is not one of them — it has to keep
+pointing down the chain — which leaves exactly one. The other two drive
+both sides the same way round the world, which reads in the viewport as
+the pair moving oppositely. Under the default (`symmetric`, aim X, up Z):
+rotate/wave/curl **Z** mirrors, **Y** and the twist about **X** do not.
+
+Because the two behaviors differ only by a 180 degree roll about the aim,
+running **Roll Chain** at 180 on the target side converts one into the
+other for a single chain — useful when one pair wants the opposite
+convention. Ignored when `MIRROR_ORIENT` is off (a positions-only mirror
+does not touch orientation).
+
+No joint orientation escapes this, so the FX fix it on the way in instead:
+`rt_anim.fx_mirror_signs` measures how a pair's chains actually relate and
+negates the axes that need it on one side, giving curl, wave and noise
+full L/R symmetry on all three axes (`MIRROR_FX`). The FK and IK controls
+are unaffected — an animator posing a gizmo still gets the one mirrored
+axis the table above names.
 
 ### Include / Exclude
 
@@ -809,9 +827,29 @@ the BN offsetParentMatrix by `rig_tail_matrix` — joints rotate about
 their own pivots and their channels stay untouched. Attribute sources go
 through `rt_ctrlall.resolved_plug` so the dashboard can route them.
 
+**Curl** shares one falloff profile between the three axes: each joint's
+share of the bend is `u ** curl_falloff`, normalised by the live sum of
+those shares, so a curl value names the **total** wrap of the whole chain
+(`CURL_DEGREES_PER_UNIT`, 72 — two full turns at the top of the slider)
+whatever the joint count, and the falloff only decides how that wrap is
+spread. A per-joint clamp (`CURL_MAX_JOINT_DEGREES`, 90) keeps the tip
+inside the coil: the profile peaks at the tip, and an unclamped last joint
+folds out of the spiral. A chain with enough joints spreads the wrap
+thinly enough never to reach the guard and coils twice; a sparse one
+saturates its last joints and stops tightening, which is the honest limit
+— a 12-bone chain cannot draw two clean turns. Lowering `curl_falloff`
+buys most of it back by spreading the same total over the whole chain.
+
+**L/R symmetry** comes from `fx_mirror_signs`, which measures how a pair's
+BN chains actually relate and negates the axes that would otherwise drive
+both sides the same way round the world (see `MIRROR_BEHAVIOR` above for
+why the joint orientation cannot do this). Only the non-`MIRROR_SOURCE_SIDE`
+half of a pair is signed; centre and unpaired parts are untouched. Set
+`MIRROR_FX` to False for the old per-side-raw behavior.
+
 Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
-`build_loop`, `build_wave`, `build_curl`, `build_noise`,
-`delete_expression`.
+`fx_mirror_signs`, `build_loop`, `build_wave`, `build_curl`,
+`build_noise`, `delete_expression`.
 
 ---
 

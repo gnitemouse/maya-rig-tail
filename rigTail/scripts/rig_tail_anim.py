@@ -19,15 +19,22 @@ through rt_ctrlall.resolved_plug so the Main Controller dashboard can route
 them, and expressions are deleted via delete_expression - a raw delete
 on a connected expression cascades through its connection web.
 
+An L/R pair reads its FX as mirror images: fx_mirror_signs measures how
+the two chains' joint frames actually relate and negates the axes that
+would otherwise drive the two sides the same way round the world. See
+MIRROR_FX for why a mirrored skeleton alone cannot deliver this.
+
 Functions:
     delete_expression: remove an expression without the delete cascading
     build_anim_effects: entry point; build the enabled FX for one part
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
+    fx_mirror_signs: per-axis sign making a part's FX mirror its L/R partner
     build_loop: modulo-time driver the other FX read
     build_wave, build_curl, build_noise: one network per effect
 '''
 
+import math
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_constants
@@ -48,12 +55,46 @@ LOOP_FRAME_DEFAULT = 60
 # Time-source expression for wave/noise when the Loop effect is not built.
 UNLOOPED_TIME_SRC = f'(time1.outTime * {TWO_PI / LOOP_FRAME_DEFAULT})'
 # Degrees of TOTAL bend, base to tip, that one unit of a curl attribute adds.
-# The curl attributes run -10..10, so 36 puts a full 360-degree coil at each
-# end of the slider. Curl names the whole chain's wrap, not a per-joint angle
-# (see build_curl), which is what keeps the tip inside the coil instead of
-# folding out of it, and what makes a 12-joint and an 80-joint tail curl by
-# the same amount.
-CURL_DEGREES_PER_UNIT = 36.0
+# The curl attributes run -10..10, so 72 puts TWO full turns at each end of
+# the slider. Curl names the whole chain's wrap, not a per-joint angle
+# (see build_curl), which is what makes a 12-joint and an 80-joint tail curl
+# by the same amount.
+CURL_DEGREES_PER_UNIT = 72.0
+# Ceiling on the bend any SINGLE joint takes, whatever total the curl value
+# and the falloff ask for. This is what keeps the tip inside the coil rather
+# than folding out of it: the total above is shared out by the falloff
+# profile, which peaks at the tip, and a chain with few joints cannot carry
+# two turns without giving that last joint an absurd angle. The guard caps
+# it, so a sparse chain simply stops tightening near the top of the slider
+# while a dense one reaches the full wrap. Raising the total therefore only
+# spends where the joint count can carry it. See build_curl.
+CURL_MAX_JOINT_DEGREES = 90.0
+# Make an L/R pair's FX read as mirror images of each other.
+#
+# WHY THIS IS NEEDED. A mirrored skeleton cannot do it on its own. The FX
+# rotate each joint about its own local axes, and 'the same channel value
+# moves the two sides as mirror images' holds for a local axis only when the
+# target's copy of it points OPPOSITE the reflection of the source's. A
+# reflection flips handedness, so a joint frame can satisfy that on an ODD
+# number of its three axes - and the aim axis is not one of them, because it
+# has to keep pointing down the chain for the spline IK and the twist. That
+# leaves exactly one axis mirroring, and MIRROR_BEHAVIOR only chooses which:
+# 'symmetric' picks the up axis (ORIENT_UP_AXIS), 'parallel' the third one.
+# The other two axes drive both sides the same way round the world, which
+# reads as the pair moving oppositely.
+#
+# So the fix cannot live in the joint orientation; it lives here, as a sign
+# on the value going in. fx_mirror_signs measures the two chains rather than
+# assuming a mirror was run, and negates only the axes that need it, on one
+# side of the pair only (the side that is not MIRROR_SOURCE_SIDE).
+#
+# Off leaves every part's FX driving its own axes raw, which is how builds
+# before this behaved.
+MIRROR_FX = True
+# Below this |cos| between a target axis and the reflection of its partner's,
+# the two chains are not mirror images on that axis and no sign can make them
+# read as one; fx_mirror_signs leaves it alone and says so.
+MIRROR_FX_TOLERANCE = 0.5
 
 
 def delete_expression(expr):
@@ -88,6 +129,9 @@ def build_anim_effects(rigname, fk, ik):
     by build_matrix_offset_network() in rig_tail_matrix.py.
     Each FX writes to its own composeMatrix.
 
+    The mirror signs are measured once here and handed to every effect, so
+    all three read the pair the same way (see fx_mirror_signs).
+
     Arguments
         rigname (str): Name of rig component
         fk (bool): Connect FK anim effects
@@ -101,17 +145,18 @@ def build_anim_effects(rigname, fk, ik):
 
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     joints = rt_constants.JOINTS_BN[rigname]
+    signs = fx_mirror_signs(rigname)
 
     loop_time = None
     if rt_constants.EFFECTS['loop']:
         loop_time = build_loop(rigname, basectrl)
 
     if rt_constants.EFFECTS['wave']:
-        build_wave(rigname, basectrl, joints, loop_time)
+        build_wave(rigname, basectrl, joints, loop_time, signs)
     if rt_constants.EFFECTS['curl']:
-        build_curl(rigname, basectrl, joints)
+        build_curl(rigname, basectrl, joints, signs)
     if rt_constants.EFFECTS['noise']:
-        build_noise(rigname, basectrl, joints, loop_time)
+        build_noise(rigname, basectrl, joints, loop_time, signs)
 
 def add_anim_attributes_to_basectrl(rigname, basectrl):
     logger.debug(f'{rigname}: Add animation effect attributes to basectrl')
@@ -154,6 +199,152 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
         if not cmds.attributeQuery('loop_frame', n=basectrl, ex=1):
             cmds.addAttr(basectrl, ln='loop_frame', nn='Loop Frame', at='long', k=1,
                          dv=LOOP_FRAME_DEFAULT, min=1)
+
+
+# MIRROR ===============================================================
+
+NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
+
+
+def fx_mirror_signs(rigname):
+    '''
+    Per-axis sign that makes this part's FX read as the mirror of its L/R
+    partner's. See MIRROR_FX for why the joint orientation cannot do this.
+
+    Only the target side of a pair is signed - the side that is NOT
+    rt_constants.MIRROR_SOURCE_SIDE - so exactly one of the two moves and
+    the source keeps driving its own axes raw. A center part, an unpaired
+    part, and the source side all come back unsigned.
+
+    The signs are MEASURED, never assumed: for each axis, the target's copy
+    of it is compared against the reflection of the source's across the
+    symmetry plane, over the whole chain. Anti-parallel means that axis
+    already mirrors and keeps +1; parallel means it drives both sides the
+    same way round the world and takes -1. The test only reads the SIGN of a
+    dot product, so it survives the small orientation differences of two
+    hand-placed chains - and a pair that is not a mirror on some axis
+    (|cos| under MIRROR_FX_TOLERANCE) is left alone with a warning, since
+    no sign would make those two read as one motion.
+
+    Measuring rather than deriving the answer from MIRROR_BEHAVIOR means
+    this is right for chains that were oriented by hand or rolled with the
+    Setup UI's Roll Chain, which never went through mirror_frames at all.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
+    '''
+    if not MIRROR_FX:
+        return dict(NO_MIRROR)
+
+    partner = _mirror_partner(rigname)
+    if not partner:
+        return dict(NO_MIRROR)
+
+    src = rt_constants.JOINTS_BN.get(partner) or []
+    tgt = rt_constants.JOINTS_BN.get(rigname) or []
+    if not src or not tgt:
+        # Only reachable when the partner was never detected this session
+        # (excluded from every run since Maya started). Worth saying out
+        # loud: this side builds unsigned while the partner keeps whatever
+        # signs its own build gave it, so the pair stops matching.
+        logger.warning(f'{rigname}: FX mirror: no BN chain for {partner}, '
+                       'building the FX unsigned - run Setup so both sides '
+                       'of the pair are detected')
+        return dict(NO_MIRROR)
+
+    keep = {'x': 0, 'y': 1, 'z': 2}.get(
+        str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).lower(), 0)
+
+    # Mean cos between each target axis and the reflection of the source's.
+    # Averaged over the chain rather than read off one joint: a single joint
+    # can sit oddly (a hand-tweaked tip, an un-oriented base) without that
+    # being what the chain as a whole does.
+    cosines = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
+    # Only the joints both chains actually have, and only those still in the
+    # scene: a stale JOINTS_BN entry naming a deleted joint must not take the
+    # build down over a sign
+    pairs = [(s, t) for s, t in zip(src, tgt)
+             if cmds.objExists(s) and cmds.objExists(t)]
+    if not pairs:
+        logger.warning(f'{rigname}: FX mirror: no joints in common with '
+                       f'{partner}, building the FX unsigned')
+        return dict(NO_MIRROR)
+    for src_jnt, tgt_jnt in pairs:
+        src_rows = _axis_rows(src_jnt)
+        tgt_rows = _axis_rows(tgt_jnt)
+        for row, axis in enumerate('XYZ'):
+            reflected = [(-v if i == keep else v)
+                         for i, v in enumerate(src_rows[row])]
+            cosines[axis] += sum(reflected[i] * tgt_rows[row][i]
+                                 for i in range(3))
+    for axis in cosines:
+        cosines[axis] /= len(pairs)
+
+    signs = dict(NO_MIRROR)
+    for axis, cos in cosines.items():
+        if abs(cos) < MIRROR_FX_TOLERANCE:
+            logger.warning(f'{rigname}: FX mirror: the {axis} axis is not a '
+                           f'mirror of {partner} (cos {cos:+.2f}), leaving it '
+                           'unsigned - re-run Setup Mirror Orient on the pair')
+            continue
+        # Anti-parallel (cos < 0) already mirrors; parallel needs negating
+        signs[axis] = 1.0 if cos < 0 else -1.0
+
+    flipped = ''.join(a for a in 'XYZ' if signs[a] < 0)
+    logger.debug(f'{rigname}: FX mirror of {partner}: '
+                 f'{"negating " + flipped if flipped else "nothing to negate"}')
+    return signs
+
+
+def _mirror_partner(rigname):
+    '''
+    The rig part this one should mirror, or None when it should not.
+
+    Only the target side of an L/R pair gets a partner, so exactly one side
+    of the pair is ever signed (see fx_mirror_signs). Pairing is
+    rig_tail_setup's find_mirror_pairs, so the FX agree with the Setup
+    phase's idea of what pairs with what.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        str or None: the source-side partner, or None
+    '''
+    # Deferred: rig_tail_setup is the Setup phase's module and pulls in the
+    # cleanup and cache modules with it; the FX only need one function of it
+    import rig_tail_setup as rt_setup
+    try:
+        pairs, _ = rt_setup.find_mirror_pairs(rt_constants.RIGPARTS)
+    except Exception as err:
+        logger.warning(f'{rigname}: FX mirror: cannot pair rig parts ({err})')
+        return None
+    for source, target in pairs:
+        if target == rigname:
+            return source
+    return None
+
+
+def _axis_rows(node):
+    '''
+    A node's three local axes (X/Y/Z) as unit world vectors.
+
+    Normalized so the cosines fx_mirror_signs sums are comparable between
+    joints: a joint carrying scale (the squash network drives BN scaleY/Z)
+    would otherwise weigh more than its neighbours.
+    '''
+    m = cmds.xform(node, q=True, ws=True, matrix=True)
+    rows = ([m[0], m[1], m[2]],
+            [m[4], m[5], m[6]],
+            [m[8], m[9], m[10]])
+    unit = []
+    for row in rows:
+        length = math.sqrt(sum(v * v for v in row))
+        unit.append([v / length for v in row] if length > 1e-9 else row)
+    return unit
 
 
 # LOOP =================================================================
@@ -201,25 +392,28 @@ if ($loop_enabled > 0.5) {{
 
 # WAVE =================================================================
 
-def build_wave(rigname, basectrl, joints, loop_time=None):
+def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
     Build wave animation effect with adjustable falloff.
     Creates one expression per joint per axis that writes directly to composeMatrix.
     ComposeMatrix nodes are pre-created by build_matrix_offset_network().
 
-    Wave = sin(u*frequency + time*speed) * amplitude * (u^falloff)
+    Wave = sin(u*frequency + time*speed) * amplitude * (u^falloff) * sign
 
     Arguments:
         rigname (str): Name of rig component
         basectrl (str): Base control with wave attributes
         joints (list): List of BN joints (joint 00 will be skipped in matrix network)
         loop_time (str): Optional loop time output plug
+        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+            leaves every axis driving its own direction raw
     '''
     logger.trace(f'{rigname}: Wave Animation Effect')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for wave')
         return
 
+    signs = signs or NO_MIRROR
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     num_joints = len(joints)
     # With no loop node, normalize raw time the same way the loop node does
@@ -263,7 +457,7 @@ if ($loop_enabled > 0.5) {{
     $freq = $wave_freq;
     $speed = $wave_speed;
 }}
-float $amp = {amp_src} * 3.0;
+float $amp = {amp_src} * {3.0 * signs[rot_axis]};
 float $falloff = {falloff_src};
 float $t = {time_source};
 float $u = {u};
@@ -284,7 +478,7 @@ float $out = $val * $amp * $w;
 
 # CURL =================================================================
 
-def build_curl(rigname, basectrl, joints):
+def build_curl(rigname, basectrl, joints, signs=None):
     '''
     Build curl animation effect with adjustable falloff.
     Uses DG node graph per joint for clean connections.
@@ -293,39 +487,57 @@ def build_curl(rigname, basectrl, joints):
     Math, for joint i of n (u = i / (n - 1), 0 at the base, 1 at the tip):
 
         share_i  = u_i ** curl_falloff / SUM_j(u_j ** curl_falloff)
-        rotate_i = curl * CURL_DEGREES_PER_UNIT * share_i
+        rotate_i = clamp(curl * CURL_DEGREES_PER_UNIT * share_i,
+                         +/- CURL_MAX_JOINT_DEGREES)
 
     The shares SUM TO ONE, so a curl attribute names the total bend of the
     whole chain and the falloff only decides how that bend is distributed
     along it - tip-loaded at a high falloff, near-uniform at a low one.
 
-    Normalizing is what keeps the tip in the coil. The per-joint rotations
-    compound down the BN hierarchy, so the chain's total wrap is their sum;
-    an unnormalized u**falloff profile made that sum grow with both the curl
-    value AND the joint count, and gave the last joint the largest single
-    angle. Past a fairly low curl value that angle passed a right angle on
-    its own, folding the final bone (and the '_ee_' riding on it) out of an
-    otherwise tidy spiral, while a denser chain curled further than a sparse
-    one at the same slider value. Dividing by the live sum bounds the total
-    at curl * CURL_DEGREES_PER_UNIT degrees whatever the joint count, and
-    caps the tip joint at its own share of that.
+    Normalizing is what makes the total mean something. The per-joint
+    rotations compound down the BN hierarchy, so the chain's total wrap is
+    their sum; an unnormalized u**falloff profile made that sum grow with
+    both the curl value AND the joint count, so a denser chain curled
+    further than a sparse one at the same slider value. Dividing by the live
+    sum bounds the total at curl * CURL_DEGREES_PER_UNIT degrees whatever
+    the joint count.
+
+    The per-joint clamp is what keeps the tip in the coil. The share profile
+    peaks at the tip, so the last joint always takes the largest single
+    angle; left alone it passes a right angle and folds the final bone (and
+    the '_ee_' riding on it) out of an otherwise tidy spiral. Clamping the
+    ANGLE rather than lowering the total is what lets the total go to two
+    full turns: a chain with enough joints spreads that wrap thinly enough
+    to never reach the guard and coils twice, while a sparse chain saturates
+    its last joints and simply stops tightening. Tightness is limited by the
+    joint count, which is the truth of the thing - a 12-bone chain cannot
+    draw two clean turns. A LOWER curl_falloff buys back most of it: it
+    spreads the same total over the whole chain instead of piling it on the
+    last few joints, so far less of it is lost to the guard.
 
     The profile (u**falloff and its sum) is built once per chain and shared
     by all three axes: it does not depend on the axis, and one copy means
     curlX/Y/Z stay consistent by construction. The tip joint always
-    contributes u**falloff = 1, so the divisor can never reach zero.
+    contributes u**falloff = 1, so the divisor can never reach zero. The
+    clamp is likewise one node per joint carrying all three axes on its
+    R/G/B channels.
 
     Arguments:
         rigname (str): Name of rig component
         basectrl (str): Base control with curl attributes
         joints (list): List of BN joints (joint 00 will be skipped)
+        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+            leaves every axis curling its own direction raw
     '''
     logger.trace(f'{rigname}: Curl Animation Effect')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for curl')
         return
 
+    signs = signs or NO_MIRROR
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]
+    # Rotation axis -> the clamp channel carrying it (one clamp per joint)
+    clamp_channel = {'X': 'R', 'Y': 'G', 'Z': 'B'}
     curl_joints = list(enumerate(joints[1:], 1))
     span = float(len(joints) - 1)
 
@@ -338,6 +550,7 @@ def build_curl(rigname, basectrl, joints):
     cmds.setAttr(f'{total}.operation', 1)  # sum
 
     weights = {}
+    clamps = {}
     for slot, (i, jnt) in enumerate(curl_joints):
         NN = rt_naming.get_index_from_name(jnt)
 
@@ -360,12 +573,29 @@ def build_curl(rigname, basectrl, joints):
         ensure_connect(f'{total}.output1D', f'{weight}.input2X')
         weights[NN] = weight
 
+        # One clamp per joint, all three axes on its R/G/B channels. Curl
+        # runs both ways, so the guard is symmetric about zero. Bounds are
+        # written per channel rather than as a compound: they are set on
+        # every build, not just on creation, so a changed
+        # CURL_MAX_JOINT_DEGREES reaches a rig that cleanup kept.
+        clamp = f'{rigname}_curl_{NN:02d}_clamp'
+        if not cmds.objExists(clamp):
+            cmds.createNode('clamp', n=clamp)
+        for channel in 'RGB':
+            cmds.setAttr(f'{clamp}.min{channel}', -CURL_MAX_JOINT_DEGREES)
+            cmds.setAttr(f'{clamp}.max{channel}', CURL_MAX_JOINT_DEGREES)
+        clamps[NN] = clamp
+
     for rot_axis, curl_attr in curl_axes:
         remap = f'{rigname}_curl{rot_axis}_remap_multiplyDivide'
         if not cmds.objExists(remap):
             cmds.createNode('multiplyDivide', n=remap)
         cmds.setAttr(f'{remap}.operation', 1)
-        cmds.setAttr(f'{remap}.input2X', CURL_DEGREES_PER_UNIT)
+        # The mirror sign rides on the degrees-per-unit factor: it is the one
+        # place the whole axis passes through, so nothing downstream has to
+        # know which side of a pair this is
+        cmds.setAttr(f'{remap}.input2X',
+                     CURL_DEGREES_PER_UNIT * signs[rot_axis])
         ensure_connect(rt_ctrlall.resolved_plug(rigname, curl_attr), f'{remap}.input1X')
 
         for _, jnt in curl_joints:
@@ -380,18 +610,22 @@ def build_curl(rigname, basectrl, joints):
             cmds.setAttr(f'{curl_mult}.operation', 1)
             ensure_connect(f'{remap}.outputX', f'{curl_mult}.input1X')
             ensure_connect(f'{weights[NN]}.outputX', f'{curl_mult}.input2X')
+            channel = clamp_channel[rot_axis]
             ensure_connect(f'{curl_mult}.outputX',
+                           f'{clamps[NN]}.input{channel}')
+            ensure_connect(f'{clamps[NN]}.output{channel}',
                            f'{compose_node}.inputRotate{rot_axis}')
             logger.trace(f'Connected curl{rot_axis} to {compose_node}')
 
     logger.debug(f'{rigname}: Curl effect built '
                  f'({len(curl_joints)} joints, '
-                 f'{CURL_DEGREES_PER_UNIT:g} deg total per unit)')
+                 f'{CURL_DEGREES_PER_UNIT:g} deg total per unit, '
+                 f'{CURL_MAX_JOINT_DEGREES:g} deg max per joint)')
 
 
 # NOISE ================================================================
 
-def build_noise(rigname, basectrl, joints, loop_time=None):
+def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
     Build procedural noise for waving/tentacle motion.
     Creates one expression per joint per axis that writes directly to composeMatrix.
@@ -403,12 +637,24 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
     - Per-joint falloff so root stays near straight axis and tip is looser
     - Deterministic per-joint/axis seed for stable but different motion per joint/axis
     - When loop_time is provided, uses integer harmonic counts so the animation loops exactly
+    - The seed is per joint index and axis, so an L/R pair already jitters
+      to the same numbers; the mirror signs (fx_mirror_signs) are what turn
+      that into the two sides jittering as mirror images
+
+    Arguments:
+        rigname (str): Name of rig component
+        basectrl (str): Base control with noise attributes
+        joints (list): List of BN joints (joint 00 will be skipped)
+        loop_time (str): Optional loop time output plug
+        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+            leaves every axis jittering its own direction raw
     '''
     logger.trace(f'{rigname}: Noise Effect (wavy, loopable)')
     if not joints or len(joints) < 2:
         logger.warning('Not enough joints for noise')
         return
 
+    signs = signs or NO_MIRROR
     effect_axes = ['X', 'Y', 'Z']
     axis_offsets = {'X': 0.0, 'Y': 100.0, 'Z': 200.0}
     num_joints = len(joints)
@@ -440,7 +686,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None):
 
             expr_code = f'''
 float $loop_enabled = {loop_enabled_src};
-float $amp = {amp_src};
+float $amp = {amp_src} * {signs[axis]};
 float $noise_freq = {freq_src};
 float $noise_speed = {speed_src} * 0.2;
 float $t = {time_source};
