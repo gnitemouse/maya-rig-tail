@@ -99,6 +99,7 @@ import rig_tail_cleanup as rt_cleanup
 import rig_tail_cache as rt_cache
 import rig_tail_maya as rt_maya
 import rig_tail_naming as rt_naming
+import rig_tail_mirror as rt_mirror
 import math
 import re
 
@@ -116,7 +117,7 @@ _CST_DEFAULTS = {
     'MIRROR_DRYRUN': False,         # only log intended changes; do not modify
     'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
     'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
-    'MIRROR_BEHAVIOR': 'symmetric',  # 'symmetric' | 'parallel' (see mirror_frames)
+    'MIRROR_BEHAVIOR': rt_mirror.BEHAVIOR_DEFAULT,  # see mirror_frames
     'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
     'ORIENT_UP_AXIS': 'z',          # local axis aligned to the up reference
     'ORIENT_UP_MODE': 'cascade',    # up reference: 'cascade' | 'best-fit'
@@ -1303,28 +1304,38 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     rotating would leave the aim pointing the same way as the source (into
     the body) instead of to the opposite side.
 
-    BEHAVIOR. The aim axis must keep pointing down the mirrored chain (the
-    spline IK and build_advanced_twist both read it), so the only freedom
-    left is the roll about that aim - and there are exactly two right-handed
-    choices, 180 degrees apart, selected by behavior:
-        'symmetric' negates the reflected up. The same channel value then
-            moves the target as the EXACT MIRROR of the source: both tails
-            curl up together, both curl outward together. Equivalent to
-            Maya's mirrorJoint -mirrorBehavior, and the usual animation
-            default.
-        'parallel'  keeps the reflected up. The same channel value moves the
-            target the OPPOSITE way, so a splayed pair reads as one curling
-            up while the other curls down. Formally the mirror of the source
-            driven by the negated angle - which is what a 180-degree roll
-            about the aim does.
-    Worked example, a tail splayed along +X with up +Z. Both modes give the
-    target aim -X (down its own chain). 'parallel' leaves the target up at
-    +Z, so +rotate about up spins both about world +Z - the +X tip rises and
-    the -X tip drops. 'symmetric' gives the target up -Z, so the same
-    +rotate spins the target about world -Z instead and both tips rise.
+    BEHAVIOR. A reflection flips handedness, so a right-handed frame can
+    point an ODD number of its axes opposite the reflection of the source's
+    - one, or all three, never two. That is the whole of the choice:
 
-    Since the modes differ only by a 180-degree roll about the aim, running
-    roll_chain(target, 180) converts one into the other on a single chain.
+        'mirror'    negates ALL THREE. Maya's mirrorJoint -mirrorBehavior:
+            the same channel value moves the target as the exact mirror of
+            the source on every ROTATION axis, and on no translation axis.
+            The aim then runs BACK UP the chain, which the advanced twist
+            has to be told (rig_tail_stretch reads rt_mirror.aim_reversed)
+            and which reverses a slide along the aim (rt_mirror's
+            translation_signs reports it). The default.
+        'symmetric' negates the reflected UP only. The aim keeps running
+            down the chain; rotations mirror about the up axis alone, while
+            translations mirror along the aim and the third.
+        'parallel'  keeps the reflected up, so the THIRD axis is the
+            negated one. The same channel value moves the target the
+            OPPOSITE way about the up, so a splayed pair reads as one
+            curling up while the other curls down.
+
+    Rotations mirrored plus translations mirrored is three under every one
+    of them; the choice only moves which three. Worked example, a tail
+    splayed along +X with up +Z: 'symmetric' and 'parallel' both give the
+    target aim -X (down its own chain), 'mirror' gives +X (back up it).
+    'parallel' leaves the target up at +Z, so +rotate about up spins both
+    about world +Z - the +X tip rises and the -X tip drops. 'symmetric'
+    gives the target up -Z, so the same +rotate spins the target about
+    world -Z instead and both tips rise.
+
+    Since 'symmetric' and 'parallel' differ only by a 180-degree roll about
+    the aim, running roll_chain(target, 180) converts one into the other on
+    a single chain. 'mirror' is not reachable that way - it reverses the
+    aim, which no roll about the aim can do.
 
     Arguments
         src_matrices (list): per-joint source world matrices (16 floats).
@@ -1341,11 +1352,17 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     idx = {'x': 0, 'y': 1, 'z': 2}
     keep = idx.get(str(axis).lower(), 0)
     ai, ui = idx[aim_axis], idx[up_axis]
-    up_sign = -1.0 if _behavior(behavior) == 'symmetric' else 1.0
+    mode = _behavior(behavior)
+    # 'parallel' keeps the reflected up; the other two negate it. 'mirror'
+    # negates the aim as well, and _assign_rows then lands the third axis
+    # on its own negated reflection to stay right-handed - so all three
+    # come out opposite, which is the whole of what 'mirror' means.
+    up_sign = 1.0 if mode == 'parallel' else -1.0
+    aim_sign = -1.0 if mode == 'mirror' else 1.0
     frames = []
     for m in src_matrices:
         rows = _matrix_rows(m)
-        aim = _norm(_reflect(rows[ai], keep))
+        aim = _scale(_norm(_reflect(rows[ai], keep)), aim_sign)
         up = _scale(_norm(_reflect(rows[ui], keep)), up_sign)
         frames.append(_assign_rows(aim, up, aim_axis, up_axis))
     return frames
@@ -1353,20 +1370,24 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
 
 def _behavior(behavior=None):
     '''
-    Resolve and validate the mirror behavior, defaulting to 'symmetric'.
+    Resolve and validate the mirror behavior.
+
+    The value set and the default live in rig_tail_mirror, which the build
+    reads too - one list, so Setup and the build cannot disagree about what
+    a valid behavior is or which one an unset config takes.
 
     Arguments
         behavior (str): explicit value, or None to read MIRROR_BEHAVIOR.
 
     Return
-        str: 'symmetric' or 'parallel'.
+        str: 'mirror', 'symmetric' or 'parallel'.
     '''
     value = str(behavior if behavior is not None
                 else _cst('MIRROR_BEHAVIOR')).strip().lower()
-    if value not in ('symmetric', 'parallel'):
+    if value not in rt_mirror.BEHAVIORS:
         logger.warning(f"Mirror: unknown behavior '{value}', "
-                       "using 'symmetric'")
-        return 'symmetric'
+                       f"using '{rt_mirror.BEHAVIOR_DEFAULT}'")
+        return rt_mirror.BEHAVIOR_DEFAULT
     return value
 
 

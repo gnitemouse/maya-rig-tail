@@ -4,8 +4,29 @@ author: Daisy Jane @gnitemouse
 
 Makes an L/R pair's DIALS agree with MIRROR_BEHAVIOR on all three axes.
 
-    'symmetric' - the same value moves the pair as mirror images
-    'parallel'  - the same value moves the pair the same way round the world
+    'mirror', 'symmetric' - the same value moves the pair as mirror images
+    'parallel'            - the same value moves the pair the same way
+                            round the world
+
+THREE OF SIX. A frame has six things it could mirror: a rotation about
+each of its three axes, and a translation along each. Compare each target
+axis to the reflection of its partner's; a rotation about an axis mirrors
+when the two point OPPOSITE, a translation along it when they point the
+SAME way. The count pointing opposite must be odd (below), so rotations
+mirrored plus translations mirrored is always exactly three. The frame
+never changes how much mirrors, only which half:
+
+    behavior    opposite   aim runs   rotations     translations
+    'mirror'    all three  BACKWARDS  all three     none
+    'symmetric' the up     forwards   the up        aim + third
+    'parallel'  the third  forwards   the third     aim + up
+
+So the choice follows what a thing is POSED BY. Everything with a gizmo in
+this rig is posed by rotation - the FK controls turn their joints, the
+spline mid_rot control swings the top of the chain - and curl, wave,
+noise, twist and roll are rotations too. 'mirror' is the default because
+it spends its three there. The one dial it costs is offset, a slide along
+the aim, and a sign covers that.
 
 WHY THIS EXISTS. A mirrored skeleton cannot deliver either one on its own.
 The dials rotate joints about their own local axes, and 'the same value
@@ -19,37 +40,37 @@ frame and D a diagonal of +/-1 marking which axes were negated:
 T has to stay right-handed, so det(D) = -1, so an ODD number of axes are
 negated. One axis, or all three. NEVER TWO - in any rig, in any software.
 
-All three is available in general: it is what Maya's mirrorJoint
--mirrorBehavior does, and why a mirrored arm's local X runs backwards. It
-is not available HERE, because negating the aim points it back up the
-chain, and the spline IK, the advanced twist and the stretch all read the
-aim as running down the chain - and Setup's own Orient step re-derives it
-from the joint positions, so it would undo the mirror on every re-run.
+All three negated is 'mirror', Maya's mirrorJoint -mirrorBehavior, and is
+why a mirrored arm's local X runs backwards. One negated leaves the aim
+running down the chain, and MIRROR_BEHAVIOR picks which of the other two
+takes it: 'symmetric' the up, 'parallel' the third.
 
-With the aim pinned, exactly ONE axis is free to mirror, and
-MIRROR_BEHAVIOR only picks which: 'symmetric' the up axis, 'parallel' the
-third. The other two do the opposite of whatever was asked for.
-
-So the fix does not live in the joint orientation. It lives on the way IN,
-as a sign on the dial value, where the parity argument has no hold at all:
-a scalar can be negated freely. That is all this module does - it measures
+Nothing here is free either way, which is the point of the table above.
+So the sign does not live in the joint orientation. It lives on the way
+IN, on the dial value, where the parity argument has no hold at all: a
+scalar can be negated freely. That is all this module does - it measures
 how a pair's chains actually stand and reports which axes need negating to
-land on the convention MIRROR_BEHAVIOR names.
+land on the convention MIRROR_BEHAVIOR names. Under 'mirror' the rotations
+need nothing and offset needs a sign; under 'symmetric' it is the other
+way about.
 
 ROTATIONS AND TRANSLATIONS TAKE OPPOSITE SIGNS. A rotation about a local
 axis mirrors when that axis points AGAINST the reflection; a translation
 along one mirrors when it points ALONG it. So a dial that slides a joint
 (FK offset, the IK spline handle's offset) needs translation_signs, not
-rotation_signs - the two are exact negatives of each other.
+rotation_signs.
 
 Consumers: rig_tail_anim (curl, wave, noise), rig_tail_fk (twist, roll,
-offset) and rig_tail_connect (the IK spline handle's twist/roll/offset).
+offset), rig_tail_connect (the IK spline handle's twist/roll/offset) and
+rig_tail_stretch, which needs aim_reversed to tell the advanced twist
+which way down the chain the mirrored side runs.
 
 CONTROLS ARE A SECOND CASE. A dial is a number, so a sign on it is free.
 A control is a gizmo, so its axes must point where its motion goes - which
 pins the control frame to the joint frame scaled by these same signs, and
-that frame has to stay right-handed. See control_signs: it works out under
-'symmetric' and is impossible under 'parallel'.
+that frame has to stay right-handed. See control_signs. Under 'mirror' it
+needs nothing: the joints are already the full behavior mirror, so a
+control matched to its joint mirrors on all three rotations by itself.
 
 Functions:
     rotation_signs: per-axis sign for a rotation about each local axis
@@ -57,6 +78,7 @@ Functions:
     control_signs: signs for a behavior-mirrored control, or None
     mirrored_matrix: a node's world frame with each axis scaled by its sign
     aim_axis: the chain's aim axis as a signs key ('X'/'Y'/'Z')
+    aim_reversed: whether a part's aim runs back up its own chain
     behavior: the validated MIRROR_BEHAVIOR
 '''
 
@@ -86,6 +108,13 @@ MIRROR_TOLERANCE = 0.5
 
 # Every axis raw. Returned whole, so callers may not mutate it.
 NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
+
+# The MIRROR_BEHAVIOR values, and the one a build with nothing stored takes.
+# Mirroring is a three-of-six proposition - see the module docstring - and
+# 'mirror' spends its three on the rotations, which is what every gizmo in
+# this rig is posed by.
+BEHAVIORS = ('mirror', 'symmetric', 'parallel')
+BEHAVIOR_DEFAULT = 'mirror'
 
 
 def rotation_signs(rigname):
@@ -195,7 +224,10 @@ def _signs(rigname, rotation):
     for axis in cosines:
         cosines[axis] /= len(pairs)
 
-    want_mirror = behavior() == 'symmetric'
+    # 'mirror' and 'symmetric' both ask the pair to move as mirror images;
+    # they differ in WHICH axes manage it unaided, which the measurement
+    # below discovers. Only 'parallel' asks for the opposite.
+    want_mirror = behavior() != 'parallel'
     signs = dict(NO_MIRROR)
     for axis, cos in cosines.items():
         if abs(cos) < MIRROR_TOLERANCE:
@@ -256,20 +288,22 @@ def control_signs(rigname):
     joint frame with each axis scaled by its sign. Being a transform, that
     frame has to stay right-handed, so the three signs must multiply to +1:
 
+        'mirror'    negates none (the joints already mirror) -> None
         'symmetric' negates two axes (product +1)   -> buildable
         'parallel'  negates one    (product -1)   -> LEFT-HANDED, refused
 
-    So behavior-mirrored controls exist under 'symmetric' and cannot exist
-    under 'parallel'. That is not an omission: 'parallel' asks all three
-    axes to move the pair the same way round the world, and a right-handed
-    frame can only ever do that on two of them. The dials still honour it -
-    a sign on a scalar is bound by nothing - but a gizmo cannot.
+    So behavior-mirrored controls are BUILT under 'symmetric', already
+    correct under 'mirror', and impossible under 'parallel'. The last is
+    not an omission: 'parallel' asks all three axes to move the pair the
+    same way round the world, and a right-handed frame can only ever do
+    that on two of them. The dials still honour it - a sign on a scalar is
+    bound by nothing - but a gizmo cannot.
 
     The 'symmetric' frame this yields is the full behavior mirror (every
-    axis the negated reflection of its partner's), which is what Maya's
-    mirrorJoint -mirrorBehavior produces and what production biped rigs
-    ship: the same channel values give mirrored poses on every axis, and
-    mirror-pose tools reduce to a straight value copy.
+    axis the negated reflection of its partner's) - which is precisely the
+    frame the JOINTS already stand in under 'mirror', hence nothing to do
+    there. Either way the same channel values give mirrored poses on every
+    axis, and mirror-pose tools reduce to a straight value copy.
 
     Arguments
         rigname (str): Name of rig component
@@ -342,15 +376,36 @@ def behavior():
     rig_tail_setup.py is an optional install the build cannot depend on.
 
     Return
-        str: 'symmetric' or 'parallel'
+        str: 'mirror', 'symmetric' or 'parallel'
     '''
-    value = str(getattr(rt_constants, 'MIRROR_BEHAVIOR', 'symmetric'))
+    value = str(getattr(rt_constants, 'MIRROR_BEHAVIOR', BEHAVIOR_DEFAULT))
     value = value.strip().lower()
-    if value not in ('symmetric', 'parallel'):
+    if value not in BEHAVIORS:
         logger.warning(f"Mirror: unknown MIRROR_BEHAVIOR '{value}', "
-                       "using 'symmetric'")
-        return 'symmetric'
+                       f"using '{BEHAVIOR_DEFAULT}'")
+        return BEHAVIOR_DEFAULT
     return value
+
+
+def aim_reversed(rigname):
+    '''
+    Whether this part's joints aim back UP their own chain.
+
+    True only for the mirrored side of a pair under 'mirror', which is the
+    one convention that negates the aim. Anything reading the aim as
+    running from parent to child has to ask: the spline IK's advanced
+    twist is told through its forward axis (rig_tail_stretch), and a
+    translation along the aim reverses with it (which translation_signs
+    already reports).
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        bool: True when the aim runs from child to parent on this part
+    '''
+    return (behavior() == 'mirror'
+            and bool(rt_naming.mirror_partner(rigname)))
 
 
 def _axis_rows(node):

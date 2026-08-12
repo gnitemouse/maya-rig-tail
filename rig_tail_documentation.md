@@ -369,49 +369,54 @@ straight chain falls back to a world axis, which is not mirrored between
 sides and so flips one side of the pair. Use `best-fit` for the first pass
 on a raw skeleton, `cascade` from then on.
 
-`MIRROR_BEHAVIOR` picks how `MIRROR_ORIENT` rolls the mirrored side about
-its aim axis. The aim must keep pointing down the chain (the spline IK and
-the advanced twist both read it), so the roll is the only freedom left, and
-there are exactly two right-handed choices, 180 degrees apart:
+`MIRROR_BEHAVIOR` picks how `MIRROR_ORIENT` orients the mirrored side.
 
-| Value | Which local axis moves the two sides as mirror images |
-|-------|-------------------------------------------------------|
-| `symmetric` (default) | The **up** axis (`ORIENT_UP_AXIS`, Z by default): the same channel value curls both tails up together, both outward together. |
-| `parallel` | The **third** axis (the one that is neither aim nor up, Y by default). |
+**Three of six, always.** A frame has six things it could mirror: a
+rotation about each of its three axes, and a translation along each.
+Compare each target axis to the reflection of its partner's — a rotation
+mirrors when the two point *opposite*, a translation when they point the
+*same* way. A reflection flips handedness, so a right-handed frame can
+point an **odd** number of its axes opposite: one, or all three, never
+two. Rotations mirrored plus translations mirrored is therefore always
+exactly three. The behavior never changes how much mirrors, only which
+three:
 
-**Only one axis can mirror, and the behavior chooses which.** This is the
-thing the names do not say and it surprises everyone once. A local axis
-moves the two sides as mirror images only when the target's copy of it
-points *opposite* the reflection of the source's; a reflection flips
-handedness, so a right-handed frame can satisfy that on an **odd** number
-of its three axes. The aim axis is not one of them — it has to keep
-pointing down the chain — which leaves exactly one. The other two drive
-both sides the same way round the world, which reads in the viewport as
-the pair moving oppositely. Under the default (`symmetric`, aim X, up Z):
-rotate/wave/curl **Z** mirrors, **Y** and the twist about **X** do not.
+| Value | Axes opposite | Aim | Rotations mirror | Translations mirror |
+|-------|---------------|-----|------------------|---------------------|
+| `mirror` (default) | all three | runs back **up** the chain | all three | none |
+| `symmetric` | the up | down the chain | the up | aim + third |
+| `parallel` | the third | down the chain | the third | aim + up |
 
-Because the two behaviors differ only by a 180 degree roll about the aim,
-running **Roll Chain** at 180 on the target side converts one into the
-other for a single chain — useful when one pair wants the opposite
-convention. Ignored when `MIRROR_ORIENT` is off (a positions-only mirror
+`mirror` is Maya's `mirrorJoint -mirrorBehavior`, and it is the default
+because **everything this rig is posed by is a rotation**: curl, wave,
+noise, twist and roll, every FK control gizmo, and the spline `mid_rot`
+control. It spends its three there. The one dial it costs is `offset`, a
+slide along the aim, and a sign covers that.
+
+Its price is the reversed aim, which two places are told about rather than
+left to discover: the spline IK's advanced twist takes a negative forward
+axis (`rig_tail_stretch.build_advanced_twist`, derived from the Setup UI's
+own **Aim Axis** — it used to assume Maya's default), and a translation
+along the aim reverses, which `rig_tail_mirror.translation_signs` reports.
+Setup's **Orient** step re-derives the aim forward, but `mirror_chains`
+runs *after* `orient_chains`, so a Setup re-run re-establishes it.
+
+`symmetric` and `parallel` differ only by a 180 degree roll about the aim,
+so **Roll Chain** at 180 on the target side converts one into the other
+for a single chain. `mirror` reverses the aim and no roll about it can
+reach that. Ignored when `MIRROR_ORIENT` is off (a positions-only mirror
 does not touch orientation).
 
-Mirroring all three axes is possible — it needs the aim negated too, which
-points it back **up** the chain, and is exactly what Maya's `mirrorJoint
--mirrorBehavior` does. This tool cannot: the spline IK, the advanced twist
-and the stretch all read the aim as running down the chain, and Setup's
-own **Orient** step re-derives it from the joint positions, so it would
-undo the mirror on every re-run.
+Whatever the behavior, the **dials** land on it exactly:
+`rig_tail_mirror` measures how a pair's chains actually relate and negates
+what does not already agree, so curl, wave, noise, twist, roll and offset
+obey the behavior on all three axes (`MIRROR_SLIDERS`). Under `mirror` the
+rotations need no signs at all and only `offset` is negated; under
+`symmetric` it is the other way about.
 
-No joint orientation escapes this, so the **dials** fix it on the way in
-instead, where the parity argument has no hold: `rig_tail_mirror` measures
-how a pair's chains actually relate and negates the axes that do not
-already do what `MIRROR_BEHAVIOR` asked for. Curl, wave, noise, twist,
-roll and offset therefore obey the behavior on **all three** axes —
-`symmetric` mirrors every one, `parallel` moves every one the same way
-round the world (`MIRROR_SLIDERS`). The FK and IK controls are unaffected
-— an animator posing a gizmo still gets the one mirrored axis the table
-above names.
+A **stored** config keeps its own value — moving the default from
+`symmetric` to `mirror` does not silently re-orient an existing rig. Re-run
+**Mirror Orient** to move one across deliberately.
 
 ### Include / Exclude
 
@@ -1661,10 +1666,14 @@ Build matrix blend network for IK/FK switching with FX offsets.
 ## rig_tail_mirror.py (rt_mirror)
 
 Makes an L/R pair's **dials** agree with `MIRROR_BEHAVIOR` on all three
-axes — `symmetric` moves the pair as mirror images, `parallel` moves it
-the same way round the world. Consumed by `rig_tail_anim` (curl, wave,
-noise), `rig_tail_fk` (twist, roll, offset) and `rig_tail_connect` (the IK
-spline handle's twist/roll/offset).
+axes — `mirror` and `symmetric` move the pair as mirror images, `parallel`
+moves it the same way round the world. Consumed by `rig_tail_anim` (curl,
+wave, noise), `rig_tail_fk` (twist, roll, offset), `rig_tail_connect` (the
+IK spline handle's twist/roll/offset) and `rig_tail_stretch`, which asks
+`aim_reversed` which way down the chain a mirrored side runs.
+
+The value set and the default live here (`BEHAVIORS`, `BEHAVIOR_DEFAULT`)
+so Setup and the build cannot disagree about what is valid.
 
 **Why it has to exist.** A mirrored skeleton delivers exactly one mirrored
 axis, and no orientation scheme can do better with the aim pinned down the
@@ -1713,11 +1722,12 @@ multiply to +1:
 
 | MIRROR_BEHAVIOR | signs | product | control frame |
 |---|---|---|---|
+| `mirror` | none negated | +1 | **nothing to do** — the joints already are it |
 | `symmetric` | two negated | +1 | buildable — the full behavior mirror |
 | `parallel` | one negated | −1 | left-handed, **refused** |
 
-So behavior-mirrored FK controls exist under `symmetric` and cannot exist
-under `parallel`. That is not an omission: `parallel` asks all three axes
+So behavior-mirrored FK controls are free under `mirror`, built under
+`symmetric`, and cannot exist under `parallel`. That is not an omission: `parallel` asks all three axes
 to move the pair the same way round the world, and a right-handed frame
 manages that on at most two. The dials still honour it; a gizmo cannot.
 
@@ -1752,8 +1762,12 @@ A node's world frame with each axis scaled by its sign, as 16 floats.
 #### `aim_axis()`
 `ORIENT_AIM_AXIS` as a signs key, or None when it is not a usable axis.
 
+#### `aim_reversed(rigname)`
+Whether this part's joints aim back up their own chain — true only for the
+mirrored side under `mirror`.
+
 #### `behavior()`
-The validated `MIRROR_BEHAVIOR`, defaulting to `symmetric`.
+The validated `MIRROR_BEHAVIOR`, defaulting to `BEHAVIOR_DEFAULT`.
 
 ### Not yet covered: the IK spline controls
 
@@ -1765,15 +1779,23 @@ those constraints can run with maintain-offset off at all). The controls'
 orientation really is independent of the clusters' and of the spline
 handle's.
 
-What is not settled is **which** frame to give them. An IK spline control
-is posed by TRANSLATION — its rotation is the no-op above — and a
+What is not settled is **which** frame to give them, and `mirror` as the
+default makes it more pressing rather than less. An IK spline control is
+posed by TRANSLATION — its own rotation is the no-op above — and a
 translation mirrors under the opposite rule to a rotation. Since `D` must
 carry an odd number of negated axes, the count of *un*-negated ones is
 even, so a right-handed control frame mirrors **2 of 3 translate axes, or
-0** — never all three. The full behavior mirror the FK controls use
-(`D = -I`) is the worst choice here: it mirrors all three rotations, which
-do nothing, and none of the translations. The right frame negates exactly
-one axis, and which one is a judgement about how the controls are used.
+0** — never all three. `mirror` is exactly the 0 case: it mirrors all
+three rotations, which do nothing here, and none of the translations. So
+these controls want a one-negated frame of their own, independent of the
+joints, and which axis takes it is a judgement about how they are posed.
+
+Two of the three sets are not purely translated, which sharpens it. The
+**IK** set is nested and the **Spline** set is hierarchical (`bot_sml`
+under `bot`, `top` under `mid_rot`), so a parent control's rotation swings
+its children and does move the curve. Only the **Float** set is purely
+translated. And `mid_rot` is a pure rotation control, which `mirror`
+already serves correctly.
 
 ## rig_tail_cache.py (rt_cache)
 

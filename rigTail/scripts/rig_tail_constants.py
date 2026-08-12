@@ -149,21 +149,32 @@ MIRROR_DRYRUN = False
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
 MIRROR_SOURCE_SIDE = 'R'
-# How the mirrored side is rolled about its aim axis (MIRROR_ORIENT only).
-# The aim axis must keep pointing down the chain (the spline IK and the
-# advanced twist depend on it), so the only freedom left is the roll, and
-# there are exactly two right-handed choices, 180 degrees apart:
-#   'symmetric' - the same channel value moves the target as the exact
-#       mirror of the source: both tails curl up together, both curl
-#       outward together. Equivalent to Maya's mirrorJoint -mirrorBehavior.
-#       The default, and what animators normally expect.
-#   'parallel'  - the same channel value moves the target the opposite way,
-#       so a splayed pair reads as one curling up while the other curls
-#       down. (Formally: the mirror of the source driven by the NEGATED
-#       angle, since this frame is the symmetric one rolled 180 degrees.)
-# The two differ by a 180-degree roll about the aim axis, so the Setup UI's
-# Roll Chain fix-up at 180 converts one into the other on a single chain.
-MIRROR_BEHAVIOR = 'symmetric'
+# How the mirrored side is oriented (MIRROR_ORIENT only). A reflection
+# flips handedness, so a right-handed frame can point an ODD number of its
+# axes opposite the reflection of the source's - one, or all three, never
+# two. A rotation about an axis mirrors when the two point opposite, a
+# translation along it when they point the same way, so exactly three of
+# the six always mirror and the value only chooses WHICH three:
+#   'mirror'    - all three axes negated. Maya's mirrorJoint
+#       -mirrorBehavior. Every ROTATION mirrors - curl, wave, twist, roll,
+#       and every FK and spline control gizmo, which is what this rig is
+#       actually posed by - and no translation does. The aim then runs
+#       BACK UP the chain, which the advanced twist is told about
+#       (rig_tail_stretch) and which reverses the offset dial
+#       (rig_tail_mirror signs it). The default.
+#   'symmetric' - the up axis negated. The aim keeps running down the
+#       chain; rotations mirror about the up alone, translations along the
+#       aim and the third.
+#   'parallel'  - the third axis negated. The same channel value moves the
+#       target the opposite way about the up, so a splayed pair reads as
+#       one curling up while the other curls down.
+# 'symmetric' and 'parallel' differ by a 180-degree roll about the aim, so
+# the Setup UI's Roll Chain fix-up at 180 converts one into the other on a
+# single chain. 'mirror' reverses the aim, which no roll about it reaches.
+# The value set and this default are rig_tail_mirror.BEHAVIORS /
+# BEHAVIOR_DEFAULT; kept as a literal here so a stale constants module
+# still parses.
+MIRROR_BEHAVIOR = 'mirror'
 # Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
 # ORIENT_UP_AXIS aligns to the up reference. The interactive roll rolls
 # about ORIENT_AIM_AXIS.
@@ -802,11 +813,16 @@ def load_config(filepath=None):
             'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
-        # Deliberately NOT migrated: a config saved before MIRROR_BEHAVIOR
-        # existed was written by code that always produced 'parallel' frames,
-        # but MIRROR_ORIENT defaulted off then, so such a config almost never
-        # carries a mirrored result worth preserving. A missing key therefore
-        # takes the module default ('symmetric') rather than the old maths.
+        # A STORED value always wins, which is what keeps a rig built under
+        # an older default on the convention it was built with: the default
+        # moved from 'symmetric' to 'mirror', and silently re-orienting a
+        # skeleton on load would change what every mirrored control does.
+        # Deliberately NOT migrated either: a config saved before
+        # MIRROR_BEHAVIOR existed was written by code that always produced
+        # 'parallel' frames, but MIRROR_ORIENT defaulted off then, so such a
+        # config almost never carries a mirrored result worth preserving. A
+        # missing key therefore takes the module default rather than the old
+        # maths - re-run Mirror Orient to move an old rig to it deliberately.
         MIRROR_BEHAVIOR = config.get('MIRROR_BEHAVIOR', MIRROR_BEHAVIOR)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)

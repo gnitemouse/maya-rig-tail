@@ -17,10 +17,14 @@ Three batch operations, exposed as checkboxes:
         Disabled unless Orient Joints is ticked.
     Mirror Orient (MIRROR_ORIENT): reflect matching 'L_'/'R_' pairs'
         orientation so the two sides face as mirror images. The dropdown
-        in the same row picks the behavior (MIRROR_BEHAVIOR): 'Symmetric'
-        moves the two sides as exact mirrors for the same channel value
-        (both tails curl up together), 'Parallel' moves them opposite ways
-        (a splayed pair reads as one up, one down).
+        in the same row picks the behavior (MIRROR_BEHAVIOR), which decides
+        WHICH THREE of the six mirror - a rotation about each axis and a
+        translation along each, always three of them: 'Mirror' (default,
+        Maya mirrorJoint -mirrorBehavior) negates all three axes, so every
+        rotation mirrors and no translation does; 'Symmetric' negates the
+        up axis, so rotations mirror about the up and translations along
+        the aim and the third; 'Parallel' negates the third, so a splayed
+        pair reads as one curling up while the other curls down.
         Disabled unless Mirror Orient is ticked.
     Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
         positions so the target side's joints sit at the exact mirror.
@@ -67,7 +71,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
     AXES = ['x', 'y', 'z']
     SIDES = ['R', 'L']
     # Display labels for MIRROR_BEHAVIOR; stored lower-case in constants.
-    BEHAVIORS = ['Symmetric', 'Parallel']
+    # Order matches rig_tail_mirror.BEHAVIORS, default first.
+    BEHAVIORS = ['Mirror', 'Symmetric', 'Parallel']
     # Display labels for ORIENT_UP_MODE; stored lower-case in constants.
     UP_MODES = ['Cascade', 'Best-fit']
 
@@ -268,16 +273,28 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # reflected orientation, so it is meaningless unless that box is
         # ticked - and is disabled alongside it to say so.
         self.cmb_behavior = self._combo(self.BEHAVIORS,
-            'How the mirrored side is rolled about its aim axis.\n'
-            'Symmetric: the same channel value moves the target as the '
-            'exact mirror of the source - both tails curl up together, '
-            'both curl outward together (Maya mirrorJoint '
-            '-mirrorBehavior).\n'
-            'Parallel: the same channel value moves the two sides opposite '
-            'ways, so a splayed pair reads as one curling up while the '
-            'other curls down.\n'
-            'The two differ by a 180 deg roll about the aim, so Roll Chain '
-            'at 180 converts one into the other on a single chain. '
+            'How the mirrored side is oriented.\n'
+            'A reflection flips handedness, so a frame can point one or '
+            'all three of its axes opposite the source - never two. '
+            'Rotations mirror on the axes that point opposite, '
+            'translations on the ones that do not, so exactly THREE of the '
+            'six always mirror. This only chooses which three.\n'
+            '\n'
+            'Mirror (default): all three axes opposite. Maya mirrorJoint '
+            '-mirrorBehavior. Every rotation mirrors - curl, wave, twist, '
+            'roll, and every control gizmo - and no translation does. The '
+            'aim runs back UP the chain; the spline twist and the offset '
+            'dial are told about it.\n'
+            'Symmetric: the up axis opposite. The aim keeps running down '
+            'the chain. Rotations mirror about the up alone; translations '
+            'mirror along the aim and the third axis.\n'
+            'Parallel: the third axis opposite. The same value moves the '
+            'two sides opposite ways about the up, so a splayed pair reads '
+            'as one curling up while the other curls down.\n'
+            '\n'
+            'Symmetric and Parallel differ by a 180 deg roll about the '
+            'aim, so Roll Chain at 180 converts one into the other on a '
+            'single chain. Mirror reverses the aim and no roll reaches it. '
             '(MIRROR_BEHAVIOR)')
         self.chk_mirror_orient.toggled.connect(self._sync_behavior_enabled)
 
@@ -565,7 +582,8 @@ class RigTailSetupUI(QtWidgets.QDialog):
             str(getattr(rt_constants, 'ORIENT_UP_MODE', 'cascade')).capitalize())
         self._sync_up_mode_enabled(self.chk_orient.isChecked())
         self._combo_set(self.cmb_behavior,
-            str(getattr(rt_constants, 'MIRROR_BEHAVIOR', 'symmetric')).capitalize())
+            str(getattr(rt_constants, 'MIRROR_BEHAVIOR',
+                        rt_mirror.BEHAVIOR_DEFAULT)).capitalize())
         self._sync_behavior_enabled(self.chk_mirror_orient.isChecked())
         self._combo_set(self.cmb_axis, getattr(rt_constants, 'MIRROR_AXIS', 'x'))
         self._combo_set(self.cmb_aim, getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x'))

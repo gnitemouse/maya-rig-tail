@@ -47,6 +47,7 @@ import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 import rig_tail_maya as rt_maya
 import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
 
@@ -686,9 +687,38 @@ def fallback_curve_length(rigname, typ):
 
 # SPLINE TWIST (IK) ====================================================
 
-def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec):
+# Spline IK advanced-twist axis enums, keyed (axis, positive). The solver
+# names the JOINT's own local axes: which one runs down the chain
+# (dForwardAxis) and which one is its up (dWorldUpAxis). Both come from the
+# Setup UI's Aim Axis and Up Axis rather than being assumed - they are the
+# same two settings the orient and the mirror are built from, so there is
+# no second place to keep in step.
+FORWARD_AXIS_ENUM = {('x', True): 0, ('x', False): 1,
+                     ('y', True): 2, ('y', False): 3,
+                     ('z', True): 4, ('z', False): 5}
+UP_AXIS_ENUM = {('y', True): 0, ('y', False): 1,
+                ('z', True): 3, ('z', False): 4,
+                ('x', True): 6, ('x', False): 7}
+
+
+def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
+                         rigname=''):
     '''
     Build Spline IK advanced twist.
+
+    The forward and up axes are read from ORIENT_AIM_AXIS / ORIENT_UP_AXIS,
+    the Setup UI's own Aim Axis and Up Axis, so the solver is told the
+    convention the skeleton was actually oriented to. They used to be
+    assumed - positive X by Maya's default, positive Z by a literal here -
+    which agreed with the defaults by coincidence and with nothing else.
+
+    The FORWARD axis is negative on the mirrored side of a pair under
+    MIRROR_BEHAVIOR 'mirror', the one convention that negates the aim: the
+    joints there run child-to-parent, and a solver told otherwise twists
+    the chain the wrong way along its whole length. The UP axis is the same
+    on both sides - every behavior negates the up, and each side supplies
+    its own (mirrored) up objects, so the roll comes out mirrored with one
+    enum.
 
     Arguments
         ikhandle (str): spline ik handle
@@ -696,11 +726,28 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec):
         end_obj (str): Last obj (cluster transform) for twist
         start_vec (tuple): Start up vector
         end_vec (tuple): End up vector
+        rigname (str): Rig part, for the mirrored-aim test. Empty assumes a
+            forward aim, which is right for every behavior but 'mirror'.
     '''
+    aim = str(getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')).strip().lower()
+    up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()
+    forward_positive = not (rigname and rt_mirror.aim_reversed(rigname))
+    fwd_enum = FORWARD_AXIS_ENUM.get((aim, forward_positive))
+    up_enum = UP_AXIS_ENUM.get((up, True))
+    if fwd_enum is None or up_enum is None:
+        logger.warning(f"{rigname}: Advanced twist: unusable aim '{aim}' or "
+                       f"up '{up}' axis, leaving the solver's own defaults")
+        fwd_enum = FORWARD_AXIS_ENUM[('x', forward_positive)]
+        up_enum = UP_AXIS_ENUM[('z', True)]
+
     # advancedSplineIkTwist
     cmds.setAttr(f'{ikhandle}.dTwistControlEnable', 1)
     cmds.setAttr(f'{ikhandle}.dWorldUpType', 4)  # Rot up start/end
-    cmds.setAttr(f'{ikhandle}.dWorldUpAxis', 3)  # Up Axis to pos z
+    cmds.setAttr(f'{ikhandle}.dForwardAxis', fwd_enum)
+    cmds.setAttr(f'{ikhandle}.dWorldUpAxis', up_enum)
+    if not forward_positive:
+        logger.debug(f'{rigname}: Advanced twist: forward axis negative '
+                     f'{aim.upper()} (mirrored aim runs back up the chain)')
 
     # Start / end obj
     cmds.connectAttr(f'{start_obj}.xformMatrix', f'{ikhandle}.dWorldUpMatrix', f=1)
