@@ -395,12 +395,21 @@ other for a single chain — useful when one pair wants the opposite
 convention. Ignored when `MIRROR_ORIENT` is off (a positions-only mirror
 does not touch orientation).
 
-No joint orientation escapes this, so the FX fix it on the way in instead:
-`rt_anim.fx_mirror_signs` measures how a pair's chains actually relate and
-negates the axes that need it on one side, giving curl, wave and noise
-full L/R symmetry on all three axes (`MIRROR_FX`). The FK and IK controls
-are unaffected — an animator posing a gizmo still gets the one mirrored
-axis the table above names.
+Mirroring all three axes is possible — it needs the aim negated too, which
+points it back **up** the chain, and is exactly what Maya's `mirrorJoint
+-mirrorBehavior` does. This tool cannot: the spline IK, the advanced twist
+and the stretch all read the aim as running down the chain, and Setup's
+own **Orient** step re-derives it from the joint positions, so it would
+undo the mirror on every re-run.
+
+No joint orientation escapes this, so the FX fix it on the way in instead,
+where the parity argument has no hold: `rt_anim.fx_mirror_signs` measures
+how a pair's chains actually relate and negates the axes that do not
+already do what `MIRROR_BEHAVIOR` asked for. Curl, wave and noise
+therefore obey the behavior on **all three** axes — `symmetric` mirrors
+every axis, `parallel` moves every axis the same way round the world
+(`MIRROR_FX`). The FK and IK controls are unaffected — an animator posing
+a gizmo still gets the one mirrored axis the table above names.
 
 ### Include / Exclude
 
@@ -841,11 +850,16 @@ saturates its last joints and stops tightening, which is the honest limit
 buys most of it back by spreading the same total over the whole chain.
 
 **L/R symmetry** comes from `fx_mirror_signs`, which measures how a pair's
-BN chains actually relate and negates the axes that would otherwise drive
-both sides the same way round the world (see `MIRROR_BEHAVIOR` above for
-why the joint orientation cannot do this). Only the non-`MIRROR_SOURCE_SIDE`
-half of a pair is signed; centre and unpaired parts are untouched. Set
-`MIRROR_FX` to False for the old per-side-raw behavior.
+BN chains actually relate and negates the axes that do not already do what
+`MIRROR_BEHAVIOR` asked for, so all three axes obey it (see
+`MIRROR_BEHAVIOR` above for why the joint orientation can only manage one).
+The frames are measured but the goal is taken from the behavior, so a
+hand-oriented or **Roll Chain**-fixed pair lands on the same convention as
+a mirrored one. Only the non-`MIRROR_SOURCE_SIDE` half of a pair is signed;
+centre and unpaired parts are untouched. Set `MIRROR_FX` to False for the
+old per-side-raw behavior. The signs are for ROTATIONS — a translation
+along a local axis mirrors under the opposite rule, so FK `offset` would
+need their inverse.
 
 Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
 `fx_mirror_signs`, `build_loop`, `build_wave`, `build_curl`,

@@ -19,10 +19,10 @@ through rt_ctrlall.resolved_plug so the Main Controller dashboard can route
 them, and expressions are deleted via delete_expression - a raw delete
 on a connected expression cascades through its connection web.
 
-An L/R pair reads its FX as mirror images: fx_mirror_signs measures how
-the two chains' joint frames actually relate and negates the axes that
-would otherwise drive the two sides the same way round the world. See
-MIRROR_FX for why a mirrored skeleton alone cannot deliver this.
+An L/R pair's FX obey MIRROR_BEHAVIOR on all three axes: fx_mirror_signs
+measures how the two chains' joint frames actually relate and negates the
+axes that do not already do what the behavior asked for. See MIRROR_FX
+for why a mirrored skeleton alone can only ever manage one of them.
 
 Functions:
     delete_expression: remove an expression without the delete cascading
@@ -69,27 +69,36 @@ CURL_DEGREES_PER_UNIT = 72.0
 # while a dense one reaches the full wrap. Raising the total therefore only
 # spends where the joint count can carry it. See build_curl.
 CURL_MAX_JOINT_DEGREES = 90.0
-# Make an L/R pair's FX read as mirror images of each other.
+# Make an L/R pair's FX obey MIRROR_BEHAVIOR on all three axes: 'symmetric'
+# moves the pair as mirror images, 'parallel' moves it the same way round
+# the world.
 #
 # WHY THIS IS NEEDED. A mirrored skeleton cannot do it on its own. The FX
 # rotate each joint about its own local axes, and 'the same channel value
 # moves the two sides as mirror images' holds for a local axis only when the
 # target's copy of it points OPPOSITE the reflection of the source's. A
 # reflection flips handedness, so a joint frame can satisfy that on an ODD
-# number of its three axes - and the aim axis is not one of them, because it
-# has to keep pointing down the chain for the spline IK and the twist. That
-# leaves exactly one axis mirroring, and MIRROR_BEHAVIOR only chooses which:
-# 'symmetric' picks the up axis (ORIENT_UP_AXIS), 'parallel' the third one.
-# The other two axes drive both sides the same way round the world, which
-# reads as the pair moving oppositely.
+# number of its three axes - one or all three, never two. All three means
+# negating the aim as well, which points it back UP the chain (this is what
+# Maya's mirrorJoint -mirrorBehavior does, and why a mirrored arm's local X
+# runs backwards); the spline IK, the advanced twist and the stretch all
+# read the aim as running down the chain, and Setup's own Orient step
+# re-derives it from the joint positions, so that is not available here.
+# With the aim pinned, exactly ONE axis is left free to mirror, and
+# MIRROR_BEHAVIOR only chooses which: 'symmetric' the up axis
+# (ORIENT_UP_AXIS), 'parallel' the third one. Whichever is not chosen drives
+# both sides the same way round the world, which reads as the pair moving
+# oppositely - and no orientation scheme, in any software, escapes that.
 #
 # So the fix cannot live in the joint orientation; it lives here, as a sign
-# on the value going in. fx_mirror_signs measures the two chains rather than
-# assuming a mirror was run, and negates only the axes that need it, on one
-# side of the pair only (the side that is not MIRROR_SOURCE_SIDE).
+# on the value going in, where the parity argument has no hold. Sliders can
+# do what the frames cannot. fx_mirror_signs measures the two chains rather
+# than assuming a mirror was run, and negates only the axes that do not
+# already do what MIRROR_BEHAVIOR asked for, on one side of the pair only
+# (the side that is not MIRROR_SOURCE_SIDE).
 #
 # Off leaves every part's FX driving its own axes raw, which is how builds
-# before this behaved.
+# before this behaved: mirrored on one axis, same-way-round on the other two.
 MIRROR_FX = True
 # Below this |cos| between a target axis and the reflection of its partner's,
 # the two chains are not mirror images on that axis and no sign can make them
@@ -208,27 +217,44 @@ NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
 
 def fx_mirror_signs(rigname):
     '''
-    Per-axis sign that makes this part's FX read as the mirror of its L/R
-    partner's. See MIRROR_FX for why the joint orientation cannot do this.
+    Per-axis sign that makes this part's FX agree with MIRROR_BEHAVIOR on
+    ALL THREE axes. See MIRROR_FX for why the joint orientation cannot get
+    past one of them on its own.
+
+        'symmetric' - every axis moves the pair as mirror images
+        'parallel'  - every axis moves the pair the same way round the world
+
+    The behavior is the animator's stated convention, so the FX honour it
+    outright rather than always mirroring: choosing 'parallel' on a splayed
+    pair - one tail curling up while the other curls down - is a choice, and
+    forcing the sliders to mirror would quietly overrule it.
 
     Only the target side of a pair is signed - the side that is NOT
     rt_constants.MIRROR_SOURCE_SIDE - so exactly one of the two moves and
     the source keeps driving its own axes raw. A center part, an unpaired
     part, and the source side all come back unsigned.
 
-    The signs are MEASURED, never assumed: for each axis, the target's copy
-    of it is compared against the reflection of the source's across the
+    What each axis does NOW is MEASURED, never assumed: the target's copy of
+    it is compared against the reflection of the source's across the
     symmetry plane, over the whole chain. Anti-parallel means that axis
-    already mirrors and keeps +1; parallel means it drives both sides the
-    same way round the world and takes -1. The test only reads the SIGN of a
-    dot product, so it survives the small orientation differences of two
-    hand-placed chains - and a pair that is not a mirror on some axis
-    (|cos| under MIRROR_FX_TOLERANCE) is left alone with a warning, since
-    no sign would make those two read as one motion.
+    already mirrors; parallel means it drives both sides the same way round
+    the world. Whichever it is, it takes -1 when that disagrees with the
+    behavior and +1 when it already agrees. The test only reads the SIGN of
+    a dot product, so it survives the small orientation differences of two
+    hand-placed chains - and a pair that is not a mirror on some axis (|cos|
+    under MIRROR_FX_TOLERANCE) is left alone with a warning, since no sign
+    would make those two read as one motion.
 
-    Measuring rather than deriving the answer from MIRROR_BEHAVIOR means
-    this is right for chains that were oriented by hand or rolled with the
-    Setup UI's Roll Chain, which never went through mirror_frames at all.
+    Measuring the frames while taking the GOAL from MIRROR_BEHAVIOR is what
+    makes this right for chains that were oriented by hand or rolled with
+    the Setup UI's Roll Chain and never went through mirror_frames at all:
+    however those two chains ended up standing, the sliders land on the
+    convention the behavior names.
+
+    Rotations only. A translation along a local axis mirrors under the
+    OPPOSITE rule (its axis must point along the reflection, not against
+    it), so anything sliding a joint - FK offset - needs the inverse of
+    these signs, not these.
 
     Arguments
         rigname (str): Name of rig component
@@ -283,6 +309,7 @@ def fx_mirror_signs(rigname):
     for axis in cosines:
         cosines[axis] /= len(pairs)
 
+    want_mirror = _mirror_behavior() == 'symmetric'
     signs = dict(NO_MIRROR)
     for axis, cos in cosines.items():
         if abs(cos) < MIRROR_FX_TOLERANCE:
@@ -290,13 +317,35 @@ def fx_mirror_signs(rigname):
                            f'mirror of {partner} (cos {cos:+.2f}), leaving it '
                            'unsigned - re-run Setup Mirror Orient on the pair')
             continue
-        # Anti-parallel (cos < 0) already mirrors; parallel needs negating
-        signs[axis] = 1.0 if cos < 0 else -1.0
+        # An axis anti-parallel to the reflection (cos < 0) mirrors as it
+        # stands; negate the ones that do not already do what was asked for
+        signs[axis] = 1.0 if (cos < 0) == want_mirror else -1.0
 
     flipped = ''.join(a for a in 'XYZ' if signs[a] < 0)
-    logger.debug(f'{rigname}: FX mirror of {partner}: '
+    logger.debug(f'{rigname}: FX mirror of {partner} '
+                 f'({_mirror_behavior()}): '
                  f'{"negating " + flipped if flipped else "nothing to negate"}')
     return signs
+
+
+def _mirror_behavior():
+    '''
+    The mirror convention the FX should land on, 'symmetric' or 'parallel'.
+
+    Same validation and fallback as rig_tail_setup's own reader, kept here
+    rather than imported: that one is private to the Setup phase, and the
+    FX need the answer on every build whether Setup ran this session or not.
+
+    Return
+        str: 'symmetric' or 'parallel'
+    '''
+    value = str(getattr(rt_constants, 'MIRROR_BEHAVIOR', 'symmetric'))
+    value = value.strip().lower()
+    if value not in ('symmetric', 'parallel'):
+        logger.warning(f"FX mirror: unknown MIRROR_BEHAVIOR '{value}', "
+                       "using 'symmetric'")
+        return 'symmetric'
+    return value
 
 
 def _mirror_partner(rigname):
