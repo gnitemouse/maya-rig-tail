@@ -12,6 +12,8 @@ Functions:
     parse_placeholder: Parse placeholder content from template
     get_index_from_name: Extract numerical index from node name
     replace_index_in_name: Rewrite a name's index token, keeping the name
+    find_mirror_pairs: Pair rig parts into (source, target) by side prefix
+    mirror_partner: The part a rig part mirrors from, or None
     strip_group_suffix: Strip trailing group label from a name
     titlecase: Convert text to title case
     name_contains_rigname_terms: Check if name matches rigname terms
@@ -44,6 +46,9 @@ _INDEX_PATTERN = (
     r'^(?:\d+|ee))'
 )
 _INDEX_PATTERN_ANY = r'(?:\d+|ee)'
+
+# Rig part prefix that marks a mirrored side, e.g. 'L_fintail'.
+SIDE_RE = re.compile(r'^([LlRr])_(.+)$')
 
 
 def _template_code(template):
@@ -468,6 +473,75 @@ def titlecase(text, underscore=True):
     else:
         words = text.split()
     return ' '.join(word.title() for word in words)
+
+
+def find_mirror_pairs(rigparts):
+    """
+    Pair rig parts into (source, target) by their side prefix.
+
+    A pair exists when both an 'L_<base>' and an 'R_<base>' rig part are
+    present (prefix match is case-insensitive; the base must be identical).
+    The source side is rt_constants.MIRROR_SOURCE_SIDE (default 'R'); the
+    other side is the target that gets overwritten. Center and unpaired
+    parts are ignored - a lone source side names a target that RIGPARTS
+    does not list, which is rig_tail_setup._implied_mirror_pairs' business
+    and only Mirror Joints can act on, so it is not a pair until that has
+    built the chain.
+
+    Lives here rather than in rig_tail_setup because the BUILD needs it too
+    (rig_tail_mirror), and rig_tail_setup.py is an optional install - the
+    Setup and Chain buttons ship it, a Builder-only install does not, so a
+    build-time import of it would raise. rig_tail_setup re-exports this
+    name, so its own callers are unchanged.
+
+    Arguments:
+        rigparts (list): RIGPARTS names.
+
+    Return:
+        tuple: (pairs, paired_names).
+            pairs (list): [(source_rigname, target_rigname), ...].
+            paired_names (set): every rigname that belongs to a pair.
+    """
+    source_side = str(getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')).upper()
+    groups = {}
+    for rp in rigparts:
+        m = SIDE_RE.match(rp)
+        if not m:
+            continue
+        groups.setdefault(m.group(2), {})[m.group(1).upper()] = rp
+
+    pairs = []
+    paired = set()
+    for base, sides in groups.items():
+        if 'L' in sides and 'R' in sides:
+            target_side = 'L' if source_side == 'R' else 'R'
+            pairs.append((sides[source_side], sides[target_side]))
+            paired.add(sides['L'])
+            paired.add(sides['R'])
+    return pairs, paired
+
+
+def mirror_partner(rigname, rigparts=None):
+    """
+    The rig part `rigname` mirrors FROM, or None when it mirrors nothing.
+
+    Only the TARGET side of a pair gets an answer, so a caller acting on
+    the result moves exactly one side of the pair and leaves the authored
+    source alone. A center part, an unpaired part and the source side all
+    return None.
+
+    Arguments:
+        rigname (str): Name of rig component
+        rigparts (list): Roster to pair over; None reads rt_constants.RIGPARTS
+
+    Return:
+        str or None: the source-side partner, or None
+    """
+    parts = rt_constants.RIGPARTS if rigparts is None else rigparts
+    for source, target in find_mirror_pairs(parts)[0]:
+        if target == rigname:
+            return source
+    return None
 
 
 def name_matches_rigname(rigname, name):

@@ -208,6 +208,7 @@ import rig_tail_joint as rt_joint
 import rig_tail_math as rt_math
 import rig_tail_matrix as rt_matrix
 import rig_tail_maya as rt_maya
+import rig_tail_mirror as rt_mirror
 import rig_tail_naming as rt_naming
 import rig_tail_restpose as rt_rest
 import rig_tail_stretch as rt_stretch

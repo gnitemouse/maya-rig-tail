@@ -97,6 +97,7 @@ import rig_tail_naming as rt_naming
 import rig_tail_maya as rt_maya
 import rig_tail_math as rt_math
 import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
 
@@ -609,6 +610,15 @@ def connect_twist_roll(rigname, joints):
     tail's own value is only one input of its override condition, and
     reading behind that makes the cog's 'All Twist' look dead in FK mode.
 
+    All three carry an L/R mirror sign (rig_tail_mirror), so a pair obeys
+    MIRROR_BEHAVIOR on the aim axis the way curl and wave do on theirs.
+    twist and roll take the ROTATION sign; offset takes the TRANSLATION
+    one, which is its exact opposite - it slides the chain rather than
+    turning it, and the two mirror under opposite rules. Under the default
+    'symmetric' that means twist and roll are negated on the mirrored side
+    and offset is left alone: sliding both tails toward their own tips
+    already IS the mirrored motion.
+
     Channels are chosen to avoid contention: FK stretch drives layer-1
     translate on joints 1..N but skips joint 0, leaving the base joint's
     free for offset. SDK_JNT.rotate may already carry an individual FK
@@ -639,14 +649,38 @@ def connect_twist_roll(rigname, joints):
     roll_src = rt_ctrlall.resolved_plug(rigname, 'roll')
     offset_src = rt_ctrlall.resolved_plug(rigname, 'offset')
 
+    # L/R mirror signs for the aim axis - the one all three dials act on
+    aim_key = rt_mirror.aim_axis()
+    rot_sign = rt_mirror.rotation_signs(rigname).get(aim_key, 1.0)
+    trn_sign = rt_mirror.translation_signs(rigname).get(aim_key, 1.0)
+
     # twist / N, shared by every joint (see docstring: the constant term
-    # is what produces a linear ramp once it compounds down the hierarchy)
+    # is what produces a linear ramp once it compounds down the hierarchy).
+    # The mirror sign rides on the divisor: dividing by -N is the same as
+    # negating the result, and it costs no node.
     twist_step = f'{rt_constants.TYPE_FK}_{rigname}_twist_step_multiplyDivide'
     if not cmds.objExists(twist_step):
         cmds.createNode('multiplyDivide', n=twist_step, s=1, ss=1)
         cmds.setAttr(f'{twist_step}.operation', 2)  # divide
     cmds.connectAttr(twist_src, f'{twist_step}.input1X', f=1)
-    cmds.setAttr(f'{twist_step}.input2X', n)
+    cmds.setAttr(f'{twist_step}.input2X', n * rot_sign)
+
+    # roll goes straight onto the base joint's layer when it is unsigned;
+    # a mirrored side needs a node to carry the negation, so build one only
+    # then and read whichever applies below
+    roll_plug = roll_src
+    roll_mult = f'{rt_constants.TYPE_FK}_{rigname}_roll_mirror_multiplyDivide'
+    if rot_sign < 0:
+        if not cmds.objExists(roll_mult):
+            cmds.createNode('multiplyDivide', n=roll_mult, s=1, ss=1)
+            cmds.setAttr(f'{roll_mult}.operation', 1)  # multiply
+        cmds.connectAttr(roll_src, f'{roll_mult}.input1X', f=1)
+        cmds.setAttr(f'{roll_mult}.input2X', rot_sign)
+        roll_plug = f'{roll_mult}.outputX'
+    elif cmds.objExists(roll_mult):
+        # Left over from a build when this side WAS signed (the behavior or
+        # the source side changed); drop it rather than leave it feeding
+        rt_maya.remove(roll_mult)
 
     for i, jnt in enumerate(joints):
         NN = rt_naming.get_index_from_name(jnt)
@@ -671,7 +705,7 @@ def connect_twist_roll(rigname, joints):
         cmds.connectAttr(f'{twist_step}.outputX',
                          f'{sum_node}.input3D[1].input3D{axis}', f=1)
         if i == 0:
-            cmds.connectAttr(roll_src,
+            cmds.connectAttr(roll_plug,
                              f'{sum_node}.input3D[2].input3D{axis}', f=1)
 
         cmds.connectAttr(f'{sum_node}.output3D', f'{sdk_jnt}.rotate', f=1)
@@ -690,7 +724,9 @@ def connect_twist_roll(rigname, joints):
         cmds.createNode('multiplyDivide', n=scale_node, s=1, ss=1)
         cmds.setAttr(f'{scale_node}.operation', 1)  # multiply
     cmds.connectAttr(offset_src, f'{scale_node}.input1X', f=1)
-    cmds.setAttr(f'{scale_node}.input2X', offset_unit_scale(rigname))
+    # Translation sign, not the rotation one - see the docstring
+    cmds.setAttr(f'{scale_node}.input2X',
+                 offset_unit_scale(rigname) * trn_sign)
     cmds.connectAttr(f'{scale_node}.outputX',
                      f'{base_sdk}.translate{axis.upper()}', f=1)
 

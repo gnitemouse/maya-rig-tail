@@ -127,6 +127,7 @@ greps for it on every test pass.
 | `rig_tail_maya` | `rt_maya` | Maya scene operations, node creation, geometry binding |
 | `rig_tail_math` | `rt_math` | Vector math, orientation helpers |
 | `rig_tail_matrix` | `rt_matrix` | Matrix offset network builder |
+| `rig_tail_mirror` | `rt_mirror` | L/R dial mirror signs (`MIRROR_BEHAVIOR` on all three axes) |
 | `rig_tail_cache` | `rt_cache` | Control caching and validation |
 | `rig_tail_joint` | `rt_joint` | Joint chain utilities |
 | `rig_tail_restpose` | `rt_rest` | The rest anchor: canonical rest pose the IK curve is built from |
@@ -402,14 +403,15 @@ and the stretch all read the aim as running down the chain, and Setup's
 own **Orient** step re-derives it from the joint positions, so it would
 undo the mirror on every re-run.
 
-No joint orientation escapes this, so the FX fix it on the way in instead,
-where the parity argument has no hold: `rt_anim.fx_mirror_signs` measures
+No joint orientation escapes this, so the **dials** fix it on the way in
+instead, where the parity argument has no hold: `rig_tail_mirror` measures
 how a pair's chains actually relate and negates the axes that do not
-already do what `MIRROR_BEHAVIOR` asked for. Curl, wave and noise
-therefore obey the behavior on **all three** axes — `symmetric` mirrors
-every axis, `parallel` moves every axis the same way round the world
-(`MIRROR_FX`). The FK and IK controls are unaffected — an animator posing
-a gizmo still gets the one mirrored axis the table above names.
+already do what `MIRROR_BEHAVIOR` asked for. Curl, wave, noise, twist,
+roll and offset therefore obey the behavior on **all three** axes —
+`symmetric` mirrors every one, `parallel` moves every one the same way
+round the world (`MIRROR_SLIDERS`). The FK and IK controls are unaffected
+— an animator posing a gizmo still gets the one mirrored axis the table
+above names.
 
 ### Include / Exclude
 
@@ -849,21 +851,12 @@ saturates its last joints and stops tightening, which is the honest limit
 — a 12-bone chain cannot draw two clean turns. Lowering `curl_falloff`
 buys most of it back by spreading the same total over the whole chain.
 
-**L/R symmetry** comes from `fx_mirror_signs`, which measures how a pair's
-BN chains actually relate and negates the axes that do not already do what
-`MIRROR_BEHAVIOR` asked for, so all three axes obey it (see
-`MIRROR_BEHAVIOR` above for why the joint orientation can only manage one).
-The frames are measured but the goal is taken from the behavior, so a
-hand-oriented or **Roll Chain**-fixed pair lands on the same convention as
-a mirrored one. Only the non-`MIRROR_SOURCE_SIDE` half of a pair is signed;
-centre and unpaired parts are untouched. Set `MIRROR_FX` to False for the
-old per-side-raw behavior. The signs are for ROTATIONS — a translation
-along a local axis mirrors under the opposite rule, so FK `offset` would
-need their inverse.
+**L/R symmetry** comes from `rt_mirror.rotation_signs` — see
+`rig_tail_mirror` below.
 
 Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
-`fx_mirror_signs`, `build_loop`, `build_wave`, `build_curl`,
-`build_noise`, `delete_expression`.
+`build_loop`, `build_wave`, `build_curl`, `build_noise`,
+`delete_expression`.
 
 ---
 
@@ -1662,6 +1655,57 @@ Matrix offset network construction.
 
 #### `build_matrix_offset_network(rigname, fk, ik)`
 Build matrix blend network for IK/FK switching with FX offsets.
+
+---
+
+## rig_tail_mirror.py (rt_mirror)
+
+Makes an L/R pair's **dials** agree with `MIRROR_BEHAVIOR` on all three
+axes — `symmetric` moves the pair as mirror images, `parallel` moves it
+the same way round the world. Consumed by `rig_tail_anim` (curl, wave,
+noise), `rig_tail_fk` (twist, roll, offset) and `rig_tail_connect` (the IK
+spline handle's twist/roll/offset).
+
+**Why it has to exist.** A mirrored skeleton delivers exactly one mirrored
+axis, and no orientation scheme can do better with the aim pinned down the
+chain — see the `MIRROR_BEHAVIOR` section for the parity argument. A sign
+on the value going in is not bound by that argument at all: a scalar
+negates freely. So the frames stay as they are and the dials are corrected
+on the way in.
+
+The signs are **measured**, not derived: each axis of the target chain is
+compared against the reflection of its partner's across the symmetry
+plane, averaged over the chain, and negated only when what it does now
+disagrees with what the behavior asked for. Only the sign of a dot product
+is read, so two hand-placed chains still resolve; an axis that is not a
+mirror at all (|cos| under `MIRROR_TOLERANCE`) is left alone with a
+warning. Only the non-`MIRROR_SOURCE_SIDE` half of a pair is signed, so
+exactly one side moves; centre and unpaired parts are untouched.
+
+**Rotations and translations take opposite signs.** A rotation about a
+local axis mirrors when that axis points *against* the reflection; a
+translation along one mirrors when it points *along* it. So a dial that
+slides a joint (FK `offset`, the spline handle's `offset`) reads
+`translation_signs`, which is the exact negative of `rotation_signs`.
+Under the default `symmetric` that means twist and roll are negated on the
+mirrored side while offset is left alone — sliding both tails toward their
+own tips already *is* the mirrored motion.
+
+Set `MIRROR_SLIDERS` to False for the old per-side-raw behavior.
+
+### Functions
+
+#### `rotation_signs(rigname)`
+Per-axis sign for a rotation about each local axis, as `{'X','Y','Z'}`.
+
+#### `translation_signs(rigname)`
+The same for a translation along each local axis (the negative).
+
+#### `aim_axis()`
+`ORIENT_AIM_AXIS` as a signs key, or None when it is not a usable axis.
+
+#### `behavior()`
+The validated `MIRROR_BEHAVIOR`, defaulting to `symmetric`.
 
 ---
 

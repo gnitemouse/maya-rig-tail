@@ -19,28 +19,26 @@ through rt_ctrlall.resolved_plug so the Main Controller dashboard can route
 them, and expressions are deleted via delete_expression - a raw delete
 on a connected expression cascades through its connection web.
 
-An L/R pair's FX obey MIRROR_BEHAVIOR on all three axes: fx_mirror_signs
-measures how the two chains' joint frames actually relate and negates the
-axes that do not already do what the behavior asked for. See MIRROR_FX
-for why a mirrored skeleton alone can only ever manage one of them.
+An L/R pair's FX obey MIRROR_BEHAVIOR on all three axes, via the signs
+rig_tail_mirror measures for the pair - see that module for why a
+mirrored skeleton alone can only ever manage one of them.
 
 Functions:
     delete_expression: remove an expression without the delete cascading
     build_anim_effects: entry point; build the enabled FX for one part
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
-    fx_mirror_signs: per-axis sign making a part's FX mirror its L/R partner
     build_loop: modulo-time driver the other FX read
     build_wave, build_curl, build_noise: one network per effect
 '''
 
-import math
 import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 import rig_tail_maya as rt_maya
 import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
 
@@ -69,41 +67,6 @@ CURL_DEGREES_PER_UNIT = 72.0
 # while a dense one reaches the full wrap. Raising the total therefore only
 # spends where the joint count can carry it. See build_curl.
 CURL_MAX_JOINT_DEGREES = 90.0
-# Make an L/R pair's FX obey MIRROR_BEHAVIOR on all three axes: 'symmetric'
-# moves the pair as mirror images, 'parallel' moves it the same way round
-# the world.
-#
-# WHY THIS IS NEEDED. A mirrored skeleton cannot do it on its own. The FX
-# rotate each joint about its own local axes, and 'the same channel value
-# moves the two sides as mirror images' holds for a local axis only when the
-# target's copy of it points OPPOSITE the reflection of the source's. A
-# reflection flips handedness, so a joint frame can satisfy that on an ODD
-# number of its three axes - one or all three, never two. All three means
-# negating the aim as well, which points it back UP the chain (this is what
-# Maya's mirrorJoint -mirrorBehavior does, and why a mirrored arm's local X
-# runs backwards); the spline IK, the advanced twist and the stretch all
-# read the aim as running down the chain, and Setup's own Orient step
-# re-derives it from the joint positions, so that is not available here.
-# With the aim pinned, exactly ONE axis is left free to mirror, and
-# MIRROR_BEHAVIOR only chooses which: 'symmetric' the up axis
-# (ORIENT_UP_AXIS), 'parallel' the third one. Whichever is not chosen drives
-# both sides the same way round the world, which reads as the pair moving
-# oppositely - and no orientation scheme, in any software, escapes that.
-#
-# So the fix cannot live in the joint orientation; it lives here, as a sign
-# on the value going in, where the parity argument has no hold. Sliders can
-# do what the frames cannot. fx_mirror_signs measures the two chains rather
-# than assuming a mirror was run, and negates only the axes that do not
-# already do what MIRROR_BEHAVIOR asked for, on one side of the pair only
-# (the side that is not MIRROR_SOURCE_SIDE).
-#
-# Off leaves every part's FX driving its own axes raw, which is how builds
-# before this behaved: mirrored on one axis, same-way-round on the other two.
-MIRROR_FX = True
-# Below this |cos| between a target axis and the reflection of its partner's,
-# the two chains are not mirror images on that axis and no sign can make them
-# read as one; fx_mirror_signs leaves it alone and says so.
-MIRROR_FX_TOLERANCE = 0.5
 
 
 def delete_expression(expr):
@@ -139,7 +102,7 @@ def build_anim_effects(rigname, fk, ik):
     Each FX writes to its own composeMatrix.
 
     The mirror signs are measured once here and handed to every effect, so
-    all three read the pair the same way (see fx_mirror_signs).
+    all three read the pair the same way (see rt_mirror).
 
     Arguments
         rigname (str): Name of rig component
@@ -154,7 +117,7 @@ def build_anim_effects(rigname, fk, ik):
 
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     joints = rt_constants.JOINTS_BN[rigname]
-    signs = fx_mirror_signs(rigname)
+    signs = rt_mirror.rotation_signs(rigname)
 
     loop_time = None
     if rt_constants.EFFECTS['loop']:
@@ -210,190 +173,6 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
                          dv=LOOP_FRAME_DEFAULT, min=1)
 
 
-# MIRROR ===============================================================
-
-NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
-
-
-def fx_mirror_signs(rigname):
-    '''
-    Per-axis sign that makes this part's FX agree with MIRROR_BEHAVIOR on
-    ALL THREE axes. See MIRROR_FX for why the joint orientation cannot get
-    past one of them on its own.
-
-        'symmetric' - every axis moves the pair as mirror images
-        'parallel'  - every axis moves the pair the same way round the world
-
-    The behavior is the animator's stated convention, so the FX honour it
-    outright rather than always mirroring: choosing 'parallel' on a splayed
-    pair - one tail curling up while the other curls down - is a choice, and
-    forcing the sliders to mirror would quietly overrule it.
-
-    Only the target side of a pair is signed - the side that is NOT
-    rt_constants.MIRROR_SOURCE_SIDE - so exactly one of the two moves and
-    the source keeps driving its own axes raw. A center part, an unpaired
-    part, and the source side all come back unsigned.
-
-    What each axis does NOW is MEASURED, never assumed: the target's copy of
-    it is compared against the reflection of the source's across the
-    symmetry plane, over the whole chain. Anti-parallel means that axis
-    already mirrors; parallel means it drives both sides the same way round
-    the world. Whichever it is, it takes -1 when that disagrees with the
-    behavior and +1 when it already agrees. The test only reads the SIGN of
-    a dot product, so it survives the small orientation differences of two
-    hand-placed chains - and a pair that is not a mirror on some axis (|cos|
-    under MIRROR_FX_TOLERANCE) is left alone with a warning, since no sign
-    would make those two read as one motion.
-
-    Measuring the frames while taking the GOAL from MIRROR_BEHAVIOR is what
-    makes this right for chains that were oriented by hand or rolled with
-    the Setup UI's Roll Chain and never went through mirror_frames at all:
-    however those two chains ended up standing, the sliders land on the
-    convention the behavior names.
-
-    Rotations only. A translation along a local axis mirrors under the
-    OPPOSITE rule (its axis must point along the reflection, not against
-    it), so anything sliding a joint - FK offset - needs the inverse of
-    these signs, not these.
-
-    Arguments
-        rigname (str): Name of rig component
-
-    Return
-        dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
-    '''
-    if not MIRROR_FX:
-        return dict(NO_MIRROR)
-
-    partner = _mirror_partner(rigname)
-    if not partner:
-        return dict(NO_MIRROR)
-
-    src = rt_constants.JOINTS_BN.get(partner) or []
-    tgt = rt_constants.JOINTS_BN.get(rigname) or []
-    if not src or not tgt:
-        # Only reachable when the partner was never detected this session
-        # (excluded from every run since Maya started). Worth saying out
-        # loud: this side builds unsigned while the partner keeps whatever
-        # signs its own build gave it, so the pair stops matching.
-        logger.warning(f'{rigname}: FX mirror: no BN chain for {partner}, '
-                       'building the FX unsigned - run Setup so both sides '
-                       'of the pair are detected')
-        return dict(NO_MIRROR)
-
-    keep = {'x': 0, 'y': 1, 'z': 2}.get(
-        str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).lower(), 0)
-
-    # Mean cos between each target axis and the reflection of the source's.
-    # Averaged over the chain rather than read off one joint: a single joint
-    # can sit oddly (a hand-tweaked tip, an un-oriented base) without that
-    # being what the chain as a whole does.
-    cosines = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
-    # Only the joints both chains actually have, and only those still in the
-    # scene: a stale JOINTS_BN entry naming a deleted joint must not take the
-    # build down over a sign
-    pairs = [(s, t) for s, t in zip(src, tgt)
-             if cmds.objExists(s) and cmds.objExists(t)]
-    if not pairs:
-        logger.warning(f'{rigname}: FX mirror: no joints in common with '
-                       f'{partner}, building the FX unsigned')
-        return dict(NO_MIRROR)
-    for src_jnt, tgt_jnt in pairs:
-        src_rows = _axis_rows(src_jnt)
-        tgt_rows = _axis_rows(tgt_jnt)
-        for row, axis in enumerate('XYZ'):
-            reflected = [(-v if i == keep else v)
-                         for i, v in enumerate(src_rows[row])]
-            cosines[axis] += sum(reflected[i] * tgt_rows[row][i]
-                                 for i in range(3))
-    for axis in cosines:
-        cosines[axis] /= len(pairs)
-
-    want_mirror = _mirror_behavior() == 'symmetric'
-    signs = dict(NO_MIRROR)
-    for axis, cos in cosines.items():
-        if abs(cos) < MIRROR_FX_TOLERANCE:
-            logger.warning(f'{rigname}: FX mirror: the {axis} axis is not a '
-                           f'mirror of {partner} (cos {cos:+.2f}), leaving it '
-                           'unsigned - re-run Setup Mirror Orient on the pair')
-            continue
-        # An axis anti-parallel to the reflection (cos < 0) mirrors as it
-        # stands; negate the ones that do not already do what was asked for
-        signs[axis] = 1.0 if (cos < 0) == want_mirror else -1.0
-
-    flipped = ''.join(a for a in 'XYZ' if signs[a] < 0)
-    logger.debug(f'{rigname}: FX mirror of {partner} '
-                 f'({_mirror_behavior()}): '
-                 f'{"negating " + flipped if flipped else "nothing to negate"}')
-    return signs
-
-
-def _mirror_behavior():
-    '''
-    The mirror convention the FX should land on, 'symmetric' or 'parallel'.
-
-    Same validation and fallback as rig_tail_setup's own reader, kept here
-    rather than imported: that one is private to the Setup phase, and the
-    FX need the answer on every build whether Setup ran this session or not.
-
-    Return
-        str: 'symmetric' or 'parallel'
-    '''
-    value = str(getattr(rt_constants, 'MIRROR_BEHAVIOR', 'symmetric'))
-    value = value.strip().lower()
-    if value not in ('symmetric', 'parallel'):
-        logger.warning(f"FX mirror: unknown MIRROR_BEHAVIOR '{value}', "
-                       "using 'symmetric'")
-        return 'symmetric'
-    return value
-
-
-def _mirror_partner(rigname):
-    '''
-    The rig part this one should mirror, or None when it should not.
-
-    Only the target side of an L/R pair gets a partner, so exactly one side
-    of the pair is ever signed (see fx_mirror_signs). Pairing is
-    rig_tail_setup's find_mirror_pairs, so the FX agree with the Setup
-    phase's idea of what pairs with what.
-
-    Arguments
-        rigname (str): Name of rig component
-
-    Return
-        str or None: the source-side partner, or None
-    '''
-    # Deferred: rig_tail_setup is the Setup phase's module and pulls in the
-    # cleanup and cache modules with it; the FX only need one function of it
-    import rig_tail_setup as rt_setup
-    try:
-        pairs, _ = rt_setup.find_mirror_pairs(rt_constants.RIGPARTS)
-    except Exception as err:
-        logger.warning(f'{rigname}: FX mirror: cannot pair rig parts ({err})')
-        return None
-    for source, target in pairs:
-        if target == rigname:
-            return source
-    return None
-
-
-def _axis_rows(node):
-    '''
-    A node's three local axes (X/Y/Z) as unit world vectors.
-
-    Normalized so the cosines fx_mirror_signs sums are comparable between
-    joints: a joint carrying scale (the squash network drives BN scaleY/Z)
-    would otherwise weigh more than its neighbours.
-    '''
-    m = cmds.xform(node, q=True, ws=True, matrix=True)
-    rows = ([m[0], m[1], m[2]],
-            [m[4], m[5], m[6]],
-            [m[8], m[9], m[10]])
-    unit = []
-    for row in rows:
-        length = math.sqrt(sum(v * v for v in row))
-        unit.append([v / length for v in row] if length > 1e-9 else row)
-    return unit
 
 
 # LOOP =================================================================
@@ -454,7 +233,8 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
         basectrl (str): Base control with wave attributes
         joints (list): List of BN joints (joint 00 will be skipped in matrix network)
         loop_time (str): Optional loop time output plug
-        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+        signs (dict): Per-axis mirror signs from
+            rt_mirror.rotation_signs; None
             leaves every axis driving its own direction raw
     '''
     logger.trace(f'{rigname}: Wave Animation Effect')
@@ -462,7 +242,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
         logger.warning('Not enough joints for wave')
         return
 
-    signs = signs or NO_MIRROR
+    signs = signs or rt_mirror.NO_MIRROR
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     num_joints = len(joints)
     # With no loop node, normalize raw time the same way the loop node does
@@ -575,7 +355,8 @@ def build_curl(rigname, basectrl, joints, signs=None):
         rigname (str): Name of rig component
         basectrl (str): Base control with curl attributes
         joints (list): List of BN joints (joint 00 will be skipped)
-        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+        signs (dict): Per-axis mirror signs from
+            rt_mirror.rotation_signs; None
             leaves every axis curling its own direction raw
     '''
     logger.trace(f'{rigname}: Curl Animation Effect')
@@ -583,7 +364,7 @@ def build_curl(rigname, basectrl, joints, signs=None):
         logger.warning('Not enough joints for curl')
         return
 
-    signs = signs or NO_MIRROR
+    signs = signs or rt_mirror.NO_MIRROR
     curl_axes = [('X', 'curlX'), ('Y', 'curlY'), ('Z', 'curlZ')]
     # Rotation axis -> the clamp channel carrying it (one clamp per joint)
     clamp_channel = {'X': 'R', 'Y': 'G', 'Z': 'B'}
@@ -687,7 +468,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     - Deterministic per-joint/axis seed for stable but different motion per joint/axis
     - When loop_time is provided, uses integer harmonic counts so the animation loops exactly
     - The seed is per joint index and axis, so an L/R pair already jitters
-      to the same numbers; the mirror signs (fx_mirror_signs) are what turn
+      to the same numbers; the mirror signs (rt_mirror) are what turn
       that into the two sides jittering as mirror images
 
     Arguments:
@@ -695,7 +476,8 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
         basectrl (str): Base control with noise attributes
         joints (list): List of BN joints (joint 00 will be skipped)
         loop_time (str): Optional loop time output plug
-        signs (dict): Per-axis mirror signs from fx_mirror_signs; None
+        signs (dict): Per-axis mirror signs from
+            rt_mirror.rotation_signs; None
             leaves every axis jittering its own direction raw
     '''
     logger.trace(f'{rigname}: Noise Effect (wavy, loopable)')
@@ -703,7 +485,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
         logger.warning('Not enough joints for noise')
         return
 
-    signs = signs or NO_MIRROR
+    signs = signs or rt_mirror.NO_MIRROR
     effect_axes = ['X', 'Y', 'Z']
     axis_offsets = {'X': 0.0, 'Y': 100.0, 'Z': 200.0}
     num_joints = len(joints)

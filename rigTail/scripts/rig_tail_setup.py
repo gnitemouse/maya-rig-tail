@@ -142,8 +142,9 @@ for _name, _value in _CST_DEFAULTS.items():
     if not hasattr(rt_constants, _name):
         setattr(rt_constants, _name, _value)
 
-# Rig part prefix that marks a mirrored side, e.g. 'L_fintail'.
-_SIDE_RE = re.compile(r'^([LlRr])_(.+)$')
+# Rig part prefix that marks a mirrored side, e.g. 'L_fintail'. Defined
+# with the pairing it serves, in rig_tail_naming.
+_SIDE_RE = rt_naming.SIDE_RE
 _EPS = 1e-9
 
 
@@ -1040,43 +1041,13 @@ def _report_chain_gaps(have, created, dry_run):
 
 # PAIRING ==============================================================
 
-def find_mirror_pairs(rigparts):
-    '''
-    Pair rig parts into (source, target) by their side prefix.
-
-    A pair exists when both an 'L_<base>' and an 'R_<base>' rig part are
-    present (prefix match is case-insensitive; the base must be identical).
-    The source side is rt_constants.MIRROR_SOURCE_SIDE (default 'R'); the other
-    side is the target that gets overwritten. Center and unpaired parts are
-    ignored - a lone source side names a target that RIGPARTS does not
-    list, which is _implied_mirror_pairs' business and only Mirror Joints
-    can act on, so it is not a pair until that has built the chain.
-
-    Arguments
-        rigparts (list): RIGPARTS names.
-
-    Return
-        tuple: (pairs, paired_names).
-            pairs (list): [(source_rigname, target_rigname), ...].
-            paired_names (set): every rigname that belongs to a pair.
-    '''
-    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
-    groups = {}
-    for rp in rigparts:
-        m = _SIDE_RE.match(rp)
-        if not m:
-            continue
-        groups.setdefault(m.group(2), {})[m.group(1).upper()] = rp
-
-    pairs = []
-    paired = set()
-    for base, sides in groups.items():
-        if 'L' in sides and 'R' in sides:
-            target_side = 'L' if source_side == 'R' else 'R'
-            pairs.append((sides[source_side], sides[target_side]))
-            paired.add(sides['L'])
-            paired.add(sides['R'])
-    return pairs, paired
+# The pairing itself lives in rig_tail_naming: it is a question about rig
+# part NAMES, and the build needs the same answer (rig_tail_mirror) without
+# being able to import this module - rig_tail_setup.py is an optional
+# install that a Builder-only setup leaves off disk. Re-exported rather than
+# forwarded so rt_setup.find_mirror_pairs stays a valid call for the Setup
+# UI and the Setup tests.
+find_mirror_pairs = rt_naming.find_mirror_pairs
 
 
 # FRAMES ===============================================================

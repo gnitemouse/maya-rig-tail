@@ -42,6 +42,7 @@ import rig_tail_cache as rt_cache
 import rig_tail_joint as rt_joint
 import rig_tail_matrix as rt_matrix
 import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 import rig_tail_stretch as rt_stretch
 import rig_tail_anim as rt_anim
 import rig_tail_fk as rt_fk
@@ -506,9 +507,50 @@ def connect_spline_ik(rigname):
 
     spline_handle = rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, rt_constants.TYPE_IK)
     if cmds.objExists(spline_handle):
-        for attr in ['twist', 'roll', 'offset']:
-            cmds.connectAttr(rt_ctrlall.resolved_plug(rigname, attr),
-                             f'{spline_handle}.{attr}', f=1)
+        connect_twist_roll_ik(rigname, spline_handle)
+
+
+def connect_twist_roll_ik(rigname, spline_handle):
+    '''
+    Drive the spline handle's native twist/roll/offset from the basectrl
+    dials, carrying the L/R mirror sign.
+
+    The FK equivalent is rig_tail_fk.connect_twist_roll, and the two MUST
+    sign the same way: the BN chain blends between the two drivers
+    (rig_tail_matrix), so a dial that mirrors in one mode and not the other
+    would make the tail jump on an IK/FK switch.
+
+    twist and roll turn the chain about its own axis and take the ROTATION
+    sign; offset re-samples the joints ALONG the curve, which is a slide,
+    so it takes the translation sign - the exact opposite (see
+    rig_tail_mirror). Under the default 'symmetric' twist and roll are
+    negated on the mirrored side and offset is left alone.
+
+    A sign of +1 connects the dial straight to the handle as before; only a
+    negated axis pays for a node. Stale mirror nodes from a build when this
+    side WAS signed are removed, so flipping MIRROR_BEHAVIOR or the source
+    side cannot leave one feeding the handle.
+
+    Arguments
+        rigname (str): Name of rig component
+        spline_handle (str): The part's IK spline handle
+    '''
+    aim_key = rt_mirror.aim_axis()
+    rot_sign = rt_mirror.rotation_signs(rigname).get(aim_key, 1.0)
+    signs = {'twist': rot_sign, 'roll': rot_sign, 'offset': -rot_sign}
+    for attr, sign in signs.items():
+        src = rt_ctrlall.resolved_plug(rigname, attr)
+        mirror_node = f'{rt_constants.TYPE_IK}_{rigname}_{attr}_mirror_multiplyDivide'
+        if sign < 0:
+            if not cmds.objExists(mirror_node):
+                cmds.createNode('multiplyDivide', n=mirror_node, s=1, ss=1)
+                cmds.setAttr(f'{mirror_node}.operation', 1)  # multiply
+            cmds.connectAttr(src, f'{mirror_node}.input1X', f=1)
+            cmds.setAttr(f'{mirror_node}.input2X', sign)
+            src = f'{mirror_node}.outputX'
+        elif cmds.objExists(mirror_node):
+            rt_maya.remove(mirror_node)
+        cmds.connectAttr(src, f'{spline_handle}.{attr}', f=1)
 
 
 # CONNECT EFFECTS =====================================================
