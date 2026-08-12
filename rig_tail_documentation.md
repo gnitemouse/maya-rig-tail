@@ -841,7 +841,7 @@ through `rt_ctrlall.resolved_plug` so the dashboard can route them.
 **Curl** shares one falloff profile between the three axes: each joint's
 share of the bend is `u ** curl_falloff`, normalised by the live sum of
 those shares, so a curl value names the **total** wrap of the whole chain
-(`CURL_DEGREES_PER_UNIT`, 72 — two full turns at the top of the slider)
+(`CURL_DEGREES_PER_UNIT`, 108 — three full turns at the top of the slider)
 whatever the joint count, and the falloff only decides how that wrap is
 spread. A per-joint clamp (`CURL_MAX_JOINT_DEGREES`, 90) keeps the tip
 inside the coil: the profile peaks at the tip, and an unclamped last joint
@@ -1686,10 +1686,20 @@ exactly one side moves; centre and unpaired parts are untouched.
 local axis mirrors when that axis points *against* the reflection; a
 translation along one mirrors when it points *along* it. So a dial that
 slides a joint (FK `offset`, the spline handle's `offset`) reads
-`translation_signs`, which is the exact negative of `rotation_signs`.
-Under the default `symmetric` that means twist and roll are negated on the
-mirrored side while offset is left alone — sliding both tails toward their
-own tips already *is* the mirrored motion.
+`translation_signs`. Under the default `symmetric` that means twist and
+roll are negated on the mirrored side while offset is left alone — sliding
+both tails toward their own tips already *is* the mirrored motion.
+
+`translation_signs` is **not** the negation of `rotation_signs`, though it
+looks like one on a mirrored part: a part with nothing to mirror — the
+source side, a centre part, an unpaired part — has to come back unsigned
+for both, and negating the dict turned every one of those to −1.
+
+**The frames are read from the stored rest pose** (`restMatrix`), not from
+the joints as they stand. The answer must not depend on where in the build
+it is asked, and `rig_tail_matrix` zeroes every BN joint and rebuilds the
+network under it partway through — measuring live caught the chains
+mid-rebuild.
 
 Set `MIRROR_SLIDERS` to False for the old per-side-raw behavior.
 
@@ -1745,17 +1755,25 @@ A node's world frame with each axis scaled by its sign, as 16 floats.
 #### `behavior()`
 The validated `MIRROR_BEHAVIOR`, defaulting to `symmetric`.
 
-### Not covered: the IK spline controls
+### Not yet covered: the IK spline controls
 
-They are driven by `parentConstraint` onto the cluster handles, with
-maintain-offset **off** — the cluster takes the control's world transform
-outright. Re-standing a control in the mirrored frame therefore changes
-the rest orientation the cluster handle receives, which moves the CVs it
-owns. Getting it right means switching those constraints to
-maintain-offset, which changes what the cluster inherits at rest for every
-rig, mirrored or not. That is a change whose effect can only be judged in
-Maya, so it is deliberately not made here. FK covers the case the request
-was about; IK spline posing keeps today's behavior.
+Re-standing them is **safe** — the clusters do not care. Each spline
+cluster owns a single CV with the handle's rotate pivot sitting on it, so
+a rotated cluster handle deforms nothing (the same one-CV property
+`rig_tail_curve.connect_driver_to_solver_curve` documents, and the reason
+those constraints can run with maintain-offset off at all). The controls'
+orientation really is independent of the clusters' and of the spline
+handle's.
+
+What is not settled is **which** frame to give them. An IK spline control
+is posed by TRANSLATION — its rotation is the no-op above — and a
+translation mirrors under the opposite rule to a rotation. Since `D` must
+carry an odd number of negated axes, the count of *un*-negated ones is
+even, so a right-handed control frame mirrors **2 of 3 translate axes, or
+0** — never all three. The full behavior mirror the FK controls use
+(`D = -I`) is the worst choice here: it mirrors all three rotations, which
+do nothing, and none of the translations. The right frame negates exactly
+one axis, and which one is a judgement about how the controls are used.
 
 ## rig_tail_cache.py (rt_cache)
 

@@ -65,6 +65,7 @@ import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
+import rig_tail_restpose as rt_rest
 
 logger = logger_setup(__name__)
 
@@ -125,6 +126,28 @@ def rotation_signs(rigname):
     Return
         dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
     '''
+    return _signs(rigname, rotation=True)
+
+
+def _signs(rigname, rotation):
+    '''
+    The measurement behind rotation_signs and translation_signs.
+
+    One body for both so the 'nothing to mirror' answers cannot diverge:
+    an unpaired part, a center part and the source side must come back
+    UNSIGNED for a translation exactly as they do for a rotation. Deriving
+    one from the other by negating the whole dict got that wrong - it
+    turned every unmirrored part's translation signs to -1 and reversed FK
+    and IK offset on the source side and on every center tail.
+
+    Arguments
+        rigname (str): Name of rig component
+        rotation (bool): True for a rotation about each axis, False for a
+            translation along it (the opposite mirror rule)
+
+    Return
+        dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
+    '''
     if not MIRROR_SLIDERS:
         return dict(NO_MIRROR)
 
@@ -181,12 +204,16 @@ def rotation_signs(rigname):
                            'it unsigned - re-run Setup Mirror Orient on the '
                            'pair')
             continue
-        # An axis anti-parallel to the reflection (cos < 0) mirrors as it
-        # stands; negate the ones that do not already do what was asked for
-        signs[axis] = 1.0 if (cos < 0) == want_mirror else -1.0
+        # A rotation about an axis anti-parallel to the reflection (cos < 0)
+        # mirrors as it stands; a translation along it mirrors when the axis
+        # points the OTHER way (cos > 0). Negate whichever does not already
+        # do what the behavior asked for.
+        mirrors_now = (cos < 0) if rotation else (cos > 0)
+        signs[axis] = 1.0 if mirrors_now == want_mirror else -1.0
 
     flipped = ''.join(a for a in 'XYZ' if signs[a] < 0)
-    logger.debug(f'{rigname}: Mirror of {partner} ({behavior()}): '
+    kind = 'rotation' if rotation else 'translation'
+    logger.debug(f'{rigname}: Mirror of {partner} ({behavior()}, {kind}): '
                  f'{"negating " + flipped if flipped else "nothing to negate"}')
     return signs
 
@@ -201,9 +228,12 @@ def translation_signs(rigname):
     points ALONG it. So the two rules are opposites, and a dial that slides
     a joint rather than turning it needs these signs.
 
-    Worth the separate function rather than a sign flip at each call site:
-    'offset slides, so its sign is the other one' is the kind of thing that
-    is obvious once and invisible forever after.
+    NOT the negation of rotation_signs, though it looks like one on a
+    mirrored part. A part with nothing to mirror - unpaired, center, or the
+    source side of a pair - must come back UNSIGNED for both, and negating
+    the dict turned all of those to -1: it reversed FK and IK offset on the
+    source side and on every center tail, which is the one place the sign
+    had no business being.
 
     Arguments
         rigname (str): Name of rig component
@@ -211,7 +241,7 @@ def translation_signs(rigname):
     Return
         dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
     '''
-    return {axis: -sign for axis, sign in rotation_signs(rigname).items()}
+    return _signs(rigname, rotation=False)
 
 
 def control_signs(rigname):
@@ -325,13 +355,35 @@ def behavior():
 
 def _axis_rows(node):
     '''
-    A node's three local axes (X/Y/Z) as unit world vectors.
+    A node's three local axes (X/Y/Z) as unit world vectors, taken from its
+    stored REST pose when it has one.
+
+    Rest, not live, because this is asked DURING the build and the answer
+    must not depend on where in the build it is asked. rig_tail_matrix
+    zeroes every BN joint - offsetParentMatrix to identity, translate,
+    rotate and jointOrient to zero - and rebuilds the network under it, and
+    the FX are wired immediately afterwards. Reading a live world matrix
+    there caught the chains mid-rebuild and mid-evaluation: the twist, roll
+    and control signs, measured earlier in the same build, came out right
+    while curl, wave and noise measured two chains that no longer looked
+    like mirrors and were left unsigned. The stored rest matrix is captured
+    once at build start, before anything moves, so every consumer now sees
+    the same frames whenever it asks.
+
+    Live is still the fallback, for a chain with nothing captured yet.
 
     Normalized so the cosines rotation_signs sums are comparable between
     joints: a joint carrying scale (the squash network drives BN scaleY/Z)
     would otherwise weigh more than its neighbours.
     '''
-    m = cmds.xform(node, q=True, ws=True, matrix=True)
+    m = None
+    if cmds.attributeQuery(rt_rest.REST_ATTR, node=node, exists=True):
+        m = cmds.getAttr(f'{node}.{rt_rest.REST_ATTR}')
+        # A matrix attribute reads back as [[16 floats]] from some callers
+        if m and isinstance(m[0], (list, tuple)):
+            m = list(m[0])
+    if not m or len(m) != 16:
+        m = cmds.xform(node, q=True, ws=True, matrix=True)
     rows = ([m[0], m[1], m[2]],
             [m[4], m[5], m[6]],
             [m[8], m[9], m[10]])

@@ -53,11 +53,18 @@ LOOP_FRAME_DEFAULT = 60
 # Time-source expression for wave/noise when the Loop effect is not built.
 UNLOOPED_TIME_SRC = f'(time1.outTime * {TWO_PI / LOOP_FRAME_DEFAULT})'
 # Degrees of TOTAL bend, base to tip, that one unit of a curl attribute adds.
-# The curl attributes run -10..10, so 72 puts TWO full turns at each end of
-# the slider. Curl names the whole chain's wrap, not a per-joint angle
+# The curl attributes run -10..10, so 108 puts THREE full turns at each end
+# of the slider. Curl names the whole chain's wrap, not a per-joint angle
 # (see build_curl), which is what makes a 12-joint and an 80-joint tail curl
 # by the same amount.
-CURL_DEGREES_PER_UNIT = 72.0
+#
+# Three turns is what a 50-joint chain - the squid tails - can just carry at
+# the default falloff without any joint reaching the guard below (its worst
+# is 85 of 90 degrees). Past this the guard starts eating the increase on
+# those chains rather than tightening them, so more here would want a
+# higher guard, or a lower curl_falloff to spread the wrap further down the
+# chain, or both.
+CURL_DEGREES_PER_UNIT = 108.0
 # Ceiling on the bend any SINGLE joint takes, whatever total the curl value
 # and the falloff ask for. This is what keeps the tip inside the coil rather
 # than folding out of it: the total above is shared out by the falloff
