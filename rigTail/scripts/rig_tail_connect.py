@@ -414,6 +414,12 @@ def connect_fk(rigname, fk, ik):
     # Only built when INDIV_FK is enabled; otherwise the SDK_JNT layer is
     # left as an identity group and joints follow the variable-FK controls.
     if rt_constants.INDIV_FK:
+        # On the mirrored side of an L/R pair these controls stand in the
+        # behavior-mirrored frame (rt_control.mirror_control_frames), so the
+        # constraint that makes them follow the chain has to KEEP that
+        # offset, and the rotation they send on has to be negated to match.
+        # Both are no-ops when the part takes no control mirror.
+        signs = rt_mirror.control_signs(rigname)
         for i, jnt in enumerate(rt_constants.JOINTS_FK[rigname]):
             fk_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, rt_constants.TYPE_FK, i)
             fk_ctrl_grp = rt_naming.fstr(rigname, rt_constants.CTRL_GRP, rt_constants.TYPE_FK, i)
@@ -421,9 +427,23 @@ def connect_fk(rigname, fk, ik):
             sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, i)
 
             if not cmds.objExists(f'{fk_ctrl_grp}_parentConstraint1'):
-                cmds.parentConstraint(last_sdk, fk_ctrl_grp)
+                cmds.parentConstraint(last_sdk, fk_ctrl_grp, mo=bool(signs))
 
-            cmds.connectAttr(f'{fk_ctrl}.rotate', f'{sdk_grp}.rotate', f=1)
+            rotation_plug = f'{fk_ctrl}.rotate'
+            mirror_node = f'{rt_constants.TYPE_FK}_{rigname}_{i:02d}_ctrlmirror_multiplyDivide'
+            if signs:
+                if not cmds.objExists(mirror_node):
+                    cmds.createNode('multiplyDivide', n=mirror_node, s=1, ss=1)
+                    cmds.setAttr(f'{mirror_node}.operation', 1)  # multiply
+                cmds.connectAttr(rotation_plug, f'{mirror_node}.input1', f=1)
+                cmds.setAttr(f'{mirror_node}.input2',
+                             signs['X'], signs['Y'], signs['Z'], type='double3')
+                rotation_plug = f'{mirror_node}.output'
+            elif cmds.objExists(mirror_node):
+                # Left from a build when this side WAS mirrored
+                rt_maya.remove(mirror_node)
+
+            cmds.connectAttr(rotation_plug, f'{sdk_grp}.rotate', f=1)
 
     # Twist/roll/offset for FK. Runs after the INDIV_FK block above so it
     # reroutes that block's SDK_JNT connection rather than being

@@ -259,6 +259,12 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     3. remapValue (weight): the tent over that range, scaled by 1/num_joints
     4. multiplyDivide (rotmult): rotation * weight -> sdk_grp.rotate
 
+    plus, on the mirrored side of an L/R pair only, one multiplyDivide
+    between the sum and the weighting that negates the axes the controls'
+    own mirrored frame turned around (rt_mirror.control_signs). Gizmo and
+    bend agree either way; what changes is that the same value on an L/R
+    pair now poses them as mirror images.
+
     Comparisons against jnt.joint_pos go through control_position_plug, so
     a control rotates the joints it is drawn on. See set_curveinfo_fk.
 
@@ -322,6 +328,23 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         i += 1
     # Output: f'{rotsum}.output3D' = accumulated rotation
 
+    # On the mirrored side of an L/R pair the controls stand in the
+    # behavior-mirrored frame (rt_control.mirror_control_frames), which
+    # points two of their axes the other way from the joints'. Negating
+    # those two here is what puts the gizmo and the bend back in agreement,
+    # while the pair as a whole now poses as mirror images. One node per
+    # control: every control summed above is on this side, in this frame.
+    rotation_plug = f'{rotsum}.output3D'
+    signs = rt_mirror.control_signs(rigname)
+    if signs:
+        mirror_node = f'{control}_rotmirror_multiplyDivide'
+        cmds.createNode('multiplyDivide', n=mirror_node, s=1, ss=1)
+        cmds.setAttr(f'{mirror_node}.operation', 1)  # multiply
+        cmds.connectAttr(rotation_plug, f'{mirror_node}.input1', f=1)
+        cmds.setAttr(f'{mirror_node}.input2',
+                     signs['X'], signs['Y'], signs['Z'], type='double3')
+        rotation_plug = f'{mirror_node}.output'
+
     # 1 / num_joints, once per control. It rides on the weight ramp's
     # outputMax below, so no per-joint divide is needed and num_joints
     # keeps a single downstream connection.
@@ -382,7 +405,7 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         rotmult = f'{sdk_name}_rotmult_multiplyDivide'
         cmds.createNode('multiplyDivide', n=rotmult, s=1, ss=1)
         cmds.setAttr(f'{rotmult}.operation', 1) # multiply
-        cmds.connectAttr(f'{rotsum}.output3D', f'{rotmult}.input1', f=1)
+        cmds.connectAttr(rotation_plug, f'{rotmult}.input1', f=1)
         for axis in 'XYZ':
             cmds.connectAttr(f'{weight}.outValue', f'{rotmult}.input2{axis}', f=1)
 

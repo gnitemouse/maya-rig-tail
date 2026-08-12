@@ -47,6 +47,7 @@ import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 import rig_tail_maya as rt_maya
 import rig_tail_math as rt_math
+import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
 
@@ -472,6 +473,12 @@ def create_controls_fk(rigname, joints, jnt_pos):
                                                              color='lightpink',
                                                              shape='cube',
                                                              preserve=rt_constants.PRESERVE_CTRL.get('varfk', False))
+    # Stand them in the behavior-mirrored frame on the mirrored side of an
+    # L/R pair, so the same values pose both sides as mirror images. No-op
+    # for a center, unpaired or source-side part. The matching sign on the
+    # rotation the controls send out is rig_tail_fk.falloff_rotation's.
+    mirror_control_frames(rigname, varfk_ctrl_grps, positions)
+
     for varfk_ctrl in varfk_ctrls:
         for attr in ['tx', 'ty', 'tz']: # Hide translate
             cmds.setAttr(f'{varfk_ctrl}.{attr}', k=0, cb=0, l=1)
@@ -489,12 +496,66 @@ def create_controls_fk(rigname, joints, jnt_pos):
                                                            color='pink',
                                                            shape='circle',
                                                            preserve=rt_constants.PRESERVE_CTRL.get('fk', False))
+        # Same frame treatment as the variable-FK controls above. Their
+        # groups are parent-constrained to the SDK stack in
+        # rig_tail_connect.connect_fk, which captures this frame as its
+        # offset - so the flip has to be on before that runs.
+        mirror_control_frames(rigname, fk_ctrl_grps, joints)
         # Set FK control visibility (hide translate, scale)
         set_attributes_visibility_fk(fk_ctrls)
 
     # Set variable FK control visibility (hide translate, scale)
     set_attributes_visibility_fk(varfk_ctrls)
     return varfk_ctrls
+
+def mirror_control_frames(rigname, groups, matches):
+    '''
+    Re-stand control groups in the behavior-mirrored frame of the joints
+    they were matched to, on the mirrored side of an L/R pair.
+
+    Does nothing at all for a center part, an unpaired part, the source
+    side of a pair, or a MIRROR_BEHAVIOR with no right-handed control
+    frame - control_signs answers None for every one of those, which is
+    what keeps this a no-op on the rigs that were never mirrored.
+
+    The frame is written ABSOLUTELY, off the joint's own world matrix, not
+    applied as a relative roll: re-running the build then lands on the same
+    frame instead of flipping the flip, and a nested control stack cannot
+    compound its parents' flips into its own.
+
+    Any constraint already driving a group is deleted first - the INDIV_FK
+    groups are parent-constrained to the SDK stack, and a light rebuild
+    leaves that constraint standing, which would both block this write and
+    then hold the group in the unmirrored frame. rig_tail_connect.connect_fk
+    rebuilds it afterwards, with maintain-offset on so it keeps the frame
+    written here.
+
+    Arguments
+        rigname (str): Name of rig component
+        groups (list): Control groups to re-stand
+        matches (list): The joint each group was matched to, in step
+
+    Return
+        dict or None: the signs used, or None when nothing was changed
+    '''
+    signs = rt_mirror.control_signs(rigname)
+    if not signs:
+        return None
+    moved = 0
+    for group, match in zip(groups, matches):
+        if not (cmds.objExists(group) and cmds.objExists(match)):
+            continue
+        constraints = cmds.listRelatives(group, type='constraint') or []
+        if constraints:
+            cmds.delete(constraints)
+        cmds.xform(group, ws=True,
+                   matrix=rt_mirror.mirrored_matrix(match, signs))
+        moved += 1
+    flipped = ''.join(a for a in 'XYZ' if signs[a] < 0)
+    logger.debug(f'{rigname}: Mirror: {moved} control group(s) re-stood, '
+                 f'{flipped} negated')
+    return signs
+
 
 def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
     '''

@@ -45,9 +45,17 @@ rotation_signs - the two are exact negatives of each other.
 Consumers: rig_tail_anim (curl, wave, noise), rig_tail_fk (twist, roll,
 offset) and rig_tail_connect (the IK spline handle's twist/roll/offset).
 
+CONTROLS ARE A SECOND CASE. A dial is a number, so a sign on it is free.
+A control is a gizmo, so its axes must point where its motion goes - which
+pins the control frame to the joint frame scaled by these same signs, and
+that frame has to stay right-handed. See control_signs: it works out under
+'symmetric' and is impossible under 'parallel'.
+
 Functions:
     rotation_signs: per-axis sign for a rotation about each local axis
     translation_signs: the same for a translation along each local axis
+    control_signs: signs for a behavior-mirrored control, or None
+    mirrored_matrix: a node's world frame with each axis scaled by its sign
     aim_axis: the chain's aim axis as a signs key ('X'/'Y'/'Z')
     behavior: the validated MIRROR_BEHAVIOR
 '''
@@ -64,6 +72,12 @@ logger = logger_setup(__name__)
 # Off leaves every part driving its own axes raw, which is how builds before
 # this behaved: mirrored on one axis, opposite on the other two.
 MIRROR_SLIDERS = True
+# Stand the mirrored side's FK CONTROLS in the behavior-mirrored frame, so
+# the same channel values pose an L/R pair as mirror images on all three
+# axes (and a mirror-pose tool is a straight value copy). Only buildable
+# under 'symmetric' - see control_signs. Off leaves the controls facing
+# their own joints, which is how builds before this behaved.
+MIRROR_CONTROLS = True
 # Below this |cos| between a target axis and the reflection of its partner's,
 # the two chains are not mirror images on that axis and no sign can make them
 # read as one motion; the axis is left alone and said so.
@@ -198,6 +212,80 @@ def translation_signs(rigname):
         dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
     '''
     return {axis: -sign for axis, sign in rotation_signs(rigname).items()}
+
+
+def control_signs(rigname):
+    '''
+    Signs for a behavior-mirrored CONTROL, or None when there is no such
+    control frame to build.
+
+    A control is posed by dragging a gizmo, so it has a requirement the
+    dials do not: the gizmo and the motion must agree. The joints turn
+    about sign_k * J_k (J the joint frame), so the control's own axis k has
+    to point along sign_k * J_k too - which makes the control frame the
+    joint frame with each axis scaled by its sign. Being a transform, that
+    frame has to stay right-handed, so the three signs must multiply to +1:
+
+        'symmetric' negates two axes (product +1)   -> buildable
+        'parallel'  negates one    (product -1)   -> LEFT-HANDED, refused
+
+    So behavior-mirrored controls exist under 'symmetric' and cannot exist
+    under 'parallel'. That is not an omission: 'parallel' asks all three
+    axes to move the pair the same way round the world, and a right-handed
+    frame can only ever do that on two of them. The dials still honour it -
+    a sign on a scalar is bound by nothing - but a gizmo cannot.
+
+    The 'symmetric' frame this yields is the full behavior mirror (every
+    axis the negated reflection of its partner's), which is what Maya's
+    mirrorJoint -mirrorBehavior produces and what production biped rigs
+    ship: the same channel values give mirrored poses on every axis, and
+    mirror-pose tools reduce to a straight value copy.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        dict or None: {'X','Y','Z'} signs, or None when the part takes no
+            control mirror (unpaired, source side, MIRROR_CONTROLS off, or
+            a behavior with no right-handed control frame)
+    '''
+    if not MIRROR_CONTROLS:
+        return None
+    signs = rotation_signs(rigname)
+    if signs['X'] * signs['Y'] * signs['Z'] < 0:
+        logger.debug(f'{rigname}: Mirror: no right-handed control frame '
+                     f"under '{behavior()}', leaving the controls as built")
+        return None
+    if all(sign > 0 for sign in signs.values()):
+        return None      # nothing to mirror: source side, or unpaired
+    return signs
+
+
+def mirrored_matrix(node, signs):
+    '''
+    A node's world matrix with each axis scaled by its sign - the frame a
+    behavior-mirrored control stands in, over the joint it belongs to.
+
+    Position is untouched: the control still sits on its joint, it only
+    faces the other way about. Returned as the flat 16 floats cmds.xform
+    takes, so the caller writes it absolutely rather than rotating by a
+    relative amount - which is what makes re-running the build idempotent,
+    and what keeps a NESTED control stack (INDIV_FK) from compounding its
+    parents' flips into itself.
+
+    Arguments
+        node (str): Node whose world frame is the starting point
+        signs (dict): Per-axis signs from control_signs
+
+    Return
+        list: 16 floats, row-major, ready for cmds.xform(ws=True, m=...)
+    '''
+    m = list(cmds.xform(node, q=True, ws=True, matrix=True))
+    for row, axis in enumerate('XYZ'):
+        sign = signs[axis]
+        for col in range(3):
+            m[row * 4 + col] *= sign
+    return m
 
 
 def aim_axis():

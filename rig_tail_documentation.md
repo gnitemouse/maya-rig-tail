@@ -1693,6 +1693,37 @@ own tips already *is* the mirrored motion.
 
 Set `MIRROR_SLIDERS` to False for the old per-side-raw behavior.
 
+### Controls are a second case
+
+A dial is a number, so a sign on it is free. A control is a **gizmo**, so
+its axes have to point where its motion goes — which pins the control
+frame to the joint frame with each axis scaled by these same signs, and
+that frame still has to be right-handed. The three signs must therefore
+multiply to +1:
+
+| MIRROR_BEHAVIOR | signs | product | control frame |
+|---|---|---|---|
+| `symmetric` | two negated | +1 | buildable — the full behavior mirror |
+| `parallel` | one negated | −1 | left-handed, **refused** |
+
+So behavior-mirrored FK controls exist under `symmetric` and cannot exist
+under `parallel`. That is not an omission: `parallel` asks all three axes
+to move the pair the same way round the world, and a right-handed frame
+manages that on at most two. The dials still honour it; a gizmo cannot.
+
+Under `symmetric` the frame that falls out is exactly Maya's
+`mirrorJoint -mirrorBehavior` result — every axis the negated reflection
+of its partner's, so the mirrored side's local X runs back up the chain
+and the same channel values pose the pair as mirror images on all three
+axes. Mirror-pose tools become a straight value copy. The variable-FK and
+`INDIV_FK` control groups are re-stood by
+`rt_control.mirror_control_frames`, and the matching negation goes on the
+rotation they send out (`rig_tail_fk.falloff_rotation` and
+`rig_tail_connect.connect_fk`), so gizmo and bend still agree.
+
+Set `MIRROR_CONTROLS` to False to leave the controls facing their own
+joints. The IK spline controls are **not** covered — see below.
+
 ### Functions
 
 #### `rotation_signs(rigname)`
@@ -1701,13 +1732,30 @@ Per-axis sign for a rotation about each local axis, as `{'X','Y','Z'}`.
 #### `translation_signs(rigname)`
 The same for a translation along each local axis (the negative).
 
+#### `control_signs(rigname)`
+Signs for a behavior-mirrored control, or None when there is no such frame
+(unpaired, source side, `MIRROR_CONTROLS` off, or `parallel`).
+
+#### `mirrored_matrix(node, signs)`
+A node's world frame with each axis scaled by its sign, as 16 floats.
+
 #### `aim_axis()`
 `ORIENT_AIM_AXIS` as a signs key, or None when it is not a usable axis.
 
 #### `behavior()`
 The validated `MIRROR_BEHAVIOR`, defaulting to `symmetric`.
 
----
+### Not covered: the IK spline controls
+
+They are driven by `parentConstraint` onto the cluster handles, with
+maintain-offset **off** — the cluster takes the control's world transform
+outright. Re-standing a control in the mirrored frame therefore changes
+the rest orientation the cluster handle receives, which moves the CVs it
+owns. Getting it right means switching those constraints to
+maintain-offset, which changes what the cluster inherits at rest for every
+rig, mirrored or not. That is a change whose effect can only be judged in
+Maya, so it is deliberately not made here. FK covers the case the request
+was about; IK spline posing keeps today's behavior.
 
 ## rig_tail_cache.py (rt_cache)
 
