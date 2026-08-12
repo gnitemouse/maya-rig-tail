@@ -593,6 +593,13 @@ Locate the current rig root group in the scene.
 #### `set_joints_auto()`
 Detect and (re)build the BN/FK/IK chains for all RIGPARTS.
 
+#### `fk_ik_match_bn(rigname, tol=None)`
+Are the cached FK and IK chains still one-to-one with BN, and on it? One
+test covers count, membership and position without keeping any history:
+the duplicates are made from BN and sit on it at rest, so ask whether they
+still do. Safe to apply to the IK chain only because the solver curve now
+rests on the joints exactly (`connect_driver_to_solver_curve`).
+
 #### `set_joints(rigname, start_jnt=None, end_jnt=None)`
 Detect/build the chains for one rig part.
 

@@ -46,6 +46,7 @@ Functions:
 '''
 
 import fnmatch
+import math
 import re
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
@@ -1533,6 +1534,62 @@ def detect_joints_bn():
         logger.debug(f'{rigname}: {len(chain)} BN joints detected')
     return found
 
+def fk_ik_match_bn(rigname, tol=None):
+    '''
+    Are the cached FK and IK chains still one-to-one with BN, and on it?
+
+    FK and IK are duplicated from BN and, at rest, sit on it. So one test
+    covers everything set_joints needs to know about whether its cached
+    chains are reusable - count, membership and position - without keeping
+    any history to compare against: ask whether the duplicates are still
+    where BN is.
+
+    The tolerance is rt_constants.JOINT_POS_TOLERANCE, the same one
+    rt_cache.validate_cache_joints uses, and for the same reason: the OPM
+    network perturbs world positions by float noise. It is safe to compare
+    the IK chain this way only because the solver curve now rests on the
+    joints exactly (rig_tail_curve.connect_driver_to_solver_curve) - before
+    that the spline settled the IK joints visibly off BN and this would
+    have reported a change on every build.
+
+    Arguments
+        rigname (str): rig part to check
+        tol (float): max per-joint distance, defaults to
+            rt_constants.JOINT_POS_TOLERANCE
+
+    Return
+        bool: True when both duplicates track BN, False when either does
+            not, or when any chain is missing
+    '''
+    if tol is None:
+        tol = rt_constants.JOINT_POS_TOLERANCE
+    bn = rt_constants.JOINTS_BN.get(rigname)
+    if not bn:
+        return False
+    try:
+        bn_pos = [cmds.xform(j, q=True, ws=True, t=True) for j in bn]
+    except (RuntimeError, ValueError):
+        return False
+    for typ, cache in ((rt_constants.TYPE_FK, rt_constants.JOINTS_FK),
+                       (rt_constants.TYPE_IK, rt_constants.JOINTS_IK)):
+        dup = cache.get(rigname)
+        if not dup or len(dup) != len(bn):
+            logger.debug(f'{rigname}: cached {typ} chain is '
+                         f'{len(dup) if dup else 0} joints against '
+                         f'{len(bn)} BN, regenerating')
+            return False
+        for bn_jnt, dup_jnt, pos in zip(bn, dup, bn_pos):
+            try:
+                dist = math.dist(pos, cmds.xform(dup_jnt, q=True, ws=True, t=True))
+            except (RuntimeError, ValueError):
+                return False
+            if dist > tol:
+                logger.debug(f"{rigname}: {typ} '{dup_jnt}' is {dist:.4f} off "
+                             f"'{bn_jnt}' (tol {tol}), regenerating")
+                return False
+    return True
+
+
 def set_joints(rigname, start_jnt=None, end_jnt=None):
     '''
     Create FK, IK, and BN joint chains.
@@ -1560,6 +1617,25 @@ def set_joints(rigname, start_jnt=None, end_jnt=None):
                 del joints[rigname]
         else:
             cache_valid = False
+
+    # Existence is not enough. Joint Chain Builder re-spaces a chain by
+    # moving, adding and removing joints, so every cached name can still
+    # exist while the chain is a different length or sitting somewhere else
+    # entirely - and this returned early on that, leaving FK/IK duplicated
+    # at the old count and the old positions against the new BN. That is
+    # what put a 51-joint BN against 38-joint FK/IK chains, which
+    # rig_tail_matrix indexes one to one.
+    if cache_valid and not fk_ik_match_bn(rigname):
+        cache_valid = False
+
+    # FORCE_REBUILD means 'assume nothing is reusable'. Every other test
+    # here and in rig_tail_cache samples ONE property of what might have
+    # changed, and a sample can miss - a scene edited outside the tool, a
+    # cache carried over from an earlier state. The flag has to bypass the
+    # chain caches too, or it only covers the teardown half of the decision
+    # and the checkbox means two different things in two places.
+    if rt_constants.FORCE_REBUILD:
+        cache_valid = False
 
     # If all caches valid, skip rebuild
     if cache_valid:

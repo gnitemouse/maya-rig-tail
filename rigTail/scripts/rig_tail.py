@@ -279,8 +279,12 @@ def restore_bn_for_build(rignames=None):
         rignames (list): parts to restore, or None for the active roster
     '''
     # Chain detection only: fills JOINTS_BN without duplicating FK/IK, which
-    # is the very step that must not run first
-    rt_cleanup.detect_joints_bn()
+    # is the very step that must not run first. Timed separately from the
+    # restore because it is a second full scene scan on top of the one
+    # set_joints_auto does straight after, and the two are worth telling
+    # apart before deciding whether that is worth sharing.
+    with rt_maya.timed('cleanup.detect_bn'):
+        rt_cleanup.detect_joints_bn()
     parts = rignames if rignames is not None else rt_cache.active_parts()
     parts = [p for p in parts if p in rt_constants.JOINTS_BN]
     if not parts:
@@ -334,7 +338,12 @@ def rig_tail_multiple(root=None, fk=True, ik=True):
         with timer.phase('cleanup'):
             rt_cleanup.set_root(root)
             restore_bn_for_build()
-            rt_cleanup.set_joints_auto()
+            # Untimed until now, and the cleanup phase has been reporting
+            # far more time than its steps account for. This is where the
+            # FK/IK chains are duplicated - two chains per rig part, every
+            # joint - so it is the prime suspect for the gap.
+            with rt_maya.timed('cleanup.set_joints'):
+                rt_cleanup.set_joints_auto()
             rt_cleanup.cleanup_rig(fk, ik)
         with timer.phase('setup'):
             rt_cleanup.setup_rig(fk, ik)
