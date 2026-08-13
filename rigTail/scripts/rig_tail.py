@@ -245,7 +245,7 @@ def rig_tail_ik(rigname, typ=rt_constants.TYPE_IK):
             srt_vec = cmds.xform(joints[0], q=1, ws=1, m=1)[8:11]
             end_vec = cmds.xform(joints[-1], q=1, ws=1, m=1)[8:11]
             rt_stretch.build_advanced_twist(spline_list[0], clusters[0][1], clusters[1][1],
-                                 srt_vec, end_vec)
+                                 srt_vec, end_vec, rigname)
 
 
 # RUN: RIG TAIL ========================================================

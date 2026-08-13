@@ -702,7 +702,7 @@ UP_AXIS_ENUM = {('y', True): 0, ('y', False): 1,
 
 
 def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
-                         rigname=''):
+                         rigname):
     '''
     Build Spline IK advanced twist.
 
@@ -726,12 +726,16 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
         end_obj (str): Last obj (cluster transform) for twist
         start_vec (tuple): Start up vector
         end_vec (tuple): End up vector
-        rigname (str): Rig part, for the mirrored-aim test. Empty assumes a
-            forward aim, which is right for every behavior but 'mirror'.
+        rigname (str): Rig part, for the mirrored-aim test. REQUIRED, and
+            deliberately not defaulted: it defaulted to '' once, the one
+            call site was not updated to pass it, and the mirrored side
+            silently kept a forward aim for a whole release. A missing
+            argument should be a TypeError at build time, not a twisted
+            chain nobody can trace.
     '''
     aim = str(getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')).strip().lower()
     up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()
-    forward_positive = not (rigname and rt_mirror.aim_reversed(rigname))
+    forward_positive = not rt_mirror.aim_reversed(rigname)
     fwd_enum = FORWARD_AXIS_ENUM.get((aim, forward_positive))
     up_enum = UP_AXIS_ENUM.get((up, True))
     if fwd_enum is None or up_enum is None:
@@ -745,9 +749,12 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
     cmds.setAttr(f'{ikhandle}.dWorldUpType', 4)  # Rot up start/end
     cmds.setAttr(f'{ikhandle}.dForwardAxis', fwd_enum)
     cmds.setAttr(f'{ikhandle}.dWorldUpAxis', up_enum)
-    if not forward_positive:
-        logger.debug(f'{rigname}: Advanced twist: forward axis negative '
-                     f'{aim.upper()} (mirrored aim runs back up the chain)')
+    # Logged at info, not debug: this is the one setting whose being wrong
+    # twists a whole chain and leaves nothing else to see, so a normal build
+    # log should answer 'did the mirrored side get its negative aim?'
+    logger.info(f'{rigname}: Advanced twist: forward axis '
+                f'{"+" if forward_positive else "-"}{aim.upper()}, '
+                f'up +{up.upper()}')
 
     # Start / end obj
     cmds.connectAttr(f'{start_obj}.xformMatrix', f'{ikhandle}.dWorldUpMatrix', f=1)
