@@ -998,6 +998,30 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
             apply_transform(source, target, pos, rot, scl)
             opm(source)
             return
+        src_matrix = om.MMatrix(cmds.xform(source, q=1, m=1, ws=1))
+        if src_matrix.isEquivalent(om.MMatrix(cmds.xform(target, q=1, m=1, ws=1))):
+            # Already where it is being asked to go, so there is no move for
+            # the children to be held against: the dance would re-parent
+            # every one of them out and back to protect them from nothing.
+            # Skip the move as well as the protection - a source that does
+            # not move cannot move its children, whereas re-issuing
+            # matchTransform re-introduces exactly the risk the dance
+            # exists to cover. opm() still runs, because baking local into
+            # offsetParentMatrix leaves the world matrix alone and is the
+            # rest of what this call is for.
+            #
+            # This is the whole of the light-teardown path in
+            # create_sdk_groups. A full teardown deletes the SDK stack
+            # (cleanup.restore_fk_joint_chain), so each group is re-created
+            # empty and takes the childless path above. A light teardown
+            # keeps the stack, so every group arrives already nested,
+            # already positioned, and holding the next layer as a child -
+            # ~20 commands of dance each, over (NUM_CTRL_FK + 1) groups per
+            # joint per rig part, ~2,400 of them on a 12-part build. That is
+            # where the light path's +12.2s over the full path goes.
+            logger.trace(f"'{source}' already matches '{target}', nothing to move")
+            opm(source)
+            return
         child_uids = cmds.ls(src_children, uuid=True)
         # createNode, not cmds.group(em=True): the same empty transform at
         # the world origin for a sixth of the cost (0.13ms against 0.76ms),

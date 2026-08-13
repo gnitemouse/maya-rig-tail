@@ -82,6 +82,29 @@ UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
                       'pointOnCurveInfo', 'remapValue']
 
 
+def fx_expression_patterns(rigname):
+    '''
+    The FX expression nodes, which every build rebuilds from scratch
+    whatever it finds: rig_tail_anim's build_loop/build_wave/build_noise
+    each call delete_expression and then cmds.expression unconditionally.
+
+    Shared by cleanup_anim_effects and by the light teardown, which takes
+    ONLY these and leaves the rest of the FX network standing for the build
+    to reuse in place.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        list: name patterns, matched against a node's leaf name
+    '''
+    return [
+        f'{rigname}_*_wave*_expression',
+        f'{rigname}_*_noise_*_expression',
+        f'{rigname}_loop_time_expression',
+    ]
+
+
 # CLEANUP ==============================================================
 
 def cleanup_rig(fk, ik):
@@ -939,13 +962,34 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
 
 def cleanup_connections(rigname, fk, ik):
     '''
-    Clean up connections. Only disconnect, don't delete nodes.
+    The light teardown: strip the rig back to reusable nodes with their
+    drivers cut, where cleanup_rigname deletes and the build rebuilds.
+    Chosen when the caches say the skeleton and the node layout are both
+    unchanged (see cleanup_rig).
 
-    Exception: the FK SDK hierarchy is only safe to reuse in place when it
-    matches the current builder's layout. A stale layout (older build with a
-    different SDK layer set) is not something the joint/control caches detect,
-    and rebuilding over it re-wraps already-wrapped joints into a parenting
-    cycle, so tear that part down to a flat chain first.
+    Mostly that means disconnecting rather than deleting, but a node the
+    build recreates from scratch whatever it finds is NOT reusable, and
+    keeping it does not save the work - it moves the work into the build,
+    one node at a time, and leaves name-suffixed duplicates behind. Those
+    are deleted here, in batch: the FK utility networks (set_curveinfo_fk,
+    falloff_rotation) and the FX expressions (fx_expression_patterns).
+
+    Two things also have to be torn down structurally:
+
+    - The FK SDK hierarchy is only safe to reuse in place when it matches
+      the current builder's layout. A stale layout (older build with a
+      different SDK layer set) is not something the joint/control caches
+      detect, and rebuilding over it re-wraps already-wrapped joints into a
+      parenting cycle, so tear that part down to a flat chain first.
+    - A current SDK hierarchy is kept, which is what makes this path cheap.
+      create_sdk_groups then meets every group already nested and already
+      positioned; rt_maya.match_transform is what recognises that and does
+      not pay the maintain-offset dance for a move that is not happening.
+
+    Arguments
+        rigname (str): Name of rig component
+        fk (bool): Clean FK components
+        ik (bool): Clean IK components
     '''
     logger.debug(f'{rigname}: Cleanup connections')
 
@@ -1009,6 +1053,47 @@ def cleanup_connections(rigname, fk, ik):
         # delete for everything it finds (see cleanup_rigname)
         rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
+    # Delete the FX expressions, for the same reason as the FK networks
+    # above: the build rebuilds every one of them from scratch whatever it
+    # finds (see fx_expression_patterns). Keeping them here does not save
+    # the work, it moves it into the build and unbatches it - rig_tail_anim
+    # deletes them one at a time, measured at 33 commands each over the ~300
+    # expressions a rig part carries, where remove_nodes does the lot in one
+    # disconnect pass and one delete for 5. That is the light path's +6.7s
+    # on connect.fx against a full teardown, which already deletes them here
+    # (cleanup_anim_effects) and so leaves the build's delete_expression
+    # finding nothing.
+    #
+    # The rest of the FX network is deliberately left alone: build_curl
+    # reuses its nodes in place (objExists, then ensure_connect), so taking
+    # those too would only hand the build a few thousand createNode calls
+    # back. A TYPED scan for the candidates - a name pattern makes cmds.ls
+    # walk the whole scene, and the name test that replaces it is free
+    # (see cleanup_rigname).
+    expression_patterns = fx_expression_patterns(rigname)
+    expressions = [n for n in cmds.ls(type='expression') or []
+                   if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
+                          for p in expression_patterns)]
+    if expressions:
+        # The conversion nodes the expressions write through go in the SAME
+        # batch, for two reasons. One is correctness, and it is
+        # delete_expression's: a conversion left connected to a
+        # composeMatrix input blocks the rebuilt expression from connecting
+        # to that plug. The other is that batching them is what keeps the
+        # composeMatrix nodes alive at all - remove_nodes disconnects
+        # everything before it deletes anything, where leaving the
+        # conversions to cleanup_dangling_unit_conversions has cmds.delete
+        # cascade from each conversion into the composeMatrix it feeds. The
+        # full teardown loses every FX composeMatrix that way and
+        # rig_tail_matrix rebuilds them (create_matrix_nodes_for_joint,
+        # which runs in connect.matrix, before connect.fx); the light path
+        # is here to avoid work, so it keeps them.
+        # Both queries take the whole list at once (see disconnect_nodes).
+        conversions = cmds.ls(cmds.listConnections(expressions) or [],
+                              type=['unitConversion', 'unitToTimeConversion',
+                                    'timeToUnitConversion']) or []
+        rt_maya.remove_nodes(expressions + conversions)
+
 def cleanup_anim_effects(rigname, fk, ik):
     '''
     Clean up animation effect nodes.
@@ -1025,10 +1110,7 @@ def cleanup_anim_effects(rigname, fk, ik):
     logger.trace(f'{rigname}: Cleanup animation effects')
     # Delete animation node patterns (expressions first)
     typ = rt_constants.TYPE_FX
-    node_patterns = [
-        f'{rigname}_*_wave*_expression',
-        f'{rigname}_*_noise_*_expression',
-        f'{rigname}_loop_time_expression',
+    node_patterns = fx_expression_patterns(rigname) + [
         f'{rigname}_loop_time',
         f'{rigname}_curl*_multiplyDivide',
         f'{rigname}_curl*_plusMinusAverage',
