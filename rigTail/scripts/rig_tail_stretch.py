@@ -749,12 +749,14 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
     cmds.setAttr(f'{ikhandle}.dWorldUpType', 4)  # Rot up start/end
     cmds.setAttr(f'{ikhandle}.dForwardAxis', fwd_enum)
     cmds.setAttr(f'{ikhandle}.dWorldUpAxis', up_enum)
-    # Logged at info, not debug: this is the one setting whose being wrong
-    # twists a whole chain and leaves nothing else to see, so a normal build
-    # log should answer 'did the mirrored side get its negative aim?'
-    logger.info(f'{rigname}: Advanced twist: forward axis '
-                f'{"+" if forward_positive else "-"}{aim.upper()}, '
-                f'up +{up.upper()}')
+    # Debug, not info: this is the one setting whose being wrong twists a
+    # whole chain and leaves nothing else to see, so it is worth logging -
+    # but it is per rig part, and a roster of twelve tails made the normal
+    # build log twelve lines of it. The warning above still comes through at
+    # info level, which is the case where the axis is not what was asked for.
+    logger.debug(f'{rigname}: Advanced twist: forward axis '
+                 f'{"+" if forward_positive else "-"}{aim.upper()}, '
+                 f'up +{up.upper()}')
 
     # Start / end obj
     cmds.connectAttr(f'{start_obj}.xformMatrix', f'{ikhandle}.dWorldUpMatrix', f=1)
