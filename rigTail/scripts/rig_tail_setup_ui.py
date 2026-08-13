@@ -17,14 +17,14 @@ Three batch operations, exposed as checkboxes:
         Disabled unless Orient Joints is ticked.
     Mirror Orient (MIRROR_ORIENT): reflect matching 'L_'/'R_' pairs'
         orientation so the two sides face as mirror images. The dropdown
-        in the same row picks the behavior (MIRROR_BEHAVIOR), which decides
-        WHICH THREE of the six mirror - a rotation about each axis and a
-        translation along each, always three of them: 'Mirror' (default,
-        Maya mirrorJoint -mirrorBehavior) negates all three axes, so every
-        rotation mirrors and no translation does; 'Symmetric' negates the
-        up axis, so rotations mirror about the up and translations along
-        the aim and the third; 'Parallel' negates the third, so a splayed
-        pair reads as one curling up while the other curls down.
+        in the same row picks the behavior (MIRROR_BEHAVIOR). Write each
+        of the mirrored side's axes '+' when it points the same way as the
+        mirror image of its partner's and '-' when it points the opposite
+        way; a rotation about an axis mirrors on '-' and a translation
+        along it on '+', so three of the six always mirror:
+            'Mirror' (default)  -aim -roll -up  all rotations, no translation
+            'Symmetric'         +aim +roll -up  up; aim and roll translate
+            'Parallel'          +aim -roll +up  roll; aim and up translate
         Disabled unless Mirror Orient is ticked.
     Mirror Joints (MIRROR_JOINTS): reflect matching 'L_'/'R_' pairs'
         positions so the target side's joints sit at the exact mirror.
@@ -62,6 +62,7 @@ from PySide2 import QtWidgets, QtCore
 
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
+import rig_tail_mirror as rt_mirror
 import rig_tail_build_ui as rt_build_ui  # reuse RigPartsEditor
 
 
@@ -274,27 +275,30 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # ticked - and is disabled alongside it to say so.
         self.cmb_behavior = self._combo(self.BEHAVIORS,
             'How the mirrored side is oriented.\n'
-            'A reflection flips handedness, so a frame can point one or '
-            'all three of its axes opposite the source - never two. '
-            'Rotations mirror on the axes that point opposite, '
-            'translations on the ones that do not, so exactly THREE of the '
-            'six always mirror. This only chooses which three.\n'
+            'Each axis is written + when it points the SAME way as the '
+            'mirror image of its partner\'s matching axis, - when it points '
+            'the OPPOSITE way. aim runs down the chain, up is the Up Axis, '
+            'roll is the remaining one.\n'
+            'A ROTATION about an axis mirrors when it is -, a TRANSLATION '
+            'along it when it is +, and the count of - is always odd (that '
+            'is just the frame staying right-handed). So three of the six '
+            'always mirror, and this only picks which three:\n'
             '\n'
-            'Mirror (default): all three axes opposite. Maya mirrorJoint '
-            '-mirrorBehavior. Every rotation mirrors - curl, wave, twist, '
-            'roll, and every control gizmo - and no translation does. The '
-            'aim runs back UP the chain; the spline twist and the offset '
-            'dial are told about it.\n'
-            'Symmetric: the up axis opposite. The aim keeps running down '
-            'the chain. Rotations mirror about the up alone; translations '
-            'mirror along the aim and the third axis.\n'
-            'Parallel: the third axis opposite. The same value moves the '
-            'two sides opposite ways about the up, so a splayed pair reads '
-            'as one curling up while the other curls down.\n'
+            '  Mirror      -aim -roll -up   rotations: all three\n'
+            '                               translations: none\n'
+            '  Symmetric   +aim +roll -up   rotations: up\n'
+            '                               translations: aim, roll\n'
+            '  Parallel    +aim -roll +up   rotations: roll\n'
+            '                               translations: aim, up\n'
             '\n'
-            'Symmetric and Parallel differ by a 180 deg roll about the '
-            'aim, so Roll Chain at 180 converts one into the other on a '
-            'single chain. Mirror reverses the aim and no roll reaches it. '
+            'Mirror is the default, and is Maya mirrorJoint '
+            '-mirrorBehavior. Everything this rig is posed by is a rotation '
+            '- curl, wave, twist, roll, and every control gizmo - so Mirror '
+            'spends its three there. Its -aim means the aim runs back UP the '
+            'chain.\n'
+            'Symmetric and Parallel keep the aim running down the chain and '
+            'differ by a 180 deg roll about it, so Roll Chain at 180 converts '
+            'one into the other on a single chain. No roll reaches Mirror. '
             '(MIRROR_BEHAVIOR)')
         self.chk_mirror_orient.toggled.connect(self._sync_behavior_enabled)
 

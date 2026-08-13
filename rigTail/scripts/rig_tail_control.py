@@ -641,7 +641,8 @@ def create_spline_controls_ik(rigname, cluster_handles, orient_world, scale=1):
                                                  color='neonyellow',
                                                  shape='cube',
                                                  preserve=rt_constants.PRESERVE_CTRL.get('ik', False))
-    orient_control_aims(groups, orient_world)
+    orient_control_aims(groups, orient_world,
+                        flip_aim=rt_mirror.flip_control_aim(rigname))
     return controls, groups
 
 def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1):
@@ -670,7 +671,8 @@ def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1
                                                  color='cyan',
                                                  shape='cube',
                                                  preserve=rt_constants.PRESERVE_CTRL.get('float', False))
-    orient_control_aims(groups, orient_world)
+    orient_control_aims(groups, orient_world,
+                        flip_aim=rt_mirror.flip_control_aim(rigname))
     return controls, groups
 
 def create_spline_controls_spline(rigname, cluster_handles, orient_world,
@@ -742,7 +744,8 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
                                             preserve=preserve)
         controls.append(control)
         groups.append(group)
-    orient_control_aims(groups, orient_world)
+    orient_control_aims(groups, orient_world,
+                        flip_aim=rt_mirror.flip_control_aim(rigname))
 
     rt_maya.parent_to(groups[1], controls[0]) # Parent bot_sml to bot
     rt_maya.parent_to(groups[3], controls[4]) # Parent top_sml to top
@@ -1047,33 +1050,55 @@ def get_control_position(control, joints):
     logger.trace(f"ctrl '{control}' - nearest '{joints[idx]}' V: {v}")
     return v
 
-def orient_control_aims(controls, orient_world=None):
+def orient_control_aims(controls, orient_world=None, flip_aim=False):
     '''
     Orient controls so that they aim toward each other.
-    Controls aim on +Y axis, world up is -Z of orient_world.
+
+    Controls aim on +Y down the row, roll so their +Z meets the world up
+    reference. That reference is rt_mirror.spline_up_vector() - a stated
+    world direction lying in the symmetry plane - and only falls back to
+    orient_world's +Z when no usable axis is configured. Reading it off
+    orient_world (the basectrl) was the old behaviour, and it made these
+    frames a by-product of what MIRROR_BEHAVIOR did to the joints, since
+    the basectrl takes its own orientation from them.
 
     Arguments
         controls (list): List of control group names to orient
-        orient_world (str): Object defining world up (-Z axis)
-            If None, uses first control
+        orient_world (str): Fallback object defining the world up (+Z),
+            used only when no in-plane axis is available. If None, uses
+            the first control
+        flip_aim (bool): Aim the row BACKWARDS, putting the mirror's
+            negation on the aim instead of the third axis
+            (rt_mirror.flip_control_aim)
     '''
     if not orient_world: # If None, use first control
         orient_world = controls[0]
-    orient_nulls = orient_aim_controls_nulls(controls, orient_world)
+    up_vector = rt_mirror.spline_up_vector()
+    if up_vector is None:
+        up_vector = cmds.xform(orient_world, q=1, ws=1, m=1)[8:11]
+    orient_nulls = orient_aim_controls_nulls(controls, up_vector, flip_aim)
     # Match controls
     for ctrl, ctrl_null in zip(controls, orient_nulls):
         cmds.matchTransform(ctrl, ctrl_null, pos=1, rot=1, scl=0, piv=0)
     cmds.delete(orient_nulls)
 
-def orient_aim_controls_nulls(controls, orient_world):
+def orient_aim_controls_nulls(controls, up_vector, flip_aim=False):
     '''
     Creates temporary nulls/groups for orient matching via aim constraints.
-    Determine global up vector from orient_world object.
-    Aim controls on +Y axis.
+
+    Each null aims at the NEXT one in the row on +Y, with its +Z rolled
+    toward up_vector; the last aims at the one before it on -Y, which
+    leaves its +Y pointing the same way down the row as the rest.
+
+    flip_aim negates both, so +Y runs back UP the row. That is the whole of
+    the mirrored side's frame difference - see rt_mirror.flip_control_aim
+    for why the negation is put here rather than on one of the other two
+    axes, and why it is built in rather than corrected afterwards.
 
     Arguments
         controls (list): Controls for null positions
-        orient_world (str): Object that dictates world up vector
+        up_vector (list): World up direction the +Z axis rolls toward
+        flip_aim (bool): Reverse the aim direction
 
     Return
         nulls (list): List of created temporary null names
@@ -1083,24 +1108,20 @@ def orient_aim_controls_nulls(controls, orient_world):
         tmp_grp = cmds.group(em=True, n=f'null_{i:02}_tmp', w=1)
         nulls.append(tmp_grp)
         cmds.matchTransform(nulls[i], obj, pos=1, rot=1, scl=0, piv=0)
-    # Get vector of the global_orient_obj
-    world_matrix = cmds.xform(orient_world, q=1, ws=1, m=1)
-    world_z_vec = world_matrix[8:11]
+    # Aim nulls at each other. The sign is the mirrored side's whole frame
+    # difference, so it rides on one factor rather than a branch.
+    sign = -1 if flip_aim else 1
 
-    # Aim nulls at each other
     for i, null in enumerate(nulls):
         if i+1 == len(nulls):
             target = nulls[i-1]
-            cmds.aimConstraint(target, null,
-                               worldUpVector=world_z_vec,
-                               upVector=(0,0,1),
-                               aimVector=(0,-1,0),
-                               maintainOffset=False)
+            aim_vector = (0, -sign, 0)
         else:
             target = nulls[i+1]
-            cmds.aimConstraint(target, null,
-                               worldUpVector=world_z_vec,
-                               upVector=(0,0,1),
-                               aimVector=(0,1,0),
-                               maintainOffset=False)
+            aim_vector = (0, sign, 0)
+        cmds.aimConstraint(target, null,
+                           worldUpVector=up_vector,
+                           upVector=(0,0,1),
+                           aimVector=aim_vector,
+                           maintainOffset=False)
     return nulls

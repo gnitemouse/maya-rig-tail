@@ -149,28 +149,28 @@ MIRROR_DRYRUN = False
 MIRROR_AXIS = 'x'
 # Authored side used as the mirror source; the other side is overwritten.
 MIRROR_SOURCE_SIDE = 'R'
-# How the mirrored side is oriented (MIRROR_ORIENT only). A reflection
-# flips handedness, so a right-handed frame can point an ODD number of its
-# axes opposite the reflection of the source's - one, or all three, never
-# two. A rotation about an axis mirrors when the two point opposite, a
-# translation along it when they point the same way, so exactly three of
-# the six always mirror and the value only chooses WHICH three:
-#   'mirror'    - all three axes negated. Maya's mirrorJoint
-#       -mirrorBehavior. Every ROTATION mirrors - curl, wave, twist, roll,
-#       and every FK and spline control gizmo, which is what this rig is
-#       actually posed by - and no translation does. The aim then runs
-#       BACK UP the chain, which the advanced twist is told about
-#       (rig_tail_stretch) and which reverses the offset dial
-#       (rig_tail_mirror signs it). The default.
-#   'symmetric' - the up axis negated. The aim keeps running down the
-#       chain; rotations mirror about the up alone, translations along the
-#       aim and the third.
-#   'parallel'  - the third axis negated. The same channel value moves the
-#       target the opposite way about the up, so a splayed pair reads as
-#       one curling up while the other curls down.
-# 'symmetric' and 'parallel' differ by a 180-degree roll about the aim, so
-# the Setup UI's Roll Chain fix-up at 180 converts one into the other on a
-# single chain. 'mirror' reverses the aim, which no roll about it reaches.
+# How the mirrored side is oriented (MIRROR_ORIENT only).
+#   Each axis is written +/- by whether it points the SAME way as the
+#   mirror image of its partner's matching axis (+) or the OPPOSITE way
+#   (-). aim runs down the chain (ORIENT_AIM_AXIS), up is ORIENT_UP_AXIS,
+#   roll is the remaining one. A ROTATION about an axis mirrors when that
+#   axis is '-'; a TRANSLATION along it mirrors when it is '+'. The count
+#   of '-' must be odd - that is just the frame staying right-handed - so
+#   three of the six always mirror and the value only picks which three:
+#
+#     'mirror'     -aim -roll -up    rotations: all three   translations: none
+#     'symmetric'  +aim +roll -up    rotations: up          translations: aim, roll
+#     'parallel'   +aim -roll +up    rotations: roll        translations: aim, up
+#
+#   'mirror' is Maya's mirrorJoint -mirrorBehavior and the default: every
+#   rotation mirrors, which is what this rig is posed by - curl, wave,
+#   noise, twist, roll, and every FK and spline control gizmo. It costs
+#   the offset dial (a slide along the aim) and reverses the aim, which
+#   the advanced twist is told about (rig_tail_stretch) and which
+#   rig_tail_mirror signs for. 'symmetric' and 'parallel' keep the aim
+#   running down the chain and differ by a 180-degree roll about it, so
+#   the Setup UI's Roll Chain at 180 converts one into the other on a
+#   single chain; no roll reaches 'mirror', which reverses the aim.
 # The value set and this default are rig_tail_mirror.BEHAVIORS /
 # BEHAVIOR_DEFAULT; kept as a literal here so a stale constants module
 # still parses.

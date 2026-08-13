@@ -9,17 +9,20 @@ Makes an L/R pair's DIALS agree with MIRROR_BEHAVIOR on all three axes.
                             round the world
 
 THREE OF SIX. A frame has six things it could mirror: a rotation about
-each of its three axes, and a translation along each. Compare each target
-axis to the reflection of its partner's; a rotation about an axis mirrors
-when the two point OPPOSITE, a translation along it when they point the
-SAME way. The count pointing opposite must be odd (below), so rotations
-mirrored plus translations mirrored is always exactly three. The frame
-never changes how much mirrors, only which half:
+each of its three axes, and a translation along each. It is always
+exactly three, and the behavior only picks which:
 
-    behavior    opposite   aim runs   rotations     translations
-    'mirror'    all three  BACKWARDS  all three     none
-    'symmetric' the up     forwards   the up        aim + third
-    'parallel'  the third  forwards   the third     aim + up
+    'mirror'     -aim -roll -up   rotations: all three  translations: none
+    'symmetric'  +aim +roll -up   rotations: up         translations: aim, roll
+    'parallel'   +aim -roll +up   rotations: roll       translations: aim, up
+
+Read each axis as '+' when it points the SAME way as the mirror image of
+its partner's matching axis and '-' when it points the OPPOSITE way. aim
+runs down the chain (ORIENT_AIM_AXIS), up is ORIENT_UP_AXIS, roll is the
+remaining one. Rotations mirror on the '-' axes, translations on the '+'
+ones, and the count of '-' must be odd, which is where the three comes
+from. 'mirror' reverses the aim, so it alone runs BACKWARDS down the
+chain - aim_reversed reports it.
 
 So the choice follows what a thing is POSED BY. Everything with a gizmo in
 this rig is posed by rotation - the FK controls turn their joints, the
@@ -43,7 +46,7 @@ negated. One axis, or all three. NEVER TWO - in any rig, in any software.
 All three negated is 'mirror', Maya's mirrorJoint -mirrorBehavior, and is
 why a mirrored arm's local X runs backwards. One negated leaves the aim
 running down the chain, and MIRROR_BEHAVIOR picks which of the other two
-takes it: 'symmetric' the up, 'parallel' the third.
+takes it: 'symmetric' the up, 'parallel' the roll.
 
 Nothing here is free either way, which is the point of the table above.
 So the sign does not live in the joint orientation. It lives on the way
@@ -76,6 +79,8 @@ Functions:
     rotation_signs: per-axis sign for a rotation about each local axis
     translation_signs: the same for a translation along each local axis
     control_signs: signs for a behavior-mirrored control, or None
+    spline_up_vector: in-plane world up the spline control rows roll to
+    flip_control_aim: whether a part's spline rows aim back up the row
     mirrored_matrix: a node's world frame with each axis scaled by its sign
     aim_axis: the chain's aim axis as a signs key ('X'/'Y'/'Z')
     aim_reversed: whether a part's aim runs back up its own chain
@@ -288,9 +293,9 @@ def control_signs(rigname):
     joint frame with each axis scaled by its sign. Being a transform, that
     frame has to stay right-handed, so the three signs must multiply to +1:
 
-        'mirror'    negates none (the joints already mirror) -> None
-        'symmetric' negates two axes (product +1)   -> buildable
-        'parallel'  negates one    (product -1)   -> LEFT-HANDED, refused
+        'mirror'    -aim -roll -up  negates none: already it  -> None
+        'symmetric' +aim +roll -up  negates two (product +1)  -> buildable
+        'parallel'  +aim -roll +up  negates one (product -1)  -> refused
 
     So behavior-mirrored controls are BUILT under 'symmetric', already
     correct under 'mirror', and impossible under 'parallel'. The last is
@@ -350,6 +355,89 @@ def mirrored_matrix(node, signs):
         for col in range(3):
             m[row * 4 + col] *= sign
     return m
+
+
+def spline_up_vector():
+    '''
+    World up vector for the spline controls' aim-orient, guaranteed to lie
+    IN the symmetry plane.
+
+    The IK, Float and Spline control rows are aimed at each other with a
+    world up reference (rig_tail_control.orient_aim_controls_nulls). They
+    used to take it from the basectrl's Z, which reaches them from the
+    JOINTS through get_local_orientation - so the two sides' control frames
+    were a by-product of MIRROR_BEHAVIOR rather than a convention, and a
+    stated one is cheaper to reason about than a derived one. This is that
+    convention: ORIENT_UP_AXIS read as a world direction.
+
+    IN THE PLANE is the part that matters, though not for the reason it
+    first looks. A world axis is always invariant under the reflection up
+    to SIGN - unchanged when it lies in the plane, negated when it is the
+    plane's own normal - so either way the two sides come out cleanly
+    related; it is a reference lying at some general angle that would
+    relate them by nothing at all, and an axis constant cannot be one.
+    What the plane normal costs is WHICH axis carries the negation: the up
+    resolves negated as well, and with the aim reversed on top of it
+    (flip_control_aim) all three end up negated - the one frame with no
+    mirrored translation at all, which is the worst possible answer for a
+    control posed by dragging. So it is refused here, and flip_control_aim
+    stands down with it.
+
+    Return
+        list or None: unit world vector, or None when no axis is usable
+            (the caller then keeps the old basectrl-derived reference)
+    '''
+    axes = {'x': [1.0, 0.0, 0.0], 'y': [0.0, 1.0, 0.0], 'z': [0.0, 0.0, 1.0]}
+    up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()
+    plane_normal = str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).strip().lower()
+    if up not in axes:
+        logger.warning(f"Mirror: unusable ORIENT_UP_AXIS '{up}' for the "
+                       'spline control up reference')
+        return None
+    if up == plane_normal:
+        logger.warning(f"Mirror: ORIENT_UP_AXIS '{up}' is the symmetry "
+                       f"plane's own normal (MIRROR_AXIS '{plane_normal}'), "
+                       'so it cannot be the spline control up reference - '
+                       'the two sides would not resolve against the same '
+                       'vector. Falling back to the base control.')
+        return None
+    return axes[up]
+
+
+def flip_control_aim(rigname):
+    '''
+    Whether this part's spline controls should aim BACKWARDS up their row.
+
+    The aim-oriented control sets (IK, Float, Spline) resolve their up
+    against a vector lying in the symmetry plane, which leaves both sides'
+    aim and up pointing along the reflection of their partner's - so the
+    third axis carries the negation, and it is the two axes an animator
+    drags ACROSS the tail that come out unmirrored.
+
+    Reversing the aim on the mirrored side moves the negation onto the aim
+    instead: rotations then mirror about the aim alone, and translations
+    mirror along BOTH axes that bend the curve. It costs the slide along
+    the tail's own length, which is the least likely of the three to be
+    typed rather than dragged.
+
+    Done by negating the constraint's aim vector rather than re-standing
+    the frame afterwards, so the orientation is built right the first time
+    and a rebuild cannot flip the flip.
+
+    Stands down when there is no in-plane up reference to build on
+    (spline_up_vector). Without one the up resolves negated too, and
+    reversing the aim on top of that negates all three - the one frame
+    where no translation mirrors, which is worse than leaving it alone.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        bool: True on the mirrored side of a pair, when MIRROR_CONTROLS is on
+    '''
+    return (MIRROR_CONTROLS
+            and spline_up_vector() is not None
+            and bool(rt_naming.mirror_partner(rigname)))
 
 
 def aim_axis():

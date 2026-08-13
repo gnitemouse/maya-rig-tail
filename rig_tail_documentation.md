@@ -381,11 +381,18 @@ two. Rotations mirrored plus translations mirrored is therefore always
 exactly three. The behavior never changes how much mirrors, only which
 three:
 
-| Value | Axes opposite | Aim | Rotations mirror | Translations mirror |
-|-------|---------------|-----|------------------|---------------------|
-| `mirror` (default) | all three | runs back **up** the chain | all three | none |
-| `symmetric` | the up | down the chain | the up | aim + third |
-| `parallel` | the third | down the chain | the third | aim + up |
+| Value | Axes | Rotations mirror | Translations mirror |
+|-------|------|------------------|---------------------|
+| `mirror` (default) | `-aim -roll -up` | all three | none |
+| `symmetric` | `+aim +roll -up` | up | aim, roll |
+| `parallel` | `+aim -roll +up` | roll | aim, up |
+
+Read each axis `+` when it points the **same** way as the mirror image of
+its partner's matching axis and `-` when it points the **opposite** way.
+`aim` runs down the chain (`ORIENT_AIM_AXIS`), `up` is `ORIENT_UP_AXIS`,
+`roll` is the remaining one. A rotation about an axis mirrors when it is
+`-`, a translation along it when it is `+`, and the count of `-` is always
+odd — so three of the six always mirror.
 
 `mirror` is Maya's `mirrorJoint -mirrorBehavior`, and it is the default
 because **everything this rig is posed by is a rotation**: curl, wave,
@@ -1769,57 +1776,47 @@ mirrored side under `mirror`.
 #### `behavior()`
 The validated `MIRROR_BEHAVIOR`, defaulting to `BEHAVIOR_DEFAULT`.
 
-### Not yet covered: the IK spline controls
+### The IK spline controls
 
-Re-standing them is **safe** — the clusters do not care. Each spline
-cluster owns a single CV with the handle's rotate pivot sitting on it, so
-a rotated cluster handle deforms nothing (the same one-CV property
-`rig_tail_curve.connect_driver_to_solver_curve` documents, and the reason
-those constraints can run with maintain-offset off at all). The controls'
-orientation really is independent of the clusters' and of the spline
-handle's.
+They do not inherit the joint convention. `orient_control_aims` aims each
+row at itself — `+Y` down the row, `+Z` rolled toward a world up reference
+— so `MIRROR_BEHAVIOR` never reaches them. Re-standing them is safe: each
+spline cluster owns a single CV with the handle's rotate pivot on it, so a
+rotated cluster handle deforms nothing (the one-CV property
+`rig_tail_curve.connect_driver_to_solver_curve` documents).
 
-What is not settled is **which** frame to give them, and `mirror` as the
-default makes it more pressing rather than less. An IK spline control is
-posed by TRANSLATION — its own rotation is the no-op above — and a
-translation mirrors under the opposite rule to a rotation. Since `D` must
-carry an odd number of negated axes, the count of *un*-negated ones is
-even, so a right-handed control frame mirrors **2 of 3 translate axes, or
-0** — never all three. `mirror` is exactly the 0 case: it mirrors all
-three rotations, which do nothing here, and none of the translations. So
-these controls want a one-negated frame of their own, independent of the
-joints, and which axis takes it is a judgement about how they are posed.
+Two things decide their frame, and both are now stated rather than
+inherited:
 
-Two of the three sets are not purely translated, which sharpens it. The
-**IK** set is nested and the **Spline** set is hierarchical (`bot_sml`
-under `bot`, `top` under `mid_rot`), so a parent control's rotation swings
-its children and does move the curve. Only the **Float** set is purely
-translated. And `mid_rot` is a pure rotation control, which `mirror`
-already serves correctly.
+**The up reference** was the basectrl's `+Z`, which reaches it from the
+joints through `get_local_orientation` — so the frames were a by-product
+of `MIRROR_BEHAVIOR`, not a convention. It is now
+`rt_mirror.spline_up_vector()`: `ORIENT_UP_AXIS` read as a world
+direction, required to lie **in** the symmetry plane. A world axis is
+always invariant under the reflection up to sign, so either way the two
+sides come out cleanly related; what the plane's own normal would cost is
+*which* axis carries the negation — the up resolves negated too, and with
+the aim reversed on top of that all three end up negated, the one frame
+with no mirrored translation at all. So it is refused, and the aim flip
+stands down with it.
 
-## rig_tail_cache.py (rt_cache)
+**The aim direction** is reversed on the mirrored side
+(`rt_mirror.flip_control_aim`), which moves the negation onto the aim:
 
-Control caching and validation.
+| | Frame | Rotations mirror | Translations mirror |
+|---|---|---|---|
+| before | `+aim -roll +up` | roll | aim, up |
+| after | `-aim +roll +up` | aim | **roll, up** |
 
-### Functions
+Both are one-negated, so both mirror two translations — but `roll` and
+`up` are the two axes that bend the curve, and `aim` is the slide along
+the tail's own length. An unmirrored bend axis is the one an animator
+sees; an unmirrored slide is not. It is done by negating the constraint's
+aim vector, so the frame is built right rather than corrected afterwards
+and a rebuild cannot flip the flip.
 
-#### `get_cached_controls_ik(rigname)`
-Get cached IK controls and groups.
-
-#### `clear_control_cache()`
-Clear all control caches.
-
-#### `validate_cache()`
-Clear cached data if RIGPARTS or ROOT changed since the last build.
-
-#### `validate_cache_structure()`
-Check whether NUM_CTRL_FK / NUM_CTRL_IK changed since the last build.
-A change forces the full teardown path: reusing nodes built for a
-different control count would mix old and new layouts.
-
-#### `validate_cache_joints(rigname)`
-Check that cached joints still exist and have not moved beyond
-JOINT_POS_TOLERANCE; returns True when a full rebuild is needed.
+`mid_rot` is the exception in the set — a pure rotation control — and
+`mirror` already serves it.
 
 ---
 

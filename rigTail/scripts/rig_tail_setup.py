@@ -1304,33 +1304,31 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     rotating would leave the aim pointing the same way as the source (into
     the body) instead of to the opposite side.
 
-    BEHAVIOR. A reflection flips handedness, so a right-handed frame can
-    point an ODD number of its axes opposite the reflection of the source's
-    - one, or all three, never two. That is the whole of the choice:
+    BEHAVIOR. Write each of the mirrored side's three local axes '+' when
+    it points the SAME way as the mirror image of its partner's matching
+    axis and '-' when it points the OPPOSITE way. aim runs down the chain
+    (aim_axis), up is up_axis, roll is the remaining one. A rotation about
+    an axis mirrors when that axis is '-', a translation along it when it
+    is '+', and a reflection flips handedness so the count of '-' must be
+    ODD - one, or all three, never two. Three of the six therefore mirror
+    under every value, and the choice only moves which three:
 
-        'mirror'    negates ALL THREE. Maya's mirrorJoint -mirrorBehavior:
-            the same channel value moves the target as the exact mirror of
-            the source on every ROTATION axis, and on no translation axis.
-            The aim then runs BACK UP the chain, which the advanced twist
-            has to be told (rig_tail_stretch reads rt_mirror.aim_reversed)
-            and which reverses a slide along the aim (rt_mirror's
-            translation_signs reports it). The default.
-        'symmetric' negates the reflected UP only. The aim keeps running
-            down the chain; rotations mirror about the up axis alone, while
-            translations mirror along the aim and the third.
-        'parallel'  keeps the reflected up, so the THIRD axis is the
-            negated one. The same channel value moves the target the
-            OPPOSITE way about the up, so a splayed pair reads as one
-            curling up while the other curls down.
+        'mirror'     -aim -roll -up   rotations: all three  translations: none
+        'symmetric'  +aim +roll -up   rotations: up         translations: aim, roll
+        'parallel'   +aim -roll +up   rotations: roll       translations: aim, up
 
-    Rotations mirrored plus translations mirrored is three under every one
-    of them; the choice only moves which three. Worked example, a tail
-    splayed along +X with up +Z: 'symmetric' and 'parallel' both give the
-    target aim -X (down its own chain), 'mirror' gives +X (back up it).
-    'parallel' leaves the target up at +Z, so +rotate about up spins both
-    about world +Z - the +X tip rises and the -X tip drops. 'symmetric'
-    gives the target up -Z, so the same +rotate spins the target about
-    world -Z instead and both tips rise.
+    'mirror' is Maya's mirrorJoint -mirrorBehavior and the default. Its
+    '-aim' is the aim running BACK UP the chain, which the advanced twist
+    has to be told (rig_tail_stretch reads rt_mirror.aim_reversed) and
+    which reverses a slide along the aim (rt_mirror.translation_signs
+    reports it).
+
+    Worked example, a tail splayed along +X with up +Z: 'symmetric' and
+    'parallel' both give the target aim -X (down its own chain), 'mirror'
+    gives +X (back up it). 'parallel' leaves the target up at +Z, so
+    +rotate about up spins both about world +Z - the +X tip rises and the
+    -X tip drops. 'symmetric' gives the target up -Z, so the same +rotate
+    spins the target about world -Z instead and both tips rise.
 
     Since 'symmetric' and 'parallel' differ only by a 180-degree roll about
     the aim, running roll_chain(target, 180) converts one into the other on
