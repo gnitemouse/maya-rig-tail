@@ -81,6 +81,58 @@ UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
                       'clamp', 'setRange', 'choice', 'curveInfo',
                       'pointOnCurveInfo', 'remapValue']
 
+# Node types Maya has RENAMED, in the build's spelling -> the current one.
+# createNode still accepts the old name - it warns and substitutes - so the
+# build goes on making these nodes and naming them for the old type, while
+# cmds.ls(type=<old name>) quietly stops finding any of them. Verified in
+# mayapy: on Maya 2027 createNode('multDoubleLinear') yields nodeType
+# 'multDL' and cmds.ls(type='multDoubleLinear') returns []; on 2024 the old
+# names are still the real ones. Left unhandled, every type-filtered scan
+# below went blind to these nodes on the newer Maya, so a full teardown
+# could not find them and they survived every rebuild.
+NODE_TYPE_ALIASES = {
+    'multDoubleLinear': 'multDL',
+    'addDoubleLinear': 'addDL',
+    'pointMatrixMult': 'pointMatrixMultDL',
+}
+
+
+def resolve_node_types(types):
+    '''
+    A node type list the RUNNING Maya's cmds.ls will actually answer for.
+
+    Each name is kept if this Maya knows it and swapped for its alias if it
+    does not (see NODE_TYPE_ALIASES), so one list works on either version.
+    Both spellings are never passed together: cmds.ls does not raise on a
+    type it does not know, it warns 'Unknown object type' - once per scan
+    per rig part, which is a dozen warnings a build.
+
+    A name neither spelling covers is dropped rather than passed on. That is
+    a type from a plugin which never loaded (the matrix nodes come from
+    matrixNodes, the quaternion ones from quatNodes), which is the case
+    _ls_types' fallback exists for; dropping it here means the fallback is
+    not needed to handle it.
+
+    cmds.allNodeTypes is asked per call rather than cached: it costs ~1ms, and
+    a plugin can load part way through a session, which a cached answer
+    would then be wrong about for the rest of it.
+
+    Arguments
+        types (list): Node type names, in the build's own spelling
+
+    Return
+        list: the names to hand cmds.ls, deduped, order preserved
+    '''
+    known = set(cmds.allNodeTypes() or [])
+    resolved = []
+    for typ in types:
+        if typ in known:
+            resolved.append(typ)
+        alias = NODE_TYPE_ALIASES.get(typ)
+        if alias and alias in known:
+            resolved.append(alias)
+    return list(dict.fromkeys(resolved))
+
 
 def fx_expression_patterns(rigname):
     '''
@@ -164,7 +216,7 @@ def cleanup_rig(fk, ik):
         # teardown, shared by every part (see cleanup_rigname). Nodes
         # deleted for an earlier part are filtered out downstream by
         # rt_maya.remove_nodes, and nothing new is created during cleanup.
-        utility_nodes = cmds.ls(type=UTILITY_NODE_TYPES) or []
+        utility_nodes = cmds.ls(type=resolve_node_types(UTILITY_NODE_TYPES)) or []
 
         for rigname in rt_cache.active_parts():
             # Validate cache
@@ -623,12 +675,17 @@ def _ls_types(types):
     session where the plugin never loaded. One query normally; on failure,
     fall back to querying type by type and skip the ones Maya rejects.
 
+    Renamed types are resolved first (see resolve_node_types), or the sweep
+    is blind to every multDoubleLinear/addDoubleLinear/pointMatrixMult node
+    on Maya 2026+ and leaves them behind.
+
     Arguments
         types (list): Node type names
 
     Return
         list: matching nodes
     '''
+    types = resolve_node_types(types)
     try:
         return cmds.ls(type=types) or []
     except RuntimeError:
@@ -890,7 +947,7 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     # lookup instead, and the name test it replaces costs nothing in
     # Python. cleanup_rig hands the same scan to every part.
     if utility_nodes is None:
-        utility_nodes = cmds.ls(type=UTILITY_NODE_TYPES) or []
+        utility_nodes = cmds.ls(type=resolve_node_types(UTILITY_NODE_TYPES)) or []
     # Same match as '{typ}_{rigname}_*{node_typ}': the empty type is
     # dropped, since it only ever produced '_{rigname}_...' with a leading
     # underscore, which matches nothing
@@ -2019,6 +2076,7 @@ def rename_components():
                   'multDoubleLinear', 'pointMatrixMult', 'setRange', 'clamp',
                   'remapValue']
     legacy_nodes = list(cmds.ls(*marker_patterns, dag=True) or [])
-    legacy_nodes += cmds.ls(*marker_patterns, type=util_nodes) or []
+    legacy_nodes += cmds.ls(*marker_patterns,
+                            type=resolve_node_types(util_nodes)) or []
     for node in dict.fromkeys(legacy_nodes):
         legacy_rename(node)
