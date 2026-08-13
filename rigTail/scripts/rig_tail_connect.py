@@ -557,7 +557,12 @@ def connect_twist_roll_ik(rigname, spline_handle):
     '''
     aim_key = rt_mirror.aim_axis()
     rot_sign = rt_mirror.rotation_signs(rigname).get(aim_key, 1.0)
-    signs = {'twist': rot_sign, 'roll': rot_sign, 'offset': -rot_sign}
+    # offset ASKS for the translation signs; it does not negate the rotation
+    # ones. They differ on every part with nothing to mirror - the source
+    # side, a center tail, an unpaired part - where both are +1 and negating
+    # would reverse offset on exactly the parts that should be left alone.
+    trn_sign = rt_mirror.translation_signs(rigname).get(aim_key, 1.0)
+    signs = {'twist': rot_sign, 'roll': rot_sign, 'offset': trn_sign}
     for attr, sign in signs.items():
         src = rt_ctrlall.resolved_plug(rigname, attr)
         mirror_node = f'{rt_constants.TYPE_IK}_{rigname}_{attr}_mirror_multiplyDivide'

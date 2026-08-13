@@ -425,6 +425,13 @@ A **stored** config keeps its own value — moving the default from
 `symmetric` to `mirror` does not silently re-orient an existing rig. Re-run
 **Mirror Orient** to move one across deliberately.
 
+Because of that, the setting and the skeleton can disagree: pick `Mirror`
+in the Setup UI, run Mirror Orient, then build in a session that reloads a
+config still holding `symmetric`. Nothing the build does reads the setting
+— every sign and the spline's forward axis are measured off the joints —
+so the rig comes out right either way, and `rt_mirror.aim_reversed` logs
+the disagreement so it can be tidied.
+
 ### Include / Exclude
 
 `RIGPARTS_EXCLUDE` holds rig parts that **both** the batch Setup operations
@@ -1770,8 +1777,10 @@ A node's world frame with each axis scaled by its sign, as 16 floats.
 `ORIENT_AIM_AXIS` as a signs key, or None when it is not a usable axis.
 
 #### `aim_reversed(rigname)`
-Whether this part's joints aim back up their own chain — true only for the
-mirrored side under `mirror`.
+Whether this part's joints aim back up their own chain — **measured off the
+skeleton**, not read from `MIRROR_BEHAVIOR`. The setting says what the next
+Mirror Orient will do; only what the joints actually are is safe to build
+against. Logs when the two disagree.
 
 #### `behavior()`
 The validated `MIRROR_BEHAVIOR`, defaulting to `BEHAVIOR_DEFAULT`.

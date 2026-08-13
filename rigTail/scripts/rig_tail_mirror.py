@@ -163,31 +163,28 @@ def rotation_signs(rigname):
     return _signs(rigname, rotation=True)
 
 
-def _signs(rigname, rotation):
-    '''
-    The measurement behind rotation_signs and translation_signs.
+def _axis_cosines(rigname):
+    """
+    Mean cos between each of this part's local axes and the reflection of
+    its L/R partner's matching axis, over the whole chain.
 
-    One body for both so the 'nothing to mirror' answers cannot diverge:
-    an unpaired part, a center part and the source side must come back
-    UNSIGNED for a translation exactly as they do for a rotation. Deriving
-    one from the other by negating the whole dict got that wrong - it
-    turned every unmirrored part's translation signs to -1 and reversed FK
-    and IK offset on the source side and on every center tail.
+    The one measurement every answer in this module is built on: -1 means
+    the axis points OPPOSITE the reflection ('-' in the +aim/+roll/+up
+    notation), +1 means it points the same way ('+'). Averaged over the
+    chain rather than read off one joint, since a single joint can sit
+    oddly - a hand-tweaked tip, an un-oriented base - without that being
+    what the chain as a whole does.
 
     Arguments
         rigname (str): Name of rig component
-        rotation (bool): True for a rotation about each axis, False for a
-            translation along it (the opposite mirror rule)
 
     Return
-        dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
-    '''
-    if not MIRROR_SLIDERS:
-        return dict(NO_MIRROR)
-
+        dict or None: {'X','Y','Z'} mean cosines, or None when this part
+            has no partner to be measured against
+    """
     partner = rt_naming.mirror_partner(rigname)
     if not partner:
-        return dict(NO_MIRROR)
+        return None
 
     src = rt_constants.JOINTS_BN.get(partner) or []
     tgt = rt_constants.JOINTS_BN.get(rigname) or []
@@ -195,29 +192,24 @@ def _signs(rigname, rotation):
         # Only reachable when the partner was never detected this session
         # (excluded from every run since Maya started). Worth saying out
         # loud: this side builds unsigned while the partner keeps whatever
-        # signs its own build gave it, so the pair stops matching.
+        # its own build gave it, so the pair stops matching.
         logger.warning(f'{rigname}: Mirror: no BN chain for {partner}, '
                        'leaving the dials unsigned - run Setup so both '
                        'sides of the pair are detected')
-        return dict(NO_MIRROR)
+        return None
 
     keep = {'x': 0, 'y': 1, 'z': 2}.get(
         str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).lower(), 0)
-
-    # Mean cos between each target axis and the reflection of the source's.
-    # Averaged over the chain rather than read off one joint: a single joint
-    # can sit oddly (a hand-tweaked tip, an un-oriented base) without that
-    # being what the chain as a whole does.
     cosines = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
     # Only the joints both chains actually have, and only those still in the
     # scene: a stale JOINTS_BN entry naming a deleted joint must not take
     # the build down over a sign
-    pairs = [(s, t) for s, t in zip(src, tgt)
-             if cmds.objExists(s) and cmds.objExists(t)]
+    pairs = [(a, b) for a, b in zip(src, tgt)
+             if cmds.objExists(a) and cmds.objExists(b)]
     if not pairs:
         logger.warning(f'{rigname}: Mirror: no joints in common with '
                        f'{partner}, leaving the dials unsigned')
-        return dict(NO_MIRROR)
+        return None
     for src_jnt, tgt_jnt in pairs:
         src_rows = _axis_rows(src_jnt)
         tgt_rows = _axis_rows(tgt_jnt)
@@ -228,6 +220,35 @@ def _signs(rigname, rotation):
                                  for i in range(3))
     for axis in cosines:
         cosines[axis] /= len(pairs)
+    return cosines
+
+
+def _signs(rigname, rotation):
+    """
+    The sign rule behind rotation_signs and translation_signs.
+
+    One body for both so the 'nothing to mirror' answers cannot diverge:
+    an unpaired part, a center part and the source side must come back
+    UNSIGNED for a translation exactly as they do for a rotation. Deriving
+    one from the other by negating the whole dict got that wrong - it
+    turned every unmirrored part's translation signs to -1 and reversed FK
+    and IK offset on the source side and on every center tail. Callers must
+    ask for the motion they mean rather than negating what they got.
+
+    Arguments
+        rigname (str): Name of rig component
+        rotation (bool): True for a rotation about each axis, False for a
+            translation along it (the opposite mirror rule)
+
+    Return
+        dict: {'X': sign, 'Y': sign, 'Z': sign}, each +1.0 or -1.0
+    """
+    if not MIRROR_SLIDERS:
+        return dict(NO_MIRROR)
+    cosines = _axis_cosines(rigname)
+    if cosines is None:
+        return dict(NO_MIRROR)
+    partner = rt_naming.mirror_partner(rigname)
 
     # 'mirror' and 'symmetric' both ask the pair to move as mirror images;
     # they differ in WHICH axes manage it unaided, which the measurement
@@ -479,12 +500,23 @@ def aim_reversed(rigname):
     '''
     Whether this part's joints aim back UP their own chain.
 
-    True only for the mirrored side of a pair under 'mirror', which is the
-    one convention that negates the aim. Anything reading the aim as
-    running from parent to child has to ask: the spline IK's advanced
-    twist is told through its forward axis (rig_tail_stretch), and a
-    translation along the aim reverses with it (which translation_signs
-    already reports).
+    MEASURED off the skeleton, not read from MIRROR_BEHAVIOR. The setting
+    says what the next Mirror Orient WILL do; this asks what the joints
+    standing in the scene actually are, and only the second is safe to
+    build against. Reading the setting shipped the bug this replaces: Setup
+    was run with 'mirror' from the UI, the Build reloaded a config that
+    still held 'symmetric', and the spline solver was told the aim ran
+    forwards on a chain where it ran backwards - which twists the whole
+    chain along its length. Every other answer in this module is measured;
+    this one had no business being the exception.
+
+    Anything reading the aim as running from parent to child has to ask:
+    the spline IK's advanced twist is told through its forward axis
+    (rig_tail_stretch), and a translation along the aim reverses with it
+    (which translation_signs already reports).
+
+    Only the mirrored side of a pair can answer True - the source side is
+    the authored one and is never reversed.
 
     Arguments
         rigname (str): Name of rig component
@@ -492,8 +524,19 @@ def aim_reversed(rigname):
     Return
         bool: True when the aim runs from child to parent on this part
     '''
-    return (behavior() == 'mirror'
-            and bool(rt_naming.mirror_partner(rigname)))
+    cosines = _axis_cosines(rigname)
+    axis = aim_axis()
+    if cosines is None or axis is None:
+        return False
+    reversed_aim = cosines[axis] < -MIRROR_TOLERANCE
+    # Worth saying when the skeleton and the setting disagree: it means a
+    # Mirror Orient re-run would change the convention under the rig
+    if reversed_aim != (behavior() == 'mirror'):
+        logger.info(f'{rigname}: Mirror: the skeleton is'
+                    f'{"" if reversed_aim else " not"} aim-reversed, but '
+                    f"MIRROR_BEHAVIOR says '{behavior()}'. Building for the "
+                    'skeleton; re-run Setup Mirror Orient to move it.')
+    return reversed_aim
 
 
 def _axis_rows(node):
