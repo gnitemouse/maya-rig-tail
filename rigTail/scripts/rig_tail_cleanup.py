@@ -1050,39 +1050,45 @@ def cleanup_connections(rigname, fk, ik):
     '''
     logger.debug(f'{rigname}: Cleanup connections')
 
-    if fk and not fk_sdk_structure_is_current(rigname):
-        logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
-        restore_fk_joint_chain(rigname)
+    # TEMPORARY: 'light.*' timing blocks, to break down what
+    # cleanup.teardown_light spends its time on. Remove once that is
+    # attributed - they are measurement, not structure.
+    with rt_maya.timed('light.sdk_check'):
+        if fk and not fk_sdk_structure_is_current(rigname):
+            logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
+            restore_fk_joint_chain(rigname)
 
     # Per chain, not per joint (see cleanup_rigname step 1)
-    for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
-        if rigname in joints:
-            chain = [j for j in joints[rigname] if cmds.objExists(j)]
-            if not chain:
-                continue
-            # Keep BN joints' outgoing worldMatrix -> skinCluster (the
-            # geometry bind); only their incoming drivers are rebuilt.
-            keep_skin = joints is rt_constants.JOINTS_BN
-            rt_maya.disconnect_nodes(chain, source=True,
-                                    destination=not keep_skin)
-            # Remove constraints
-            constraints = cmds.listRelatives(chain, type='constraint') or []
-            if constraints:
-                cmds.delete(constraints)
+    with rt_maya.timed('light.chains'):
+        for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
+            if rigname in joints:
+                chain = [j for j in joints[rigname] if cmds.objExists(j)]
+                if not chain:
+                    continue
+                # Keep BN joints' outgoing worldMatrix -> skinCluster (the
+                # geometry bind); only their incoming drivers are rebuilt.
+                keep_skin = joints is rt_constants.JOINTS_BN
+                rt_maya.disconnect_nodes(chain, source=True,
+                                        destination=not keep_skin)
+                # Remove constraints
+                constraints = cmds.listRelatives(chain, type='constraint') or []
+                if constraints:
+                    cmds.delete(constraints)
 
     # Disconnect FK SDK groups, the whole stack of every joint in two
     # commands (there are NUM_CTRL_FK + 1 of them per joint)
-    if fk and rigname in rt_constants.JOINTS_FK:
-        sdk_groups = []
-        for jnt in rt_constants.JOINTS_FK[rigname]:
-            NN = rt_naming.get_index_from_name(jnt)
-            for idx in range(rt_constants.NUM_CTRL_FK + 1):
-                if idx < rt_constants.NUM_CTRL_FK:
-                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, NN, nn=idx+1)
-                else:
-                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
-                sdk_groups.append(sdk_grp)
-        rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
+    with rt_maya.timed('light.sdk_disconnect'):
+        if fk and rigname in rt_constants.JOINTS_FK:
+            sdk_groups = []
+            for jnt in rt_constants.JOINTS_FK[rigname]:
+                NN = rt_naming.get_index_from_name(jnt)
+                for idx in range(rt_constants.NUM_CTRL_FK + 1):
+                    if idx < rt_constants.NUM_CTRL_FK:
+                        sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, NN, nn=idx+1)
+                    else:
+                        sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
+                    sdk_groups.append(sdk_grp)
+            rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
 
     # Delete FK utility node networks: the FK build (set_curveinfo_fk,
     # falloff_rotation) recreates them from scratch every run, so
@@ -1107,8 +1113,13 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_curveInfo',
         ]
         # One scene scan for all eight patterns, one disconnect pass and one
-        # delete for everything it finds (see cleanup_rigname)
-        rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
+        # delete for everything it finds (see cleanup_rigname).
+        # Scan and delete are timed apart: a name pattern makes cmds.ls walk
+        # the whole scene, so it matters which of the two the time is in.
+        with rt_maya.timed('light.fk_utility_scan'):
+            fk_nodes = dict.fromkeys(cmds.ls(*fk_patterns) or [])
+        with rt_maya.timed('light.fk_utility_delete'):
+            rt_maya.remove_nodes(fk_nodes)
 
     # Delete the FX expressions, for the same reason as the FK networks
     # above: the build rebuilds every one of them from scratch whatever it
@@ -1127,29 +1138,33 @@ def cleanup_connections(rigname, fk, ik):
     # back. A TYPED scan for the candidates - a name pattern makes cmds.ls
     # walk the whole scene, and the name test that replaces it is free
     # (see cleanup_rigname).
-    expression_patterns = fx_expression_patterns(rigname)
-    expressions = [n for n in cmds.ls(type='expression') or []
-                   if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
-                          for p in expression_patterns)]
-    if expressions:
-        # The conversion nodes the expressions write through go in the SAME
-        # batch, for two reasons. One is correctness, and it is
-        # delete_expression's: a conversion left connected to a
-        # composeMatrix input blocks the rebuilt expression from connecting
-        # to that plug. The other is that batching them is what keeps the
-        # composeMatrix nodes alive at all - remove_nodes disconnects
-        # everything before it deletes anything, where leaving the
-        # conversions to cleanup_dangling_unit_conversions has cmds.delete
-        # cascade from each conversion into the composeMatrix it feeds. The
-        # full teardown loses every FX composeMatrix that way and
-        # rig_tail_matrix rebuilds them (create_matrix_nodes_for_joint,
-        # which runs in connect.matrix, before connect.fx); the light path
-        # is here to avoid work, so it keeps them.
-        # Both queries take the whole list at once (see disconnect_nodes).
-        conversions = cmds.ls(cmds.listConnections(expressions) or [],
-                              type=['unitConversion', 'unitToTimeConversion',
-                                    'timeToUnitConversion']) or []
-        rt_maya.remove_nodes(expressions + conversions)
+    with rt_maya.timed('light.fx_expression_scan'):
+        expression_patterns = fx_expression_patterns(rigname)
+        expressions = [n for n in cmds.ls(type='expression') or []
+                       if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
+                              for p in expression_patterns)]
+    with rt_maya.timed('light.fx_expression_delete'):
+        if expressions:
+            # The conversion nodes the expressions write through go in the
+            # SAME batch, for two reasons. One is correctness, and it is
+            # delete_expression's: a conversion left connected to a
+            # composeMatrix input blocks the rebuilt expression from
+            # connecting to that plug. The other is that batching them is
+            # what keeps the composeMatrix nodes alive at all - remove_nodes
+            # disconnects everything before it deletes anything, where
+            # leaving the conversions to cleanup_dangling_unit_conversions
+            # has cmds.delete cascade from each conversion into the
+            # composeMatrix it feeds. The full teardown loses every FX
+            # composeMatrix that way and rig_tail_matrix rebuilds them
+            # (create_matrix_nodes_for_joint, which runs in connect.matrix,
+            # before connect.fx); the light path is here to avoid work, so
+            # it keeps them.
+            # Both queries take the whole list at once (disconnect_nodes).
+            conversions = cmds.ls(
+                cmds.listConnections(expressions) or [],
+                type=['unitConversion', 'unitToTimeConversion',
+                      'timeToUnitConversion']) or []
+            rt_maya.remove_nodes(expressions + conversions)
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''

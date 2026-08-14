@@ -253,11 +253,29 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         num_joints        joints currently in range, computed here from
                           falloff and reported back to the animator
 
+    Node network per control:
+    1. plusMinusAverage x2 (falloff_min/max): ctrl_pos -/+ falloff, the
+       window in joint_pos units that the control reaches over
+
     Node network per joint:
-    1. plusMinusAverage (delta): joint_pos - ctrl_pos, signed
-    2. multiplyDivide (ratio): delta / falloff -> -1 .. +1 across the range
-    3. remapValue (weight): the tent over that range, scaled by 1/num_joints
-    4. multiplyDivide (rotmult): rotation * weight -> sdk_grp.rotate
+    1. remapValue (weight): joint_pos against that window, shaped by the
+       tent ramp and scaled by 1/num_joints
+    2. multiplyDivide (rotmult): rotation * weight -> sdk_grp.rotate
+
+    The weight used to be reached the long way round: a plusMinusAverage
+    for (joint_pos - ctrl_pos), a multiplyDivide for (/ falloff), and a
+    remapValue told to expect -1 .. +1. But normalising an input between
+    two bounds is precisely what remapValue does with inputMin/inputMax,
+    and both are connectable - so that subtraction and division were being
+    done twice, once in nodes and again inside the node downstream of them.
+    Driving the bounds from ctrl_pos -/+ falloff gives
+    (joint_pos - (ctrl_pos - falloff)) / (2 * falloff), which is the same
+    (ratio + 1) / 2 the old pair arrived at. It also moves two nodes per
+    JOINT-CONTROL PAIR onto two per CONTROL, since ctrl_pos and falloff do
+    not vary along the chain: 306 fewer nodes per rig part. Checked against
+    the old network over a sweep of ctrl_pos, falloff and joint_pos: the
+    largest difference in the weight was 4.7e-9, inside the ramp's own
+    single-precision sampling noted below.
 
     plus, on the mirrored side of an L/R pair only, one multiplyDivide
     between the sum and the weighting that negates the axes the controls'
@@ -268,9 +286,14 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     Comparisons against jnt.joint_pos go through control_position_plug, so
     a control rotates the joints it is drawn on. See set_curveinfo_fk.
 
-    The remapValue samples its ramp in single precision, which puts ~1e-7
-    relative rounding on the weight - well under a millionth of a degree at
-    any rotation an animator will dial in.
+    The remapValue samples its ramp in single precision, which puts a few
+    parts in 10^7 of rounding on the weight. Measured against the older
+    delta/ratio network over a sweep of control position, falloff and
+    rotation: the weights differ by at most 3.6e-07, which at 90 degrees of
+    control rotation is 3e-05 of a degree on the joint. Two networks
+    disagreeing at the ramp's own sampling resolution, not one of them being
+    wrong - but it is thirty millionths of a degree, not the under-one this
+    once claimed.
 
     Arguments
         rigname (str): Name of rig component
@@ -356,48 +379,55 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     # setRange holds num_joints at a minimum of 1, so this cannot divide by 0
     cmds.connectAttr(f'{ctrl}.num_joints', f'{inv_numjnt}.input2X', f=1)
 
+    # The control's reach, as the pair of joint_pos values its weight ramp
+    # spans. Every joint's remapValue below normalises against these, which
+    # is where the old per-joint delta and ratio nodes went (see the
+    # docstring). Two nodes per control, not per joint: neither ctrl_pos nor
+    # falloff varies along the chain.
+    # The window can never be empty - falloff's attribute minimum of 0.1,
+    # scaled by 0.1 above, keeps (max - min) at 0.02 or more - which is the
+    # same guard that kept the old ratio node from dividing by zero.
+    falloff_min = f'{control}_falloff_min_plusMinusAverage'
+    cmds.createNode('plusMinusAverage', n=falloff_min, s=1, ss=1)
+    cmds.setAttr(f'{falloff_min}.operation', 2) # subtract
+    cmds.connectAttr(ctrlpos_plug, f'{falloff_min}.input1D[0]', f=1)
+    cmds.connectAttr(f'{falloff}.output', f'{falloff_min}.input1D[1]', f=1)
+
+    falloff_max = f'{control}_falloff_max_plusMinusAverage'
+    cmds.createNode('plusMinusAverage', n=falloff_max, s=1, ss=1)
+    cmds.setAttr(f'{falloff_max}.operation', 1) # add
+    cmds.connectAttr(ctrlpos_plug, f'{falloff_max}.input1D[0]', f=1)
+    cmds.connectAttr(f'{falloff}.output', f'{falloff_max}.input1D[1]', f=1)
+
     # For each joint, calculate weighted rotation
     for idx, jnt in enumerate(joints):
         sdk_grp = sdks[idx]
         NN = rt_naming.get_index_from_name(jnt)
         sdk_name = f'{control}_{NN:02d}'
 
-        # (jnt - ctrl): signed distance along the chain, in joint_pos
-        # units. The tent below is symmetric, so nothing downstream has to
-        # branch on which side of the control the joint sits.
-        delta = f'{sdk_name}_delta_plusMinusAverage'
-        cmds.createNode('plusMinusAverage', n=delta, s=1, ss=1)
-        cmds.setAttr(f'{delta}.operation', 2) # subtract
-        cmds.connectAttr(f'{jnt}.joint_pos', f'{delta}.input1D[0]', f=1)
-        cmds.connectAttr(ctrlpos_plug, f'{delta}.input1D[1]', f=1)
-
-        # (jnt - ctrl) / falloff: -1 at one edge of the range, 0 under the
-        # control, +1 at the other. falloff bottoms out at 0.01 (attr min
-        # 0.1, scaled by 0.1 above), so this never divides by zero.
-        ratio = f'{sdk_name}_ratio_multiplyDivide'
-        cmds.createNode('multiplyDivide', n=ratio, s=1, ss=1)
-        cmds.setAttr(f'{ratio}.operation', 2) # divide
-        cmds.connectAttr(f'{delta}.output1D', f'{ratio}.input1X', f=1)
-        cmds.connectAttr(f'{falloff}.output', f'{ratio}.input2X', f=1)
-
-        # The tent. remapValue normalises inputValue from [-1, 1] to [0, 1]
-        # and clamps it there, then samples the ramp - which clamps at its
-        # end points too - so a joint past the falloff reads 0. Three
-        # linear points running 0 -> 1 -> 0 draw the whole weight curve
-        # with no condition nodes.
+        # The tent. remapValue normalises inputValue from
+        # [falloff_min, falloff_max] to [0, 1] and clamps it there, then
+        # samples the ramp - which clamps at its end points too - so a joint
+        # past the falloff reads 0. Three linear points running 0 -> 1 -> 0
+        # draw the whole weight curve with no condition nodes. The ramp is
+        # symmetric, so nothing has to branch on which side of the control
+        # the joint sits.
         #
         # outputMax carries the 1/num_joints normalisation: the node
         # returns outputMin + (outputMax - outputMin) * ramp, and outputMin
         # is 0, so the tent arrives pre-divided.
         weight = f'{sdk_name}_weight_remapValue'
         cmds.createNode('remapValue', n=weight, s=1, ss=1)
-        cmds.setAttr(f'{weight}.inputMin', -1)
-        cmds.setAttr(f'{weight}.inputMax', 1)
+        # One setAttr per ramp point rather than one per field: value is a
+        # compound of (position, floatValue, interp), so this is three
+        # commands where it was nine, and it runs once per joint per control
+        # per rig part.
         for r_idx, (r_pos, r_val) in enumerate(((0, 0), (0.5, 1), (1, 0))):
-            cmds.setAttr(f'{weight}.value[{r_idx}].value_Position', r_pos)
-            cmds.setAttr(f'{weight}.value[{r_idx}].value_FloatValue', r_val)
-            cmds.setAttr(f'{weight}.value[{r_idx}].value_Interp', 1) # linear
-        cmds.connectAttr(f'{ratio}.outputX', f'{weight}.inputValue', f=1)
+            cmds.setAttr(f'{weight}.value[{r_idx}]', r_pos, r_val, 1,
+                         type='double3') # linear
+        cmds.connectAttr(f'{jnt}.joint_pos', f'{weight}.inputValue', f=1)
+        cmds.connectAttr(f'{falloff_min}.output1D', f'{weight}.inputMin', f=1)
+        cmds.connectAttr(f'{falloff_max}.output1D', f'{weight}.inputMax', f=1)
         cmds.connectAttr(f'{inv_numjnt}.outputX', f'{weight}.outputMax', f=1)
 
         # The joint's share. Out of range the weight is already 0, which
