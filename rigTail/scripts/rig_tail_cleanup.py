@@ -996,12 +996,14 @@ def cleanup_connections(rigname, fk, ik):
     where cleanup_rigname deletes and the build rebuilds from nothing. Chosen
     when the caches report the skeleton and the node layout both unchanged.
 
-    Keeping a node only pays when the build can reuse it. A node the build
-    recreates regardless is worse than useless kept - the work moves into the
-    build, one node at a time, and the old copy lingers under a suffixed
-    name. The FK utility networks go here, in batch, for that reason. What
-    stays is what the build wires back up in place: the SDK hierarchy, the
-    control shapes, and the whole FX network including its expressions.
+    Keeping a node only pays when the build can reuse it, and the halves of
+    the rig differ on that. The SDK hierarchy, the control shapes and the
+    whole FX network including its expressions all stay, because the build
+    meets them and does almost nothing. The FK utility networks are deleted:
+    set_curveinfo_fk and falloff_rotation write every attribute and
+    connection again regardless, at the same cost whether the node was there
+    or not, so keeping them saves nothing - and the delete is what collects
+    the ones the current settings no longer call for.
 
     The SDK hierarchy is the reason this path is cheap, and the one thing
     that can force a structural teardown anyway. Kept, create_sdk_groups
@@ -1018,48 +1020,47 @@ def cleanup_connections(rigname, fk, ik):
     '''
     logger.debug(f'{rigname}: Cleanup connections')
 
-    # TEMPORARY: 'light.*' timing blocks, to break down what
-    # cleanup.teardown_light spends its time on. Remove once that is
-    # attributed - they are measurement, not structure.
-    with rt_maya.timed('light.sdk_check'):
-        if fk and not fk_sdk_structure_is_current(rigname):
-            logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
-            restore_fk_joint_chain(rigname)
+    if fk and not fk_sdk_structure_is_current(rigname):
+        logger.debug(f'{rigname}: FK SDK layout is stale; rebuilding it from a flat chain')
+        restore_fk_joint_chain(rigname)
 
     # Per chain, not per joint (see cleanup_rigname step 1)
-    with rt_maya.timed('light.chains'):
-        for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
-            if rigname in joints:
-                chain = [j for j in joints[rigname] if cmds.objExists(j)]
-                if not chain:
-                    continue
-                # Keep BN joints' outgoing worldMatrix -> skinCluster (the
-                # geometry bind); only their incoming drivers are rebuilt.
-                keep_skin = joints is rt_constants.JOINTS_BN
-                rt_maya.disconnect_nodes(chain, source=True,
-                                        destination=not keep_skin)
-                # Remove constraints
-                constraints = cmds.listRelatives(chain, type='constraint') or []
-                if constraints:
-                    cmds.delete(constraints)
+    for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK]:
+        if rigname in joints:
+            chain = [j for j in joints[rigname] if cmds.objExists(j)]
+            if not chain:
+                continue
+            # Keep BN joints' outgoing worldMatrix -> skinCluster (the
+            # geometry bind); only their incoming drivers are rebuilt.
+            keep_skin = joints is rt_constants.JOINTS_BN
+            rt_maya.disconnect_nodes(chain, source=True,
+                                    destination=not keep_skin)
+            # Remove constraints
+            constraints = cmds.listRelatives(chain, type='constraint') or []
+            if constraints:
+                cmds.delete(constraints)
 
     # Disconnect FK SDK groups, the whole stack of every joint in two
     # commands (there are NUM_CTRL_FK + 1 of them per joint)
-    with rt_maya.timed('light.sdk_disconnect'):
-        if fk and rigname in rt_constants.JOINTS_FK:
-            sdk_groups = []
-            for jnt in rt_constants.JOINTS_FK[rigname]:
-                NN = rt_naming.get_index_from_name(jnt)
-                for idx in range(rt_constants.NUM_CTRL_FK + 1):
-                    if idx < rt_constants.NUM_CTRL_FK:
-                        sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, NN, nn=idx+1)
-                    else:
-                        sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
-                    sdk_groups.append(sdk_grp)
-            rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
+    if fk and rigname in rt_constants.JOINTS_FK:
+        sdk_groups = []
+        for jnt in rt_constants.JOINTS_FK[rigname]:
+            NN = rt_naming.get_index_from_name(jnt)
+            for idx in range(rt_constants.NUM_CTRL_FK + 1):
+                if idx < rt_constants.NUM_CTRL_FK:
+                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_GRP, rt_constants.TYPE_FK, NN, nn=idx+1)
+                else:
+                    sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, rt_constants.TYPE_FK, NN)
+                sdk_groups.append(sdk_grp)
+        rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
 
-    # The FK utility networks. set_curveinfo_fk and falloff_rotation rebuild
-    # these every run, so old copies would only pile up under suffixed names.
+    # The FK utility networks. set_curveinfo_fk and falloff_rotation write
+    # every one of these again regardless, at the same cost whether the node
+    # is there or not - so keeping them would buy nothing, while deleting
+    # them is what collects the ones the current settings no longer call for.
+    # A part that stops being mirrored, for instance, stops getting a
+    # rotmirror node, and MIRROR_BEHAVIOR is not part of the structure
+    # signature that would force a full teardown to sweep it.
     # Underscore anchored after rigname, so 'tail' cannot reach 'tail2'.
     if fk:
         typ = rt_constants.TYPE_FK
@@ -1077,12 +1078,7 @@ def cleanup_connections(rigname, fk, ik):
             # _scale_curveInfo - that one caches a rest length and must live
             f'{typ}_{rigname}_curveInfo',
         ]
-        # TEMPORARY: scan and delete timed apart, to tell a scene-walking
-        # name pattern from the cost of the deletes themselves.
-        with rt_maya.timed('light.fk_utility_scan'):
-            fk_nodes = dict.fromkeys(cmds.ls(*fk_patterns) or [])
-        with rt_maya.timed('light.fk_utility_delete'):
-            rt_maya.remove_nodes(fk_nodes)
+        rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
     # The whole FX network stays, both halves of it rebuilding in place:
     # build_curl reuses its nodes through objExists and ensure_connect, and
