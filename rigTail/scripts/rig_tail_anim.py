@@ -13,18 +13,24 @@ the controls do, driven by animatable basectrl attributes.
 Each FX writes per-joint rotations into its own composeMatrix, which
 rig_tail_matrix multiplies into the BN joint's offsetParentMatrix in
 front of the driver term - so FX rotate each joint about its own pivot
-and never touch the joints' channels. Wave and noise are expressions
-(they need time); curl is a pure node network. Attribute sources go
-through rt_ctrlall.resolved_plug so the Main Controller dashboard can route
-them, and expressions are deleted via delete_expression - a raw delete
-on a connected expression cascades through its connection web.
+and never touch the joints' channels. Curl is a pure node network; wave
+and noise are expressions, which is what buys them time as an input.
+Attribute sources go through rt_ctrlall.resolved_plug so the Main
+Controller dashboard can route them.
+
+Every effect is built to be met again: nodes are created only when absent
+and connected only when unconnected, and expressions pass through
+sync_expressions, which compares each against the code it should hold. An
+effect's shape is fixed by the rig it describes, so rebuilding one over an
+unchanged rig settles to a pass of queries.
 
 An L/R pair's FX obey MIRROR_BEHAVIOR on all three axes, via the signs
 rig_tail_mirror measures for the pair - see that module for why a
 mirrored skeleton alone can only ever manage one of them.
 
 Functions:
-    delete_expression: remove an expression without the delete cascading
+    remove_expressions: delete expressions without the delete cascading
+    sync_expressions: write only the expressions whose code has moved
     build_anim_effects: entry point; build the enabled FX for one part
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
@@ -76,25 +82,97 @@ CURL_DEGREES_PER_UNIT = 108.0
 CURL_MAX_JOINT_DEGREES = 90.0
 
 
-def delete_expression(expr):
+# Maya inserts one of these between an expression and the plug it writes,
+# and they have to come down with it - see sync_expressions.
+CONVERSION_TYPES = ['unitConversion', 'unitToTimeConversion',
+                    'timeToUnitConversion']
+
+
+def _expression_is_current(expr, code, plug):
     '''
-    Delete an expression node safely.
-    cmds.delete on a connected expression cascades through its whole
-    connection web (loop network node, sibling FX expressions, composeMatrix
-    nodes), so all connections must be broken before deleting.
-    Unit conversion nodes are removed with the expression: a dangling
-    conversion left connected to the written attribute blocks the rebuilt
-    expression from connecting to it.
+    Whether an expression holds this code AND is the thing driving this plug.
+
+    Matching code alone proves nothing about the wiring, and an expression
+    connected to nothing is silent rather than visibly broken.
+    skipConversionNodes, so the unitConversion Maya inserts on an angle plug
+    does not hide the expression behind it.
+
+    Arguments
+        expr (str): Expression node name
+        code (str): Code it should hold
+        plug (str): Plug it should drive
+
+    Return
+        bool: True if the expression can be left alone
     '''
-    if not cmds.objExists(expr):
-        return
-    conv_types = ('unitConversion', 'unitToTimeConversion', 'timeToUnitConversion')
-    convs = {c for c in (cmds.listConnections(expr) or [])
-             if cmds.nodeType(c) in conv_types}
-    rt_maya.remove(expr)
-    for conv in convs:
-        if cmds.objExists(conv):
-            rt_maya.remove(conv)
+    if not cmds.ls(expr, type='expression'):
+        return False
+    if cmds.expression(expr, q=True, s=True) != code:
+        return False
+    return expr in (cmds.listConnections(plug, s=True, d=False,
+                                         scn=True) or [])
+
+
+def remove_expressions(exprs):
+    '''
+    Delete expressions together with the conversion nodes Maya inserted
+    alongside them.
+
+    An expression cannot simply be deleted: a raw delete cascades through
+    its connection web, taking the loop node, the sibling expressions and
+    their composeMatrix nodes. rt_maya.remove_nodes disconnects the whole
+    list before deleting any of it, so the cascade has nothing to travel
+    along. The conversions go in the same batch, since one left holding a
+    target plug shuts a replacement expression out of it.
+
+    Arguments
+        exprs (list): Expression node names
+
+    Return
+        int: nodes deleted
+    '''
+    live = rt_maya.existing(exprs)
+    if not live:
+        return 0
+    conversions = cmds.ls(cmds.listConnections(live) or [],
+                          type=CONVERSION_TYPES) or []
+    return rt_maya.remove_nodes(live + conversions)
+
+
+def sync_expressions(specs):
+    '''
+    Write only the expressions that are not already what they should be.
+
+    An FX expression's code is fixed by the rig it describes - the joint's
+    position along the chain, the mirror signs, and the plugs
+    rt_ctrlall.resolved_plug routes the attributes through - so a rebuild
+    over an unchanged rig wants exactly the expressions already in the
+    scene, at a query each.
+
+    The rest go down together through remove_expressions, then each target
+    plug is cleared before it is written. Whatever holds a plug would
+    otherwise refuse the new expression outright, and it is not always
+    reachable from the expression being replaced - an orphaned
+    unitConversion survives on the plug side alone.
+
+    Arguments
+        specs (list): (expression name, code, driven plug) triples
+
+    Return
+        int: expressions rewritten
+    '''
+    stale = [spec for spec in specs if not _expression_is_current(*spec)]
+    if not stale:
+        return 0
+
+    remove_expressions([name for name, _, _ in stale])
+    for name, code, plug in stale:
+        rt_maya.break_connection(plug)
+        cmds.expression(n=name, s=code, o='', ae=1, uc='all')
+
+    logger.debug(f'{len(stale)} of {len(specs)} expressions rewritten')
+    return len(stale)
+
 
 ensure_connect = rt_maya.ensure_connect
 
@@ -219,9 +297,7 @@ if ($loop_enabled > 0.5) {{
 }}
 '''
 
-    delete_expression(modulo_expr)
-    cmds.expression(n=modulo_expr, s=expr_code, o='', ae=1, uc='all')
-    logger.debug(f'{rigname}: Loop expression built: {modulo_expr}')
+    sync_expressions([(modulo_expr, expr_code, f'{loop_time}.loop_time')])
     return f'{loop_time}.loop_time'
 
 
@@ -265,6 +341,10 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     speed_src = rt_ctrlall.resolved_plug(rigname, 'wave_speed')
     falloff_src = rt_ctrlall.resolved_plug(rigname, 'wave_falloff')
 
+    amp_srcs = {attr: rt_ctrlall.resolved_plug(rigname, attr)
+                for _, attr in wave_axes}
+
+    specs = []
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_naming.get_index_from_name(jnt)
         u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
@@ -277,7 +357,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
                 logger.trace(f'{compose_node} does not exist, skipping wave expression')
                 continue
 
-            amp_src = rt_ctrlall.resolved_plug(rigname, wave_attr)
+            amp_src = amp_srcs[wave_attr]
 
             expr_code = f'''// Wave expression for joint {NN:02d} axis {rot_axis}
 float $loop_enabled = {loop_enabled_src};
@@ -305,10 +385,10 @@ float $out = $val * $amp * $w;
 
 {compose_node}.inputRotate{rot_axis} = $out;
 '''
+            specs.append((expr, expr_code,
+                          f'{compose_node}.inputRotate{rot_axis}'))
 
-            delete_expression(expr)
-            cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
-
+    sync_expressions(specs)
     logger.debug(f'{rigname}: Wave effect built')
 
 
@@ -509,6 +589,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     freq_src = rt_ctrlall.resolved_plug(rigname, 'noise_frequency')
     speed_src = rt_ctrlall.resolved_plug(rigname, 'noise_speed')
 
+    specs = []
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_naming.get_index_from_name(jnt)
         u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
@@ -578,7 +659,8 @@ float $out = $noise * $amp * $fall;
 
 {compose_node}.inputRotate{axis} = $out;
 '''
-            delete_expression(expr)
-            cmds.expression(n=expr, s=expr_code, o='', ae=1, uc='all')
+            specs.append((expr, expr_code,
+                          f'{compose_node}.inputRotate{axis}'))
 
+    sync_expressions(specs)
     logger.debug(f'{rigname}: Noise effect built')

@@ -873,9 +873,18 @@ buys most of it back by spreading the same total over the whole chain.
 **L/R symmetry** comes from `rt_mirror.rotation_signs` — see
 `rig_tail_mirror` below.
 
+**Rebuilding** an effect over an unchanged rig settles to a pass of
+queries. Curl's nodes are created only when absent and connected only when
+unconnected; Wave, Noise and Loop go through `sync_expressions`, which
+compares each expression against the code it should hold and rewrites only
+what differs. An expression's code is fixed by the rig it describes — the
+joint's position along the chain, the mirror signs, the plugs the dashboard
+routes — so an unchanged rig wants exactly what is already there. Because
+of this the light teardown leaves the FX network standing entirely.
+
 Key functions: `build_anim_effects`, `add_anim_attributes_to_basectrl`,
 `build_loop`, `build_wave`, `build_curl`, `build_noise`,
-`delete_expression`.
+`sync_expressions`, `remove_expressions`.
 
 ---
 

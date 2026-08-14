@@ -2491,38 +2491,22 @@ def fix_expression_time_dependency(rigname='tail'):
         print('✗ No joints found')
         return
 
-    deleted_count = 0
-
-    # Delete all wave expressions
-    # Use delete_expression(): raw cmds.delete on a connected expression
-    # cascades through its whole connection web
+    # Every FX expression of the part, in one batch: rt_anim.remove_expressions
+    # disconnects the lot before deleting any of it, which is what stops a
+    # delete cascading through the connection web
+    exprs = [f'{rigname}_loop_time_expression']
     for jnt in joints[1:]:
         NN = rt_naming.get_index_from_name(jnt)
         for axis in ['X', 'Y', 'Z']:
-            expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
-            if cmds.objExists(expr):
-                rt_anim.delete_expression(expr)
-                deleted_count += 1
-                print(f'  Deleted: {expr}')
+            exprs.append(f'{rigname}_{NN:02d}_wave{axis}_expression')
+            exprs.append(f'{rigname}_{NN:02d}_noise_{axis}_expression')
 
-    # Delete all noise expressions
-    for jnt in joints[1:]:
-        NN = rt_naming.get_index_from_name(jnt)
-        for axis in ['X', 'Y', 'Z']:
-            expr = f'{rigname}_{NN:02d}_noise_{axis}_expression'
-            if cmds.objExists(expr):
-                rt_anim.delete_expression(expr)
-                deleted_count += 1
-                print(f'  Deleted: {expr}')
+    for expr in exprs:
+        if cmds.objExists(expr):
+            print(f'  Deleting: {expr}')
+    deleted_count = rt_anim.remove_expressions(exprs)
 
-    # Delete loop expression
-    loop_expr = f'{rigname}_loop_time_expression'
-    if cmds.objExists(loop_expr):
-        rt_anim.delete_expression(loop_expr)
-        deleted_count += 1
-        print(f'  Deleted: {loop_expr}')
-
-    print(f'\n✓ Deleted {deleted_count} expression nodes')
+    print(f'\n✓ Deleted {deleted_count} expression and conversion nodes')
     print('\nNow rebuild animation effects:')
     print('  import rig_tail_anim as rt_anim')
     print(f'  rt_anim.build_anim_effects("{rigname}", fk=True, ik=True)')

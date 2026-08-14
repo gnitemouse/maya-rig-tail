@@ -999,9 +999,9 @@ def cleanup_connections(rigname, fk, ik):
     Keeping a node only pays when the build can reuse it. A node the build
     recreates regardless is worse than useless kept - the work moves into the
     build, one node at a time, and the old copy lingers under a suffixed
-    name. Those go here, in batch: the FK utility networks and the FX
-    expressions. What stays is what the build wires back up in place - the
-    SDK hierarchy, the curl network, the control shapes.
+    name. The FK utility networks go here, in batch, for that reason. What
+    stays is what the build wires back up in place: the SDK hierarchy, the
+    control shapes, and the whole FX network including its expressions.
 
     The SDK hierarchy is the reason this path is cheap, and the one thing
     that can force a structural teardown anyway. Kept, create_sdk_groups
@@ -1084,32 +1084,12 @@ def cleanup_connections(rigname, fk, ik):
         with rt_maya.timed('light.fk_utility_delete'):
             rt_maya.remove_nodes(fk_nodes)
 
-    # The FX expressions, for the reason the FK networks above go: the build
-    # replaces every one regardless, so the only question is whether they are
-    # deleted in one batch here or one at a time from inside the build. The
-    # rest of the FX network stays - build_curl reuses its nodes in place.
-    # Found by TYPE and filtered on name, since a name pattern would make
-    # cmds.ls walk the whole scene (see cleanup_rigname).
-    with rt_maya.timed('light.fx_expression_scan'):
-        expression_patterns = fx_expression_patterns(rigname)
-        expressions = [n for n in cmds.ls(type='expression') or []
-                       if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
-                              for p in expression_patterns)]
-    with rt_maya.timed('light.fx_expression_delete'):
-        if expressions:
-            # The conversion nodes the expressions write through must go in
-            # the SAME batch. One left connected to a composeMatrix input
-            # would block the rebuilt expression from that plug - but sweeping
-            # them afterwards instead is worse, because cmds.delete on a
-            # dangling conversion cascades into the composeMatrix it feeds.
-            # Inside one batch nothing is deleted until everything is
-            # disconnected, so the composeMatrix nodes survive and the build
-            # reuses them rather than rebuilding the FX matrix network.
-            conversions = cmds.ls(
-                cmds.listConnections(expressions) or [],
-                type=['unitConversion', 'unitToTimeConversion',
-                      'timeToUnitConversion']) or []
-            rt_maya.remove_nodes(expressions + conversions)
+    # The whole FX network stays, both halves of it rebuilding in place:
+    # build_curl reuses its nodes through objExists and ensure_connect, and
+    # rig_tail_anim.sync_expressions compares each expression against the
+    # code it should hold, rewriting only what differs. An expression's code
+    # is fixed by the rig it describes, so on an unchanged rig that is a
+    # query per expression against a teardown and a rewrite of every one.
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''

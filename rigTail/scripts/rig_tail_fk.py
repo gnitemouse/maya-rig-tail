@@ -402,10 +402,10 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         weight = f'{sdk_name}_weight_remapValue'
         cmds.createNode('remapValue', n=weight, s=1, ss=1)
         # value is a compound of (position, floatValue, interp), so a ramp
-        # point is one setAttr rather than three
+        # point is one setAttr rather than three. Interp 1 is linear.
         for r_idx, (r_pos, r_val) in enumerate(((0, 0), (0.5, 1), (1, 0))):
             cmds.setAttr(f'{weight}.value[{r_idx}]', r_pos, r_val, 1,
-                         type='double3') # linear
+                         type='double3')
         cmds.connectAttr(f'{jnt}.joint_pos', f'{weight}.inputValue', f=1)
         cmds.connectAttr(f'{falloff_min}.output1D', f'{weight}.inputMin', f=1)
         cmds.connectAttr(f'{falloff_max}.output1D', f'{weight}.inputMax', f=1)
