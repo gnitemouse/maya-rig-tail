@@ -687,12 +687,7 @@ def fallback_curve_length(rigname, typ):
 
 # SPLINE TWIST (IK) ====================================================
 
-# Spline IK advanced-twist axis enums, keyed (axis, positive). The solver
-# names the JOINT's own local axes: which one runs down the chain
-# (dForwardAxis) and which one is its up (dWorldUpAxis). Both come from the
-# Setup UI's Aim Axis and Up Axis rather than being assumed - they are the
-# same two settings the orient and the mirror are built from, so there is
-# no second place to keep in step.
+# Spline IK advanced-twist axis enums, keyed (axis, positive).
 FORWARD_AXIS_ENUM = {('x', True): 0, ('x', False): 1,
                      ('y', True): 2, ('y', False): 3,
                      ('z', True): 4, ('z', False): 5}
@@ -706,19 +701,18 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
     '''
     Build Spline IK advanced twist.
 
-    The forward and up axes are read from ORIENT_AIM_AXIS / ORIENT_UP_AXIS,
-    the Setup UI's own Aim Axis and Up Axis, so the solver is told the
-    convention the skeleton was actually oriented to. They used to be
-    assumed - positive X by Maya's default, positive Z by a literal here -
-    which agreed with the defaults by coincidence and with nothing else.
+    The solver names the JOINT's own local axes: which one runs down the
+    chain and which is its up. Both come from ORIENT_AIM_AXIS /
+    ORIENT_UP_AXIS - the Setup UI's Aim Axis and Up Axis - so it is told
+    the convention the skeleton was actually oriented to rather than an
+    assumed one.
 
-    The FORWARD axis is negative on the mirrored side of a pair under
-    MIRROR_BEHAVIOR 'mirror', the one convention that negates the aim: the
-    joints there run child-to-parent, and a solver told otherwise twists
-    the chain the wrong way along its whole length. The UP axis is the same
-    on both sides - every behavior negates the up, and each side supplies
-    its own (mirrored) up objects, so the roll comes out mirrored with one
-    enum.
+    The FORWARD axis goes negative on a mirrored side whose aim runs
+    child-to-parent (rt_mirror.aim_reversed). A solver told otherwise rolls
+    the chain progressively along its whole length, and nothing else in the
+    scene says why. The UP axis is the same on both sides: every behavior
+    negates the up, and each side supplies its own mirrored up objects, so
+    one enum still yields a mirrored roll.
 
     Arguments
         ikhandle (str): spline ik handle
@@ -726,12 +720,9 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
         end_obj (str): Last obj (cluster transform) for twist
         start_vec (tuple): Start up vector
         end_vec (tuple): End up vector
-        rigname (str): Rig part, for the mirrored-aim test. REQUIRED, and
-            deliberately not defaulted: it defaulted to '' once, the one
-            call site was not updated to pass it, and the mirrored side
-            silently kept a forward aim for a whole release. A missing
-            argument should be a TypeError at build time, not a twisted
-            chain nobody can trace.
+        rigname (str): Rig part, for the mirrored-aim test. Required rather
+            than defaulted: a caller that forgets it should raise, not
+            silently build a chain that twists along its length.
     '''
     aim = str(getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')).strip().lower()
     up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()

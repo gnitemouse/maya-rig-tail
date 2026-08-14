@@ -653,12 +653,8 @@ def connect_twist_roll(rigname, joints):
 
     All three carry an L/R mirror sign (rig_tail_mirror), so a pair obeys
     MIRROR_BEHAVIOR on the aim axis the way curl and wave do on theirs.
-    twist and roll take the ROTATION sign; offset takes the TRANSLATION
-    one, which is its exact opposite - it slides the chain rather than
-    turning it, and the two mirror under opposite rules. Under the default
-    'symmetric' that means twist and roll are negated on the mirrored side
-    and offset is left alone: sliding both tails toward their own tips
-    already IS the mirrored motion.
+    twist and roll turn the chain and take the ROTATION sign; offset slides
+    it and takes the TRANSLATION one, which mirrors under the opposite rule.
 
     Channels are chosen to avoid contention: FK stretch drives layer-1
     translate on joints 1..N but skips joint 0, leaving the base joint's
@@ -697,8 +693,7 @@ def connect_twist_roll(rigname, joints):
 
     # twist / N, shared by every joint (see docstring: the constant term
     # is what produces a linear ramp once it compounds down the hierarchy).
-    # The mirror sign rides on the divisor: dividing by -N is the same as
-    # negating the result, and it costs no node.
+    # The mirror sign rides on the divisor rather than a node of its own.
     twist_step = f'{rt_constants.TYPE_FK}_{rigname}_twist_step_multiplyDivide'
     if not cmds.objExists(twist_step):
         cmds.createNode('multiplyDivide', n=twist_step, s=1, ss=1)
@@ -706,9 +701,8 @@ def connect_twist_roll(rigname, joints):
     cmds.connectAttr(twist_src, f'{twist_step}.input1X', f=1)
     cmds.setAttr(f'{twist_step}.input2X', n * rot_sign)
 
-    # roll goes straight onto the base joint's layer when it is unsigned;
-    # a mirrored side needs a node to carry the negation, so build one only
-    # then and read whichever applies below
+    # An unsigned roll goes straight onto the base joint's layer; only a
+    # negated one needs a node to carry the sign
     roll_plug = roll_src
     roll_mult = f'{rt_constants.TYPE_FK}_{rigname}_roll_mirror_multiplyDivide'
     if rot_sign < 0:
@@ -719,8 +713,6 @@ def connect_twist_roll(rigname, joints):
         cmds.setAttr(f'{roll_mult}.input2X', rot_sign)
         roll_plug = f'{roll_mult}.outputX'
     elif cmds.objExists(roll_mult):
-        # Left over from a build when this side WAS signed (the behavior or
-        # the source side changed); drop it rather than leave it feeding
         rt_maya.remove(roll_mult)
 
     for i, jnt in enumerate(joints):

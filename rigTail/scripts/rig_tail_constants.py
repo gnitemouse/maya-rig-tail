@@ -813,16 +813,14 @@ def load_config(filepath=None):
             'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
-        # A STORED value always wins, which is what keeps a rig built under
-        # an older default on the convention it was built with: the default
-        # moved from 'symmetric' to 'mirror', and silently re-orienting a
-        # skeleton on load would change what every mirrored control does.
-        # Deliberately NOT migrated either: a config saved before
-        # MIRROR_BEHAVIOR existed was written by code that always produced
-        # 'parallel' frames, but MIRROR_ORIENT defaulted off then, so such a
-        # config almost never carries a mirrored result worth preserving. A
-        # missing key therefore takes the module default rather than the old
-        # maths - re-run Mirror Orient to move an old rig to it deliberately.
+        # A stored value always wins, which keeps a rig on the convention
+        # it was built with: changing it means re-orienting the skeleton,
+        # which changes what every mirrored control does, so that has to be
+        # a deliberate Mirror Orient rather than a side effect of a load.
+        # A missing key takes the module default rather than being migrated
+        # from the pre-MIRROR_BEHAVIOR maths, which produced 'parallel'
+        # frames at a time when MIRROR_ORIENT defaulted off - so such a
+        # config almost never carries a mirrored result worth preserving.
         MIRROR_BEHAVIOR = config.get('MIRROR_BEHAVIOR', MIRROR_BEHAVIOR)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)

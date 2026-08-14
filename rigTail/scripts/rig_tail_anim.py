@@ -58,27 +58,20 @@ TWO_PI = 6.28318530718
 LOOP_FRAME_DEFAULT = 60
 # Time-source expression for wave/noise when the Loop effect is not built.
 UNLOOPED_TIME_SRC = f'(time1.outTime * {TWO_PI / LOOP_FRAME_DEFAULT})'
-# Degrees of TOTAL bend, base to tip, that one unit of a curl attribute adds.
-# The curl attributes run -10..10, so 108 puts THREE full turns at each end
-# of the slider. Curl names the whole chain's wrap, not a per-joint angle
-# (see build_curl), which is what makes a 12-joint and an 80-joint tail curl
-# by the same amount.
-#
-# Three turns is what a 50-joint chain - the squid tails - can just carry at
-# the default falloff without any joint reaching the guard below (its worst
-# is 85 of 90 degrees). Past this the guard starts eating the increase on
-# those chains rather than tightening them, so more here would want a
-# higher guard, or a lower curl_falloff to spread the wrap further down the
-# chain, or both.
+# Degrees of TOTAL bend, base to tip, per unit of a curl attribute. The
+# attributes run -10..10, so 108 is three full turns at each end. Curl
+# names the whole chain's wrap rather than a per-joint angle (see
+# build_curl), which is what makes a 12-joint and an 80-joint tail curl by
+# the same amount.
 CURL_DEGREES_PER_UNIT = 108.0
-# Ceiling on the bend any SINGLE joint takes, whatever total the curl value
-# and the falloff ask for. This is what keeps the tip inside the coil rather
-# than folding out of it: the total above is shared out by the falloff
-# profile, which peaks at the tip, and a chain with few joints cannot carry
-# two turns without giving that last joint an absurd angle. The guard caps
-# it, so a sparse chain simply stops tightening near the top of the slider
-# while a dense one reaches the full wrap. Raising the total therefore only
-# spends where the joint count can carry it. See build_curl.
+
+# Ceiling on the bend any SINGLE joint takes. The falloff profile peaks at
+# the tip, and a chain with few joints cannot carry the total above without
+# giving that last joint an angle that folds it out of the coil. Capping
+# the ANGLE rather than the total is what lets the total go high: a dense
+# chain spreads the wrap thinly enough never to reach the guard, a sparse
+# one saturates its last joints and stops tightening. So the tightness on
+# offer is limited by the joint count, which is the truth of the thing.
 CURL_MAX_JOINT_DEGREES = 90.0
 
 
@@ -409,34 +402,20 @@ def build_curl(rigname, basectrl, joints, signs=None):
     The shares SUM TO ONE, so a curl attribute names the total bend of the
     whole chain and the falloff only decides how that bend is distributed
     along it - tip-loaded at a high falloff, near-uniform at a low one.
+    Normalising is what makes the total mean anything: the per-joint
+    rotations compound down the BN hierarchy, so an unnormalised profile
+    would grow the chain's wrap with the joint count as well as the dial.
 
-    Normalizing is what makes the total mean something. The per-joint
-    rotations compound down the BN hierarchy, so the chain's total wrap is
-    their sum; an unnormalized u**falloff profile made that sum grow with
-    both the curl value AND the joint count, so a denser chain curled
-    further than a sparse one at the same slider value. Dividing by the live
-    sum bounds the total at curl * CURL_DEGREES_PER_UNIT degrees whatever
-    the joint count.
-
-    The per-joint clamp is what keeps the tip in the coil. The share profile
-    peaks at the tip, so the last joint always takes the largest single
-    angle; left alone it passes a right angle and folds the final bone (and
-    the '_ee_' riding on it) out of an otherwise tidy spiral. Clamping the
-    ANGLE rather than lowering the total is what lets the total go to two
-    full turns: a chain with enough joints spreads that wrap thinly enough
-    to never reach the guard and coils twice, while a sparse chain saturates
-    its last joints and simply stops tightening. Tightness is limited by the
-    joint count, which is the truth of the thing - a 12-bone chain cannot
-    draw two clean turns. A LOWER curl_falloff buys back most of it: it
-    spreads the same total over the whole chain instead of piling it on the
-    last few joints, so far less of it is lost to the guard.
+    The clamp is what keeps the tip in the coil, and CURL_MAX_JOINT_DEGREES
+    explains why it caps the angle rather than the total. A lower
+    curl_falloff buys back most of what the guard takes, by spreading the
+    same total over the whole chain instead of the last few joints.
 
     The profile (u**falloff and its sum) is built once per chain and shared
-    by all three axes: it does not depend on the axis, and one copy means
-    curlX/Y/Z stay consistent by construction. The tip joint always
-    contributes u**falloff = 1, so the divisor can never reach zero. The
-    clamp is likewise one node per joint carrying all three axes on its
-    R/G/B channels.
+    by all three axes, so curlX/Y/Z stay consistent by construction. The
+    tip always contributes u**falloff = 1, so the divisor cannot reach
+    zero. The clamp is likewise one node per joint, carrying all three axes
+    on its R/G/B channels.
 
     Arguments:
         rigname (str): Name of rig component
@@ -490,11 +469,9 @@ def build_curl(rigname, basectrl, joints, signs=None):
         ensure_connect(f'{total}.output1D', f'{weight}.input2X')
         weights[NN] = weight
 
-        # One clamp per joint, all three axes on its R/G/B channels. Curl
-        # runs both ways, so the guard is symmetric about zero. Bounds are
-        # written per channel rather than as a compound: they are set on
+        # Curl runs both ways, so the guard is symmetric about zero. Set on
         # every build, not just on creation, so a changed
-        # CURL_MAX_JOINT_DEGREES reaches a rig that cleanup kept.
+        # CURL_MAX_JOINT_DEGREES reaches a rig cleanup kept in place.
         clamp = f'{rigname}_curl_{NN:02d}_clamp'
         if not cmds.objExists(clamp):
             cmds.createNode('clamp', n=clamp)
@@ -508,9 +485,9 @@ def build_curl(rigname, basectrl, joints, signs=None):
         if not cmds.objExists(remap):
             cmds.createNode('multiplyDivide', n=remap)
         cmds.setAttr(f'{remap}.operation', 1)
-        # The mirror sign rides on the degrees-per-unit factor: it is the one
-        # place the whole axis passes through, so nothing downstream has to
-        # know which side of a pair this is
+        # The mirror sign rides on the degrees-per-unit factor, the one
+        # place a whole axis passes through, so nothing downstream needs to
+        # know which side of a pair it is on
         cmds.setAttr(f'{remap}.input2X',
                      CURL_DEGREES_PER_UNIT * signs[rot_axis])
         ensure_connect(rt_ctrlall.resolved_plug(rigname, curl_attr), f'{remap}.input1X')

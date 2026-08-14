@@ -1042,12 +1042,10 @@ def _report_chain_gaps(have, created, dry_run):
 
 # PAIRING ==============================================================
 
-# The pairing itself lives in rig_tail_naming: it is a question about rig
-# part NAMES, and the build needs the same answer (rig_tail_mirror) without
-# being able to import this module - rig_tail_setup.py is an optional
-# install that a Builder-only setup leaves off disk. Re-exported rather than
-# forwarded so rt_setup.find_mirror_pairs stays a valid call for the Setup
-# UI and the Setup tests.
+# Pairing is a question about rig part NAMES, so it lives in
+# rig_tail_naming, where the build can reach it too: rig_tail_setup.py is
+# an optional install a Builder-only setup leaves off disk. Re-exported so
+# rt_setup.find_mirror_pairs stays a valid call for the UI and the tests.
 find_mirror_pairs = rt_naming.find_mirror_pairs
 
 
@@ -1352,9 +1350,9 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
     ai, ui = idx[aim_axis], idx[up_axis]
     mode = _behavior(behavior)
     # 'parallel' keeps the reflected up; the other two negate it. 'mirror'
-    # negates the aim as well, and _assign_rows then lands the third axis
-    # on its own negated reflection to stay right-handed - so all three
-    # come out opposite, which is the whole of what 'mirror' means.
+    # negates the aim as well, and _assign_rows then lands the roll axis on
+    # its own negated reflection to stay right-handed, so all three come
+    # out opposite without being asked for individually.
     up_sign = 1.0 if mode == 'parallel' else -1.0
     aim_sign = -1.0 if mode == 'mirror' else 1.0
     frames = []
@@ -1371,8 +1369,7 @@ def _behavior(behavior=None):
     Resolve and validate the mirror behavior.
 
     The value set and the default live in rig_tail_mirror, which the build
-    reads too - one list, so Setup and the build cannot disagree about what
-    a valid behavior is or which one an unset config takes.
+    reads too, so Setup and the build cannot disagree about what is valid.
 
     Arguments
         behavior (str): explicit value, or None to read MIRROR_BEHAVIOR.

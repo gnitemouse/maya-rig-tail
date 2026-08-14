@@ -402,9 +402,9 @@ slide along the aim, and a sign covers that.
 
 Its price is the reversed aim, which two places are told about rather than
 left to discover: the spline IK's advanced twist takes a negative forward
-axis (`rig_tail_stretch.build_advanced_twist`, derived from the Setup UI's
-own **Aim Axis** — it used to assume Maya's default), and a translation
-along the aim reverses, which `rig_tail_mirror.translation_signs` reports.
+axis (`rig_tail_stretch.build_advanced_twist`, derived from the Setup UI's own
+**Aim Axis**), and a translation along the aim reverses, which
+`rig_tail_mirror.translation_signs` reports.
 Setup's **Orient** step re-derives the aim forward, but `mirror_chains`
 runs *after* `orient_chains`, so a Setup re-run re-establishes it.
 
@@ -425,12 +425,10 @@ A **stored** config keeps its own value — moving the default from
 `symmetric` to `mirror` does not silently re-orient an existing rig. Re-run
 **Mirror Orient** to move one across deliberately.
 
-Because of that, the setting and the skeleton can disagree: pick `Mirror`
-in the Setup UI, run Mirror Orient, then build in a session that reloads a
-config still holding `symmetric`. Nothing the build does reads the setting
-— every sign and the spline's forward axis are measured off the joints —
-so the rig comes out right either way, and `rt_mirror.aim_reversed` logs
-the disagreement so it can be tidied.
+Because of that, the setting and the skeleton can disagree. Nothing the
+build does reads the setting — every sign and the spline's forward axis
+are measured off the joints — so the rig comes out right either way, and
+`rt_mirror.aim_reversed` logs the disagreement so it can be tidied.
 
 ### Include / Exclude
 
@@ -1806,11 +1804,11 @@ rotated cluster handle deforms nothing (the one-CV property
 Two things decide their frame, and both are now stated rather than
 inherited:
 
-**The up reference** was the basectrl's `+Z`, which reaches it from the
-joints through `get_local_orientation` — so the frames were a by-product
-of `MIRROR_BEHAVIOR`, not a convention. It is now
-`rt_mirror.spline_up_vector()`: `ORIENT_UP_AXIS` read as a world
-direction, required to lie **in** the symmetry plane. A world axis is
+**The up reference** is `rt_mirror.spline_up_vector()` — `ORIENT_UP_AXIS`
+read as a world direction, required to lie **in** the symmetry plane.
+Taking it from the basectrl's `+Z` instead reaches it from the joints
+through `get_local_orientation`, which makes the frames a by-product of
+`MIRROR_BEHAVIOR` rather than a convention. A world axis is
 always invariant under the reflection up to sign, so either way the two
 sides come out cleanly related; what the plane's own normal would cost is
 *which* axis carries the negation — the up resolves negated too, and with
@@ -1821,17 +1819,17 @@ stands down with it.
 **The aim direction** is reversed on the mirrored side
 (`rt_mirror.flip_control_aim`), which moves the negation onto the aim:
 
-| | Frame | Rotations mirror | Translations mirror |
-|---|---|---|---|
-| before | `+aim -roll +up` | roll | aim, up |
-| after | `-aim +roll +up` | aim | **roll, up** |
+| Frame | Rotations mirror | Translations mirror |
+|---|---|---|
+| `+aim -roll +up` | roll | aim, up |
+| `-aim +roll +up` | aim | **roll, up** |
 
 Both are one-negated, so both mirror two translations — but `roll` and
 `up` are the two axes that bend the curve, and `aim` is the slide along
 the tail's own length. An unmirrored bend axis is the one an animator
-sees; an unmirrored slide is not. It is done by negating the constraint's
-aim vector, so the frame is built right rather than corrected afterwards
-and a rebuild cannot flip the flip.
+sees; an unmirrored slide is not. Negating the constraint's own aim vector
+builds the frame right rather than correcting it afterwards, so a rebuild
+cannot flip the flip.
 
 `mid_rot` is the exception in the set — a pure rotation control — and
 `mirror` already serves it.

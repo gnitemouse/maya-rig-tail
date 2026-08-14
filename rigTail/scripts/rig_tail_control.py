@@ -513,22 +513,18 @@ def mirror_control_frames(rigname, groups, matches):
     Re-stand control groups in the behavior-mirrored frame of the joints
     they were matched to, on the mirrored side of an L/R pair.
 
-    Does nothing at all for a center part, an unpaired part, the source
-    side of a pair, or a MIRROR_BEHAVIOR with no right-handed control
-    frame - control_signs answers None for every one of those, which is
-    what keeps this a no-op on the rigs that were never mirrored.
+    A no-op wherever control_signs answers None - a center part, an
+    unpaired part, the source side, or a behavior with no right-handed
+    control frame - which is what leaves an unmirrored rig untouched.
 
-    The frame is written ABSOLUTELY, off the joint's own world matrix, not
-    applied as a relative roll: re-running the build then lands on the same
-    frame instead of flipping the flip, and a nested control stack cannot
-    compound its parents' flips into its own.
+    The frame is written ABSOLUTELY, off the joint's own world matrix,
+    rather than applied as a relative roll: a rebuild then lands on the
+    same frame instead of flipping the flip, and a nested control stack
+    cannot compound its parents' flips into its own.
 
-    Any constraint already driving a group is deleted first - the INDIV_FK
-    groups are parent-constrained to the SDK stack, and a light rebuild
-    leaves that constraint standing, which would both block this write and
-    then hold the group in the unmirrored frame. rig_tail_connect.connect_fk
-    rebuilds it afterwards, with maintain-offset on so it keeps the frame
-    written here.
+    A constraint already driving a group is deleted first, since it would
+    both block this write and then hold the group in the unmirrored frame;
+    rig_tail_connect.connect_fk rebuilds it with maintain-offset on.
 
     Arguments
         rigname (str): Name of rig component
@@ -1054,13 +1050,12 @@ def orient_control_aims(controls, orient_world=None, flip_aim=False):
     '''
     Orient controls so that they aim toward each other.
 
-    Controls aim on +Y down the row, roll so their +Z meets the world up
-    reference. That reference is rt_mirror.spline_up_vector() - a stated
-    world direction lying in the symmetry plane - and only falls back to
-    orient_world's +Z when no usable axis is configured. Reading it off
-    orient_world (the basectrl) was the old behaviour, and it made these
-    frames a by-product of what MIRROR_BEHAVIOR did to the joints, since
-    the basectrl takes its own orientation from them.
+    Controls aim on +Y down the row and roll so their +Z meets a world up
+    reference: rt_mirror.spline_up_vector(), a stated direction lying in
+    the symmetry plane. Falls back to orient_world's +Z only when no usable
+    axis is configured - taking it from the basectrl makes these frames a
+    by-product of MIRROR_BEHAVIOR, since the basectrl is oriented from the
+    joints.
 
     Arguments
         controls (list): List of control group names to orient
@@ -1090,10 +1085,9 @@ def orient_aim_controls_nulls(controls, up_vector, flip_aim=False):
     toward up_vector; the last aims at the one before it on -Y, which
     leaves its +Y pointing the same way down the row as the rest.
 
-    flip_aim negates both, so +Y runs back UP the row. That is the whole of
-    the mirrored side's frame difference - see rt_mirror.flip_control_aim
-    for why the negation is put here rather than on one of the other two
-    axes, and why it is built in rather than corrected afterwards.
+    flip_aim negates both, so +Y runs back UP the row: the whole of the
+    mirrored side's frame difference. See rt_mirror.flip_control_aim for
+    why the negation goes on the aim rather than another axis.
 
     Arguments
         controls (list): Controls for null positions
@@ -1108,8 +1102,7 @@ def orient_aim_controls_nulls(controls, up_vector, flip_aim=False):
         tmp_grp = cmds.group(em=True, n=f'null_{i:02}_tmp', w=1)
         nulls.append(tmp_grp)
         cmds.matchTransform(nulls[i], obj, pos=1, rot=1, scl=0, piv=0)
-    # Aim nulls at each other. The sign is the mirrored side's whole frame
-    # difference, so it rides on one factor rather than a branch.
+    # The mirrored side's whole frame difference rides on this one factor
     sign = -1 if flip_aim else 1
 
     for i, null in enumerate(nulls):

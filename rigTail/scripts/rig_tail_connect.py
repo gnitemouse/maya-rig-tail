@@ -414,11 +414,10 @@ def connect_fk(rigname, fk, ik):
     # Only built when INDIV_FK is enabled; otherwise the SDK_JNT layer is
     # left as an identity group and joints follow the variable-FK controls.
     if rt_constants.INDIV_FK:
-        # On the mirrored side of an L/R pair these controls stand in the
-        # behavior-mirrored frame (rt_control.mirror_control_frames), so the
-        # constraint that makes them follow the chain has to KEEP that
-        # offset, and the rotation they send on has to be negated to match.
-        # Both are no-ops when the part takes no control mirror.
+        # Where these controls stand in a mirrored frame
+        # (rt_control.mirror_control_frames), the constraint that makes them
+        # follow the chain has to keep that offset and the rotation they
+        # send on has to be negated to match. Both no-ops without one.
         signs = rt_mirror.control_signs(rigname)
         for i, jnt in enumerate(rt_constants.JOINTS_FK[rigname]):
             fk_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, rt_constants.TYPE_FK, i)
@@ -440,7 +439,6 @@ def connect_fk(rigname, fk, ik):
                              signs['X'], signs['Y'], signs['Z'], type='double3')
                 rotation_plug = f'{mirror_node}.output'
             elif cmds.objExists(mirror_node):
-                # Left from a build when this side WAS mirrored
                 rt_maya.remove(mirror_node)
 
             cmds.connectAttr(rotation_plug, f'{sdk_grp}.rotate', f=1)
@@ -542,14 +540,12 @@ def connect_twist_roll_ik(rigname, spline_handle):
 
     twist and roll turn the chain about its own axis and take the ROTATION
     sign; offset re-samples the joints ALONG the curve, which is a slide,
-    so it takes the translation sign - the exact opposite (see
-    rig_tail_mirror). Under the default 'symmetric' twist and roll are
-    negated on the mirrored side and offset is left alone.
+    so it takes the translation sign (see rig_tail_mirror).
 
-    A sign of +1 connects the dial straight to the handle as before; only a
-    negated axis pays for a node. Stale mirror nodes from a build when this
-    side WAS signed are removed, so flipping MIRROR_BEHAVIOR or the source
-    side cannot leave one feeding the handle.
+    A sign of +1 wires the dial straight to the handle, so an unmirrored
+    rig gains no nodes; only a negated axis pays for one. A node left over
+    from when this side WAS signed is removed, so flipping the behavior or
+    the source side cannot leave one feeding the handle.
 
     Arguments
         rigname (str): Name of rig component
@@ -557,10 +553,8 @@ def connect_twist_roll_ik(rigname, spline_handle):
     '''
     aim_key = rt_mirror.aim_axis()
     rot_sign = rt_mirror.rotation_signs(rigname).get(aim_key, 1.0)
-    # offset ASKS for the translation signs; it does not negate the rotation
-    # ones. They differ on every part with nothing to mirror - the source
-    # side, a center tail, an unpaired part - where both are +1 and negating
-    # would reverse offset on exactly the parts that should be left alone.
+    # offset asks for its own signs rather than negating the rotation ones:
+    # the two differ on every part that has nothing to mirror
     trn_sign = rt_mirror.translation_signs(rigname).get(aim_key, 1.0)
     signs = {'twist': rot_sign, 'roll': rot_sign, 'offset': trn_sign}
     for attr, sign in signs.items():

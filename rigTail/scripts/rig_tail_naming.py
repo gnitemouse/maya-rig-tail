@@ -488,11 +488,9 @@ def find_mirror_pairs(rigparts):
     and only Mirror Joints can act on, so it is not a pair until that has
     built the chain.
 
-    Lives here rather than in rig_tail_setup because the BUILD needs it too
-    (rig_tail_mirror), and rig_tail_setup.py is an optional install - the
-    Setup and Chain buttons ship it, a Builder-only install does not, so a
-    build-time import of it would raise. rig_tail_setup re-exports this
-    name, so its own callers are unchanged.
+    Lives here rather than in rig_tail_setup because the build needs it
+    too (rig_tail_mirror), and rig_tail_setup.py is an optional install a
+    Builder-only setup leaves off disk. rig_tail_setup re-exports the name.
 
     Arguments:
         rigparts (list): RIGPARTS names.
