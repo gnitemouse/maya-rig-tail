@@ -62,34 +62,28 @@ import rig_tail_ctrlall as rt_ctrlall
 
 logger = logger_setup(__name__)
 
-# Scene-wide sweeps are the most expensive thing cleanup does: each one
-# lists every conversion node in the scene and then queries two plugs per
-# node. cleanup_anim_effects used to trigger one per rig part, so an
-# eight-tail roster paid nine full sweeps that all found the same orphans.
-# While cleanup_rig holds the sweep deferred, callers only record that one
-# is due and it runs once at the end. Standalone callers still sweep
+# The conversion sweep is scene-wide, so running it per rig part would
+# re-walk every conversion node in the scene to find the same orphans each
+# time. While cleanup_rig holds it deferred, callers only record that one is
+# due and it runs once at the end; a standalone caller still sweeps
 # immediately, so the helper is safe to call on its own.
 _DEFER_CONVERSION_SWEEP = False
 _CONVERSION_SWEEP_PENDING = False
 
-# The utility node types the build creates and a teardown deletes. Used as
-# a TYPE filter for cmds.ls (a DG lookup) and as the name suffixes the
-# nodes carry, which is how one scan replaces a wildcard pattern per type
-# per rig-part prefix - see cleanup_rigname.
+# The utility node types the build creates and a teardown deletes. Serves
+# two purposes at once: the TYPE filter for cmds.ls, and the set of name
+# suffixes these nodes carry - the build names each one for its own type, so
+# one typed scan plus a name test replaces a wildcard pattern per type per
+# rig part (see cleanup_rigname).
 UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
                       'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
                       'clamp', 'setRange', 'choice', 'curveInfo',
                       'pointOnCurveInfo', 'remapValue']
 
 # Node types Maya has RENAMED, in the build's spelling -> the current one.
-# createNode still accepts the old name - it warns and substitutes - so the
-# build goes on making these nodes and naming them for the old type, while
-# cmds.ls(type=<old name>) quietly stops finding any of them. Verified in
-# mayapy: on Maya 2027 createNode('multDoubleLinear') yields nodeType
-# 'multDL' and cmds.ls(type='multDoubleLinear') returns []; on 2024 the old
-# names are still the real ones. Left unhandled, every type-filtered scan
-# below went blind to these nodes on the newer Maya, so a full teardown
-# could not find them and they survived every rebuild.
+# createNode still accepts the old spelling (it warns and substitutes), but
+# cmds.ls(type=<old spelling>) matches nothing - so on Maya 2026+ the build
+# goes on making these nodes while every typed scan here is blind to them.
 NODE_TYPE_ALIASES = {
     'multDoubleLinear': 'multDL',
     'addDoubleLinear': 'addDL',
@@ -101,21 +95,17 @@ def resolve_node_types(types):
     '''
     A node type list the RUNNING Maya's cmds.ls will actually answer for.
 
-    Each name is kept if this Maya knows it and swapped for its alias if it
-    does not (see NODE_TYPE_ALIASES), so one list works on either version.
-    Both spellings are never passed together: cmds.ls does not raise on a
-    type it does not know, it warns 'Unknown object type' - once per scan
-    per rig part, which is a dozen warnings a build.
+    Each name is kept if this Maya knows it and swapped for its alias if not
+    (NODE_TYPE_ALIASES), so one list serves every Maya version. Only ever
+    one spelling at a time: cmds.ls warns rather than raises on a type it
+    does not know, which would be a warning per scan per rig part.
 
-    A name neither spelling covers is dropped rather than passed on. That is
-    a type from a plugin which never loaded (the matrix nodes come from
-    matrixNodes, the quaternion ones from quatNodes), which is the case
-    _ls_types' fallback exists for; dropping it here means the fallback is
-    not needed to handle it.
+    A name neither spelling covers is dropped - that is a type from a plugin
+    which never loaded, matrixNodes or quatNodes - so it never reaches
+    _ls_types' fallback.
 
-    cmds.allNodeTypes is asked per call rather than cached: it costs ~1ms, and
-    a plugin can load part way through a session, which a cached answer
-    would then be wrong about for the rest of it.
+    allNodeTypes is asked per call rather than cached, because a plugin can
+    load part way through a session and a cached answer would go stale.
 
     Arguments
         types (list): Node type names, in the build's own spelling
@@ -136,13 +126,13 @@ def resolve_node_types(types):
 
 def fx_expression_patterns(rigname):
     '''
-    The FX expression nodes, which every build rebuilds from scratch
-    whatever it finds: rig_tail_anim's build_loop/build_wave/build_noise
-    each call delete_expression and then cmds.expression unconditionally.
+    The FX expression nodes, which no teardown can usefully keep: build_loop,
+    build_wave and build_noise each rebuild their expression from scratch
+    whatever they find.
 
-    Shared by cleanup_anim_effects and by the light teardown, which takes
-    ONLY these and leaves the rest of the FX network standing for the build
-    to reuse in place.
+    Shared by both teardown paths. The light one takes ONLY these and leaves
+    the rest of the FX network standing, since build_curl reuses its nodes in
+    place.
 
     Arguments
         rigname (str): Name of rig component
@@ -161,24 +151,33 @@ def fx_expression_patterns(rigname):
 
 def cleanup_rig(fk, ik):
     '''
-    Safely clean up rig components for the parts being built
-    (rig_tail_cache.active_parts(): RIGPARTS minus RIGPARTS_EXCLUDE).
-    Handles constraints, skinClusters, controls, node networks.
-    Called from build_rig_tail() before building new components.
+    Clear the way for a rebuild, across every rig part being built
+    (rig_tail_cache.active_parts: RIGPARTS minus RIGPARTS_EXCLUDE). Runs
+    from build_rig_tail before anything is created.
 
-    An excluded part is not torn down here, so nothing scene-wide may
-    take its nodes either - see excluded_sdk_curves for the SDK sweep.
+    Each part goes down one of two paths, chosen from the caches:
 
-    Cleanup:
-    1. Disconnect skeleton, delete joint constraints
-    2. Delete control constraints
-    3. Delete skinClusters from curves
-    4. Delete existing controls and control groups
-    5. Delete utility nodes (conditions, multiply, etc)
-    7. Delete curves, clusters, ikHandles
+        cleanup_rigname     - full: delete and let the build recreate.
+                              Taken when the skeleton or the node layout
+                              changed, or a rebuild was forced.
+        cleanup_connections - light: keep the nodes, cut their drivers.
+                              Taken when both caches say nothing moved.
+
+    A full teardown always strips BOTH modes, not only the ones being
+    rebuilt: a previous build may have left the other mode's curves,
+    clusters and spline handles behind, and the build recreates only what
+    was asked for.
+
+    Two things are hoisted out of the per-part loop because they are
+    scene-wide and would otherwise repeat identical work per part: the typed
+    scan of utility nodes, which every part filters for its own names, and
+    the conversion sweep, held deferred until the end.
+
+    An EXCLUDED part is not torn down at all, so nothing scene-wide here may
+    take its nodes either - see excluded_sdk_curves, which is why the
+    scene-wide animCurve delete is filtered.
 
     Arguments
-        rigname (str): Name of rig component to clean up
         fk (bool): Clean up FK components
         ik (bool): Clean up IK components
     '''
@@ -193,11 +192,9 @@ def cleanup_rig(fk, ik):
     # every part
     structure_changed = rt_cache.validate_cache_structure(fk, ik)
 
-    # Delete SDK animCurves in one call (a rebuild has hundreds of them,
-    # and per-node deletes each pay full command overhead), minus the
-    # curves belonging to excluded parts - those parts are not rebuilt,
-    # so a sweep that took their curves would strip their variable-FK
-    # falloff and mode switching for good.
+    # Every SDK animCurve in one delete - a rebuild has hundreds - except
+    # those belonging to excluded parts, which are not rebuilt and would lose
+    # their variable-FK falloff and mode switching for good.
     logger.trace(f"Cleaning up SDK curves")
     with rt_maya.timed('cleanup.sdk_curves'):
         anim_curves = cmds.ls(type=['animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT'])
@@ -206,31 +203,21 @@ def cleanup_rig(fk, ik):
         if anim_curves:
             cmds.delete(anim_curves)
 
-    # One conversion sweep for the whole teardown instead of one per part
     global _DEFER_CONVERSION_SWEEP
     _DEFER_CONVERSION_SWEEP = True
     try:
         cleanup_dangling_unit_conversions()
 
-        # One typed scan of the scene's utility nodes for the whole
-        # teardown, shared by every part (see cleanup_rigname). Nodes
-        # deleted for an earlier part are filtered out downstream by
-        # rt_maya.remove_nodes, and nothing new is created during cleanup.
+        # Shared by every part. Nodes an earlier part already deleted are
+        # filtered downstream by rt_maya.remove_nodes, and cleanup creates
+        # nothing, so one scan stays accurate for the whole loop.
         utility_nodes = cmds.ls(type=resolve_node_types(UTILITY_NODE_TYPES)) or []
 
         for rigname in rt_cache.active_parts():
-            # Validate cache
             joints_changed = rt_cache.validate_cache_joints(rigname)
-            # Unbind geometry before rebuild
             with rt_maya.timed('cleanup.unbind'):
                 rt_maya.unbind_geometry(rigname)
 
-            # Rebuild check. A full teardown always strips BOTH modes,
-            # not just the ones being rebuilt: the previous build may
-            # have created the other mode's curves, clusters and spline
-            # handles, and leaving those behind is what broke rebuilds
-            # that switched between FK-only and FK+IK. The build then
-            # recreates only what was asked for.
             if rt_constants.FORCE_REBUILD or joints_changed or structure_changed:
                 with rt_maya.timed('cleanup.teardown_full'):
                     cleanup_rigname(rigname, fk=True, ik=True,
@@ -243,14 +230,12 @@ def cleanup_rig(fk, ik):
     if _CONVERSION_SWEEP_PENDING:
         with rt_maya.timed('cleanup.conversions'):
             cleanup_dangling_unit_conversions()
-            # Same sweep, for the curveInfo nodes cmds.ikHandle leaves on
-            # the temporary curve it makes for every spline build
+            # The same idea for curveInfo nodes, which cmds.ikHandle leaves
+            # on the temporary curve it makes for every spline build
             cleanup_dangling_curveinfo()
 
-    # Main controller dashboard: remove stale override conditions and,
-    # when the dashboard is off, every dashboard attribute. Runs after
-    # the per-part loop so expressions referencing the conditions are
-    # already gone on a full teardown.
+    # The dashboard last, so that on a full teardown the expressions
+    # referencing its override conditions are already gone.
     with rt_maya.timed('cleanup.ctrlall'):
         rt_ctrlall.cleanup_ctrlall(fk, ik)
 
@@ -772,15 +757,16 @@ def rig_leftovers(parts=None):
 
 def restore_fk_joint_chain(rigname):
     '''
-    Tear down the FK SDK-group hierarchy and restore a flat FK joint chain.
+    Unwrap the FK SDK hierarchy, leaving a plain FK joint chain.
 
-    build_fk (create_sdk_groups / put_jnt_under_sdk_groups) assumes each FK
-    joint enters the build as a plain link in a flat chain (its parent is the
-    previous joint). A prior build leaves every joint wrapped in its own SDK
-    stack instead; re-wrapping an already-wrapped joint parents the stack top
-    under its own descendant, which Maya rejects as a cycle. Unparent the
-    joints out, delete all SDK groups (pattern match also clears groups from a
-    previous NUM_CTRL_FK value or an older layer layout), then re-chain flat.
+    create_sdk_groups needs each FK joint to arrive as a plain link whose
+    parent is the previous joint. A prior build leaves every joint buried in
+    its own SDK stack, and re-wrapping one of those would parent the new
+    stack under its own descendant, which Maya rejects as a cycle.
+
+    So: lift the joints out to the world, delete the SDK groups, re-chain the
+    joints. The groups go by name pattern rather than by counting layers,
+    which also clears a stack built under a different NUM_CTRL_FK.
 
     Arguments
         rigname (str): Name of rig component
@@ -791,10 +777,8 @@ def restore_fk_joint_chain(rigname):
     joints = rt_constants.JOINTS_FK[rigname]
     fkjnt_grp = rt_naming.fstr(rigname, rt_constants.GROUP, rt_constants.TYPE_FK)
 
-    # Unparent all FK joints to world temporarily. One cmds.parent for the
-    # whole chain: a reparent is among the most expensive commands there is
-    # (DAG restructure plus undo state), and this runs for every FK joint of
-    # every rig part on every rebuild.
+    # One cmds.parent for the whole chain. A reparent is among the most
+    # expensive commands there is, being a DAG restructure plus undo state.
     loose = []
     for jnt in joints:
         if cmds.objExists(jnt):
@@ -804,13 +788,9 @@ def restore_fk_joint_chain(rigname):
     if loose:
         cmds.parent(*loose, world=True)
 
-    # Delete all SDK groups by pattern: SDK_GRP and SDK_JNT both end with the
-    # SDK label. Pattern matching (not exact counts) also removes groups left
-    # over from a previous NUM_CTRL_FK value.
-    # Disconnected one at a time (rt_maya.remove's reason: a delete must not
-    # cascade through an expression web), then deleted in ONE call - there
-    # are NUM_CTRL_FK+1 of these per joint, so the per-node delete was the
-    # single biggest source of commands in the teardown.
+    # SDK_GRP and SDK_JNT both end with the SDK label, so one pattern finds
+    # the whole stack. Disconnected first, then deleted in ONE call: there
+    # are NUM_CTRL_FK+1 of these per joint.
     sdk_pattern = f'{rt_constants.TYPE_FK}_{rigname}_*_{rt_constants.SDK}'
     sdk_groups = cmds.ls(sdk_pattern, type='transform') or []
     rt_maya.disconnect_nodes(sdk_groups)
@@ -853,8 +833,23 @@ def fk_sdk_structure_is_current(rigname):
 
 def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     '''
-    Cleanup components for a single RIGPART (rigname).
-    Can be called independently for targeted cleanup.
+    The full teardown for one rig part: delete everything the build makes,
+    leaving the skeleton and the bound geometry. Also usable on its own, and
+    used by remove_rig.
+
+    Numbered below in the order it runs, and the order matters in one place:
+    constraints and skinClusters come off before the nodes carrying them are
+    deleted, so nothing cascades.
+
+    What SURVIVES is the point. BN joints keep their outgoing
+    worldMatrix -> skinCluster, which is the geometry bind; only their
+    incoming drivers belong to the rig. FK/IK/FX joints hold no skin, so both
+    directions go. The joints themselves stay in every case - the FK/IK
+    duplicates are unwrapped back to plain chains, not removed.
+
+    Work is batched per CHAIN and per SUBTREE rather than per node
+    throughout, since listRelatives and listConnections both answer for a
+    whole list in one command.
 
     Arguments
         rigname (str): Name of rig component
@@ -869,37 +864,24 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
     basectrl_grp = rt_naming.fstr(rigname, rt_constants.BASECTRL_GRP)
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
 
-    # 1. Disconnect skeleton, delete joint constraints. Per CHAIN, not per
-    # joint: listRelatives and listConnections both take a node list and
-    # answer for all of them in one command, and this used to cost five
-    # commands per joint per chain per rig part.
+    # 1. Disconnect the skeleton and drop its constraints, a chain at a time
     logger.trace(f"{rigname}: Cleaning up skeleton constraints")
     for joints in [rt_constants.JOINTS_BN, rt_constants.JOINTS_FK, rt_constants.JOINTS_IK, rt_constants.JOINTS_FX]:
         if rigname in joints:
             chain = [j for j in joints[rigname] if cmds.objExists(j)]
             if not chain:
                 continue
-            # Delete constraints
             constraints = cmds.listRelatives(chain, type='constraint') or []
             if constraints:
                 cmds.delete(constraints)
-            # Disconnect incoming drivers (and outgoing too, except on BN
-            # where outgoing is the geometry bind).
-            # BN joints carry the geometry bind (worldMatrix -> skinCluster)
-            # on their OUTGOING side. Only their incoming drivers are
-            # replaced by the rig, so keep their outgoing connections or the
-            # skin goes with them and the mesh stops deforming. FK/IK/FX
-            # joints hold no skin, so clear both directions as before.
+            # BN's outgoing side is the geometry bind - see the docstring
             keep_skin = joints is rt_constants.JOINTS_BN
             rt_maya.disconnect_nodes(chain, source=True,
                                     destination=not keep_skin)
 
-    # 2. Delete control constraints. One query for the whole control
-    # subtree (constraints are children of what they constrain), then one
-    # delete: the previous version asked every descendant transform for its
-    # constraints, and then reset the OPM and every transform channel of
-    # every control - hundreds of nodes, tens of commands each, all of them
-    # on nodes that step 4 below deletes outright a moment later.
+    # 2. Control constraints, in one query and one delete: a constraint is a
+    # child of what it constrains, so the whole control subtree answers at
+    # once. Nothing else is reset on these controls - step 4 deletes them.
     if cmds.objExists(basectrl):
         constraints = cmds.listRelatives(basectrl, ad=True,
                                          type='constraint', f=True) or []
@@ -926,39 +908,30 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
         fkroot_grp = rt_naming.fstr(rigname, rt_constants.CTRLROOT_GRP, rt_constants.TYPE_FK)
         rt_maya.remove(fkroot_grp)
 
-    # Remove SDK groups for FK, restoring the flat FK joint chain
+    # The FK joints come out of their SDK stack here, not deleted with it
     if fk and rigname in rt_constants.JOINTS_FK:
         restore_fk_joint_chain(rigname)
 
-    # 5. Delete utility nodes (conditions, multiply, math nodes)
-    # Every utility node is named '{rigname}_<descriptor>_<nodetype>',
-    # so anchor the underscore after rigname: '{rigname}_*' cannot
-    # bleed into another part whose name merely extends this one
-    # ('tail' cleanup must not delete 'tail2' nodes)
-    # Every pattern goes to Maya in ONE cmds.ls. Each ls walks the whole
-    # scene, so the previous type x pattern nesting cost 55 full scans per
-    # rig part; a roster of tails multiplied that again. Names can match
-    # more than one pattern, so dedupe (dict keeps first-seen order).
+    # 5. The utility networks - conditions, math nodes, the FK falloff and
+    # curve-info webs, hundreds of nodes per part.
+    #
+    # Found by TYPE and narrowed on name in Python, which is the difference
+    # between a DG lookup and a scene walk: every name pattern handed to
+    # cmds.ls walks the whole scene, and this needs one per type per rig-part
+    # prefix. cleanup_rig hands the same scan to every part.
+    #
+    # The name test rebuilds '{typ}_{rigname}_*{nodetype}'. Anchoring the
+    # underscore after rigname is what stops a 'tail' teardown reaching into
+    # 'tail2'. The empty type is dropped - it only ever produced a leading
+    # underscore, which matches nothing.
     logger.trace(f"{rigname}: Cleaning up utility nodes")
-    # ONE TYPED scan, filtered in Python. A name pattern makes cmds.ls walk
-    # the whole scene, and passing 55 of them in one call does not change
-    # that - it was measured at 195ms per rig part, 2.3s of a 32s build,
-    # the single most expensive thing in cleanup. Listing by TYPE is a DG
-    # lookup instead, and the name test it replaces costs nothing in
-    # Python. cleanup_rig hands the same scan to every part.
     if utility_nodes is None:
         utility_nodes = cmds.ls(type=resolve_node_types(UTILITY_NODE_TYPES)) or []
-    # Same match as '{typ}_{rigname}_*{node_typ}': the empty type is
-    # dropped, since it only ever produced '_{rigname}_...' with a leading
-    # underscore, which matches nothing
     prefixes = tuple(f'{typ}_{rigname}_' for typ in types if typ)
     suffixes = tuple(UTILITY_NODE_TYPES)
     found = [n for n in utility_nodes
              if n.split('|')[-1].startswith(prefixes)
              and n.endswith(suffixes)]
-    # One disconnect pass and one delete for the lot (rt_maya.remove_nodes):
-    # the FK falloff and curve-info networks are hundreds of nodes per rig
-    # part, and per-node remove() spent ~8 commands on each
     rt_maya.remove_nodes(found)
 
     # 7. Delete curves, clusters, ikHandles
@@ -1019,29 +992,24 @@ def cleanup_rigname(rigname, fk, ik, utility_nodes=None):
 
 def cleanup_connections(rigname, fk, ik):
     '''
-    The light teardown: strip the rig back to reusable nodes with their
-    drivers cut, where cleanup_rigname deletes and the build rebuilds.
-    Chosen when the caches say the skeleton and the node layout are both
-    unchanged (see cleanup_rig).
+    The light teardown: leave the rig's nodes standing and cut their drivers,
+    where cleanup_rigname deletes and the build rebuilds from nothing. Chosen
+    when the caches report the skeleton and the node layout both unchanged.
 
-    Mostly that means disconnecting rather than deleting, but a node the
-    build recreates from scratch whatever it finds is NOT reusable, and
-    keeping it does not save the work - it moves the work into the build,
-    one node at a time, and leaves name-suffixed duplicates behind. Those
-    are deleted here, in batch: the FK utility networks (set_curveinfo_fk,
-    falloff_rotation) and the FX expressions (fx_expression_patterns).
+    Keeping a node only pays when the build can reuse it. A node the build
+    recreates regardless is worse than useless kept - the work moves into the
+    build, one node at a time, and the old copy lingers under a suffixed
+    name. Those go here, in batch: the FK utility networks and the FX
+    expressions. What stays is what the build wires back up in place - the
+    SDK hierarchy, the curl network, the control shapes.
 
-    Two things also have to be torn down structurally:
-
-    - The FK SDK hierarchy is only safe to reuse in place when it matches
-      the current builder's layout. A stale layout (older build with a
-      different SDK layer set) is not something the joint/control caches
-      detect, and rebuilding over it re-wraps already-wrapped joints into a
-      parenting cycle, so tear that part down to a flat chain first.
-    - A current SDK hierarchy is kept, which is what makes this path cheap.
-      create_sdk_groups then meets every group already nested and already
-      positioned; rt_maya.match_transform is what recognises that and does
-      not pay the maintain-offset dance for a move that is not happening.
+    The SDK hierarchy is the reason this path is cheap, and the one thing
+    that can force a structural teardown anyway. Kept, create_sdk_groups
+    meets every group already nested and already placed, and does almost
+    nothing. But it is only reusable if it matches the layout the current
+    builder produces - a stale layer set from older code is invisible to the
+    caches, and rebuilding over it would wrap already-wrapped joints into a
+    parenting cycle - so a mismatch is flattened back to a plain chain first.
 
     Arguments
         rigname (str): Name of rig component
@@ -1090,13 +1058,11 @@ def cleanup_connections(rigname, fk, ik):
                     sdk_groups.append(sdk_grp)
             rt_maya.disconnect_nodes(sdk_groups, source=True, destination=False)
 
-    # Delete FK utility node networks: the FK build (set_curveinfo_fk,
-    # falloff_rotation) recreates them from scratch every run, so
-    # keeping the old nodes would accumulate name-suffixed duplicates
+    # The FK utility networks. set_curveinfo_fk and falloff_rotation rebuild
+    # these every run, so old copies would only pile up under suffixed names.
+    # Underscore anchored after rigname, so 'tail' cannot reach 'tail2'.
     if fk:
         typ = rt_constants.TYPE_FK
-        # Underscore anchored after rigname so 'tail' cannot delete
-        # 'tail2' nodes (see cleanup_rigname)
         fk_patterns = [
             f'{typ}_{rigname}_*{rt_constants.COND}',
             f'{typ}_{rigname}_*multiplyDivide',
@@ -1107,37 +1073,23 @@ def cleanup_connections(rigname, fk, ik):
             f'{typ}_{rigname}_*pointOnCurveInfo',
             # set_curveinfo_fk's position remap (tail length -> parameter)
             f'{typ}_{rigname}_*remapValue',
-            # the curveInfo set_curveinfo_fk used to create and never read.
-            # Exact name, not '*curveInfo': that would also match stretch's
-            # _scale_curveInfo, which caches its rest length and must live.
+            # Exact name, not '*curveInfo', which would also match stretch's
+            # _scale_curveInfo - that one caches a rest length and must live
             f'{typ}_{rigname}_curveInfo',
         ]
-        # One scene scan for all eight patterns, one disconnect pass and one
-        # delete for everything it finds (see cleanup_rigname).
-        # Scan and delete are timed apart: a name pattern makes cmds.ls walk
-        # the whole scene, so it matters which of the two the time is in.
+        # TEMPORARY: scan and delete timed apart, to tell a scene-walking
+        # name pattern from the cost of the deletes themselves.
         with rt_maya.timed('light.fk_utility_scan'):
             fk_nodes = dict.fromkeys(cmds.ls(*fk_patterns) or [])
         with rt_maya.timed('light.fk_utility_delete'):
             rt_maya.remove_nodes(fk_nodes)
 
-    # Delete the FX expressions, for the same reason as the FK networks
-    # above: the build rebuilds every one of them from scratch whatever it
-    # finds (see fx_expression_patterns). Keeping them here does not save
-    # the work, it moves it into the build and unbatches it - rig_tail_anim
-    # deletes them one at a time, measured at 33 commands each over the ~300
-    # expressions a rig part carries, where remove_nodes does the lot in one
-    # disconnect pass and one delete for 5. That is the light path's +6.7s
-    # on connect.fx against a full teardown, which already deletes them here
-    # (cleanup_anim_effects) and so leaves the build's delete_expression
-    # finding nothing.
-    #
-    # The rest of the FX network is deliberately left alone: build_curl
-    # reuses its nodes in place (objExists, then ensure_connect), so taking
-    # those too would only hand the build a few thousand createNode calls
-    # back. A TYPED scan for the candidates - a name pattern makes cmds.ls
-    # walk the whole scene, and the name test that replaces it is free
-    # (see cleanup_rigname).
+    # The FX expressions, for the reason the FK networks above go: the build
+    # replaces every one regardless, so the only question is whether they are
+    # deleted in one batch here or one at a time from inside the build. The
+    # rest of the FX network stays - build_curl reuses its nodes in place.
+    # Found by TYPE and filtered on name, since a name pattern would make
+    # cmds.ls walk the whole scene (see cleanup_rigname).
     with rt_maya.timed('light.fx_expression_scan'):
         expression_patterns = fx_expression_patterns(rigname)
         expressions = [n for n in cmds.ls(type='expression') or []
@@ -1145,21 +1097,14 @@ def cleanup_connections(rigname, fk, ik):
                               for p in expression_patterns)]
     with rt_maya.timed('light.fx_expression_delete'):
         if expressions:
-            # The conversion nodes the expressions write through go in the
-            # SAME batch, for two reasons. One is correctness, and it is
-            # delete_expression's: a conversion left connected to a
-            # composeMatrix input blocks the rebuilt expression from
-            # connecting to that plug. The other is that batching them is
-            # what keeps the composeMatrix nodes alive at all - remove_nodes
-            # disconnects everything before it deletes anything, where
-            # leaving the conversions to cleanup_dangling_unit_conversions
-            # has cmds.delete cascade from each conversion into the
-            # composeMatrix it feeds. The full teardown loses every FX
-            # composeMatrix that way and rig_tail_matrix rebuilds them
-            # (create_matrix_nodes_for_joint, which runs in connect.matrix,
-            # before connect.fx); the light path is here to avoid work, so
-            # it keeps them.
-            # Both queries take the whole list at once (disconnect_nodes).
+            # The conversion nodes the expressions write through must go in
+            # the SAME batch. One left connected to a composeMatrix input
+            # would block the rebuilt expression from that plug - but sweeping
+            # them afterwards instead is worse, because cmds.delete on a
+            # dangling conversion cascades into the composeMatrix it feeds.
+            # Inside one batch nothing is deleted until everything is
+            # disconnected, so the composeMatrix nodes survive and the build
+            # reuses them rather than rebuilding the FX matrix network.
             conversions = cmds.ls(
                 cmds.listConnections(expressions) or [],
                 type=['unitConversion', 'unitToTimeConversion',
@@ -1168,11 +1113,13 @@ def cleanup_connections(rigname, fk, ik):
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
-    Clean up animation effect nodes.
-    Expressions are removed first via rt_maya.remove(), which disconnects
-    before deleting: cmds.delete on a connected expression cascades through
-    its whole connection web (loop network node, sibling FX expressions,
-    composeMatrix nodes).
+    Delete the whole FX network for one part - expressions, the loop clock,
+    and the curl and wave node webs - on the full teardown path.
+
+    Expressions go in the first batch. cmds.delete on a connected expression
+    cascades through its whole web, taking the loop network, its sibling
+    expressions and their composeMatrix nodes, so they are disconnected
+    before anything is deleted.
 
     Arguments
         rigname (str): Name of rig component
@@ -1180,7 +1127,6 @@ def cleanup_anim_effects(rigname, fk, ik):
         ik (bool): Clean IK effects
     '''
     logger.trace(f'{rigname}: Cleanup animation effects')
-    # Delete animation node patterns (expressions first)
     typ = rt_constants.TYPE_FX
     node_patterns = fx_expression_patterns(rigname) + [
         f'{rigname}_loop_time',
@@ -1195,24 +1141,16 @@ def cleanup_anim_effects(rigname, fk, ik):
         f'{typ}_{rigname}_*_ikfk_blendColors',
         f'{typ}_{rigname}_*_ikfk_remap_condition'
     ]
-    # One scene scan for every pattern (see cleanup_rigname), then sort
-    # expressions to the front. Pattern order used to carry the
-    # "expressions first" rule implicitly; a single ls returns scene order
-    # instead, so sort on node type - which states the rule outright and
-    # holds even if an expression matches one of the later patterns.
-    # Two scene patterns instead of twelve. Every pattern above starts with
-    # '{rigname}_' or '{typ}_{rigname}_', so those two are a superset; the
-    # twelve are then matched in Python, where a name test is free. A
-    # pattern makes cmds.ls walk the whole scene, and twelve of them cost
-    # 36ms per rig part (see cleanup_rigname, which had the same problem
-    # five times over).
+    # Every pattern above starts with '{rigname}_' or '{typ}_{rigname}_', so
+    # those two are a superset: Maya walks the scene twice instead of twelve
+    # times, and the twelve are then matched in Python where a name test is
+    # free (see cleanup_rigname).
     candidates = cmds.ls(f'{rigname}_*', f'{typ}_{rigname}_*') or []
     nodes = [n for n in dict.fromkeys(candidates)
              if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
                     for p in node_patterns)]
-    # Two batches rather than a node at a time, expressions first: within a
-    # batch everything is disconnected before anything is deleted, so the
-    # cascade the ordering guards against cannot happen either way
+    # Split on node type rather than relying on pattern order, so the
+    # expressions-first rule holds even for one matching a later pattern
     expressions = [n for n in nodes if cmds.nodeType(n) == 'expression']
     rt_maya.remove_nodes(expressions)
     rt_maya.remove_nodes([n for n in nodes if n not in set(expressions)])

@@ -749,11 +749,10 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
     cmds.setAttr(f'{ikhandle}.dWorldUpType', 4)  # Rot up start/end
     cmds.setAttr(f'{ikhandle}.dForwardAxis', fwd_enum)
     cmds.setAttr(f'{ikhandle}.dWorldUpAxis', up_enum)
-    # Debug, not info: this is the one setting whose being wrong twists a
-    # whole chain and leaves nothing else to see, so it is worth logging -
-    # but it is per rig part, and a roster of twelve tails made the normal
-    # build log twelve lines of it. The warning above still comes through at
-    # info level, which is the case where the axis is not what was asked for.
+    # Worth logging - a wrong axis here twists a whole chain and leaves
+    # nothing else to see - but at debug, since it is per rig part and a
+    # roster of tails would fill the build log with it. The warning above,
+    # for an axis that is not the one asked for, stays at info.
     logger.debug(f'{rigname}: Advanced twist: forward axis '
                  f'{"+" if forward_positive else "-"}{aim.upper()}, '
                  f'up +{up.upper()}')

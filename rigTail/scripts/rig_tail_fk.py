@@ -253,47 +253,40 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         num_joints        joints currently in range, computed here from
                           falloff and reported back to the animator
 
-    Node network per control:
-    1. plusMinusAverage x2 (falloff_min/max): ctrl_pos -/+ falloff, the
-       window in joint_pos units that the control reaches over
+    The network, per CONTROL:
 
-    Node network per joint:
-    1. remapValue (weight): joint_pos against that window, shaped by the
-       tent ramp and scaled by 1/num_joints
-    2. multiplyDivide (rotmult): rotation * weight -> sdk_grp.rotate
+        plusMinusAverage x2  ctrl_pos -/+ falloff, the window along the
+                             chain that this control reaches over
+        plusMinusAverage     rotation summed with every earlier control's
+        multiplyDivide       1 / num_joints
+        multiplyDivide       mirror signs, on the mirrored side only
 
-    The weight used to be reached the long way round: a plusMinusAverage
-    for (joint_pos - ctrl_pos), a multiplyDivide for (/ falloff), and a
-    remapValue told to expect -1 .. +1. But normalising an input between
-    two bounds is precisely what remapValue does with inputMin/inputMax,
-    and both are connectable - so that subtraction and division were being
-    done twice, once in nodes and again inside the node downstream of them.
-    Driving the bounds from ctrl_pos -/+ falloff gives
-    (joint_pos - (ctrl_pos - falloff)) / (2 * falloff), which is the same
-    (ratio + 1) / 2 the old pair arrived at. It also moves two nodes per
-    JOINT-CONTROL PAIR onto two per CONTROL, since ctrl_pos and falloff do
-    not vary along the chain: 306 fewer nodes per rig part. Checked against
-    the old network over a sweep of ctrl_pos, falloff and joint_pos: the
-    largest difference in the weight was 4.7e-9, inside the ramp's own
-    single-precision sampling noted below.
+    and per JOINT:
 
-    plus, on the mirrored side of an L/R pair only, one multiplyDivide
-    between the sum and the weighting that negates the axes the controls'
-    own mirrored frame turned around (rt_mirror.control_signs). Gizmo and
-    bend agree either way; what changes is that the same value on an L/R
-    pair now poses them as mirror images.
+        remapValue           joint_pos read against that window, shaped by
+                             the tent and scaled by 1/num_joints
+        multiplyDivide       rotation * weight -> sdk_grp.rotate
+
+    The weight falls out of the remapValue alone. Normalising an input
+    between two bounds is what that node already does, and inputMin/inputMax
+    are connectable - so driving them from ctrl_pos -/+ falloff yields
+    (joint_pos - (ctrl_pos - falloff)) / (2 * falloff), the tent's position
+    directly, with no arithmetic nodes in front. The bounds do not vary along
+    the chain, which is why they are per control rather than per joint.
+
+    The mirror multiply sits between the rotation sum and the weighting. On
+    the mirrored side of an L/R pair the controls stand in a
+    behaviour-mirrored frame (rt_control.mirror_control_frames) pointing two
+    axes the other way from the joints', and negating those two puts gizmo
+    and bend back in agreement, so one value poses the pair as mirror images.
 
     Comparisons against jnt.joint_pos go through control_position_plug, so
     a control rotates the joints it is drawn on. See set_curveinfo_fk.
 
-    The remapValue samples its ramp in single precision, which puts a few
-    parts in 10^7 of rounding on the weight. Measured against the older
-    delta/ratio network over a sweep of control position, falloff and
-    rotation: the weights differ by at most 3.6e-07, which at 90 degrees of
-    control rotation is 3e-05 of a degree on the joint. Two networks
-    disagreeing at the ramp's own sampling resolution, not one of them being
-    wrong - but it is thirty millionths of a degree, not the under-one this
-    once claimed.
+    The remapValue samples its ramp in single precision, putting a few parts
+    in 10^7 of rounding on every weight. At 90 degrees of control rotation
+    that is around 3e-05 of a degree at the joint - the node's resolution,
+    not a fault in the network feeding it.
 
     Arguments
         rigname (str): Name of rig component
@@ -351,12 +344,8 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         i += 1
     # Output: f'{rotsum}.output3D' = accumulated rotation
 
-    # On the mirrored side of an L/R pair the controls stand in the
-    # behavior-mirrored frame (rt_control.mirror_control_frames), which
-    # points two of their axes the other way from the joints'. Negating
-    # those two here is what puts the gizmo and the bend back in agreement,
-    # while the pair as a whole now poses as mirror images. One node per
-    # control: every control summed above is on this side, in this frame.
+    # One node per control - every control summed above is on this side, in
+    # this frame. See the docstring for what the signs correct.
     rotation_plug = f'{rotsum}.output3D'
     signs = rt_mirror.control_signs(rigname)
     if signs:
@@ -368,9 +357,8 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
                      signs['X'], signs['Y'], signs['Z'], type='double3')
         rotation_plug = f'{mirror_node}.output'
 
-    # 1 / num_joints, once per control. It rides on the weight ramp's
-    # outputMax below, so no per-joint divide is needed and num_joints
-    # keeps a single downstream connection.
+    # 1 / num_joints, which rides on each weight ramp's outputMax below
+    # rather than needing a divide per joint
     inv_numjnt = f'{control}_inv_num_joints_multiplyDivide'
     if not cmds.objExists(inv_numjnt):
         cmds.createNode('multiplyDivide', n=inv_numjnt, s=1, ss=1)
@@ -379,14 +367,10 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
     # setRange holds num_joints at a minimum of 1, so this cannot divide by 0
     cmds.connectAttr(f'{ctrl}.num_joints', f'{inv_numjnt}.input2X', f=1)
 
-    # The control's reach, as the pair of joint_pos values its weight ramp
-    # spans. Every joint's remapValue below normalises against these, which
-    # is where the old per-joint delta and ratio nodes went (see the
-    # docstring). Two nodes per control, not per joint: neither ctrl_pos nor
-    # falloff varies along the chain.
-    # The window can never be empty - falloff's attribute minimum of 0.1,
-    # scaled by 0.1 above, keeps (max - min) at 0.02 or more - which is the
-    # same guard that kept the old ratio node from dividing by zero.
+    # The control's reach, as the pair of joint_pos values its ramp spans.
+    # The window can never collapse: falloff's attribute minimum of 0.1,
+    # scaled by 0.1 above, holds (max - min) at 0.02 or more, so the
+    # normalisation inside every remapValue below has a non-zero divisor.
     falloff_min = f'{control}_falloff_min_plusMinusAverage'
     cmds.createNode('plusMinusAverage', n=falloff_min, s=1, ss=1)
     cmds.setAttr(f'{falloff_min}.operation', 2) # subtract
@@ -405,23 +389,20 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         NN = rt_naming.get_index_from_name(jnt)
         sdk_name = f'{control}_{NN:02d}'
 
-        # The tent. remapValue normalises inputValue from
-        # [falloff_min, falloff_max] to [0, 1] and clamps it there, then
-        # samples the ramp - which clamps at its end points too - so a joint
-        # past the falloff reads 0. Three linear points running 0 -> 1 -> 0
-        # draw the whole weight curve with no condition nodes. The ramp is
-        # symmetric, so nothing has to branch on which side of the control
-        # the joint sits.
+        # The tent, in one node. joint_pos is normalised against the window
+        # and clamped there, then the ramp - three linear points running
+        # 0 -> 1 -> 0 - is sampled, clamping again at its end points, so a
+        # joint past the falloff reads 0 with no condition node. The ramp
+        # being symmetric is what saves branching on which side of the
+        # control the joint sits.
         #
-        # outputMax carries the 1/num_joints normalisation: the node
-        # returns outputMin + (outputMax - outputMin) * ramp, and outputMin
-        # is 0, so the tent arrives pre-divided.
+        # outputMax carries the 1/num_joints scaling: the node returns
+        # outputMin + (outputMax - outputMin) * ramp with outputMin at 0, so
+        # the weight arrives already divided.
         weight = f'{sdk_name}_weight_remapValue'
         cmds.createNode('remapValue', n=weight, s=1, ss=1)
-        # One setAttr per ramp point rather than one per field: value is a
-        # compound of (position, floatValue, interp), so this is three
-        # commands where it was nine, and it runs once per joint per control
-        # per rig part.
+        # value is a compound of (position, floatValue, interp), so a ramp
+        # point is one setAttr rather than three
         for r_idx, (r_pos, r_val) in enumerate(((0, 0), (0.5, 1), (1, 0))):
             cmds.setAttr(f'{weight}.value[{r_idx}]', r_pos, r_val, 1,
                          type='double3') # linear
@@ -454,13 +435,20 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
 
         sdk_01 > sdk_02 > sdk_03 > ctrl_sdk > joint
 
-    Giving each control its own layer is what lets their influences
-    accumulate through the hierarchy without contending for a channel:
-    falloff_rotation writes one control's weighted rotation into one layer,
-    and twist/roll/stretch each own a different channel of the same stack.
-
-    Each layer also carries a copy of the joint's joint_pos, so the
+    A layer each is what lets the controls' influences accumulate through the
+    hierarchy instead of contending for one channel: falloff_rotation writes
+    a single control's weighted rotation into a single layer, while
+    twist, roll and stretch each own a different channel of the same stack.
+    Every layer also carries a copy of the joint's joint_pos, so the
     weighting network can read it locally.
+
+    Built from the tip down, and each layer's transform is baked into
+    offsetParentMatrix as it is placed, leaving local rotate at zero for
+    falloff_rotation to drive.
+
+    Reruns cheaply on a rebuild. Groups that already exist are reused where
+    they stand, and match_transform recognises a layer that is already in
+    position, so a light teardown leaves almost nothing to do here.
 
     Arguments
         rigname (str): Name of rig component
@@ -515,12 +503,9 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
                 rt_maya.create_group(sdk_grp)
 
             if idx > 0:
-                # Copy the joint's joint_pos onto the layer so the
-                # weighting network can read it locally. Flags go through
-                # rt_maya.set_channel_flags (API): this runs NUM_CTRL_FK
-                # times per joint per rig part, the hottest loop in the
-                # build, where a flag write is a command spent on display
-                # state.
+                # The layer's own copy of joint_pos. Flags go through the API
+                # rather than setAttr: this is the build's hottest loop, and a
+                # flag write here is a command spent on display state.
                 v = joint_pos
                 if cmds.attributeQuery('joint_pos', n=sdk_grp, ex=1):
                     rt_maya.set_channel_flags(sdk_grp, ['joint_pos'], l=False)
@@ -584,11 +569,15 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
     '''
     Nest a joint into its SDK stack without moving it.
 
-    The stack is slotted in where the joint was, and the joint's rest
-    transform is baked into the top group's offsetParentMatrix so local
-    rotate stays at zero - falloff_rotation drives that channel, and a rest
-    orientation left sitting there would be overwritten the moment the
-    connection is made.
+    The stack takes the joint's place in the hierarchy: the joint is parked
+    on a temporary group, the stack is slotted in where it was, and the joint
+    returns underneath. Its rest transform ends up baked into the top group's
+    offsetParentMatrix, which leaves local rotate at zero for
+    falloff_rotation to drive - a rest orientation left on that channel would
+    be overwritten the instant the connection is made.
+
+    Returns immediately if the joint is already nested, which is the usual
+    case on a rebuild.
 
     Arguments
         jnt (str): Joint to nest
@@ -601,27 +590,26 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
     jnt_parent = cmds.listRelatives(jnt, p=True) or []
     if jnt_parent:
         jnt_parent = jnt_parent[0]
-        # Create temporary group to preserve joint transform. createNode
-        # rather than cmds.group(em=True): identical result, a sixth of the
-        # cost, and this runs once per FK joint per rig part
+        # createNode over cmds.group(em=True) - identical result, a sixth of
+        # the cost, once per FK joint per rig part
         tmp_grp = cmds.createNode('transform', n=f'{jnt}_tmp', ss=1)
         cmds.matchTransform(tmp_grp, jnt)
         rt_maya.parent_to(jnt, tmp_grp, a=1) # Unparent joint
         logger.trace(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
 
-        # Move first_sdk_grp under joint's parent
+        # The stack moves into the joint's old slot, is cleared of whatever
+        # transform the reparent left on it, then placed on the joint and
+        # baked (see the docstring for why the bake matters here)
         rt_maya.parent_to(first_sdk_grp, jnt_parent)
         cmds.matchTransform(first_sdk_grp, jnt_parent)
         rt_maya.reset_opm(first_sdk_grp)
         rt_maya.reset_transforms(first_sdk_grp)
         cmds.matchTransform(first_sdk_grp, jnt)
-        # Bake the rest transform into offsetParentMatrix so local rotate
-        # stays at zero - see the docstring for why that matters here.
         rt_maya.opm(first_sdk_grp)
 
-        # Move joint under last_sdk_grp
+        # The joint returns underneath, dropping any extra transform the
+        # reparent inserted on the way
         rt_maya.parent_to(jnt, last_sdk_grp, a=1)
-        # Clean up any extra transform created by reparenting
         transf = cmds.listRelatives(jnt, p=True, typ='transform')[0]
         if transf != last_sdk_grp:
             cmds.ungroup(transf)

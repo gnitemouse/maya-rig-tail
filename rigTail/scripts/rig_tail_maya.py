@@ -402,14 +402,11 @@ def curveinfo_consumers(nodes):
     The curveInfo nodes fed by a list of nodes, INCLUDING through their
     shapes.
 
-    A curve's connection to a curveInfo is 'curveShape.worldSpace[0] ->
-    curveInfo.inputCurve', so it hangs off the SHAPE. Asking the transform
-    for its connections never sees it, and deleting the transform therefore
-    left a curveInfo with no input behind - which then prints
-    'curveInfoNN (Curve Info): No valid NURBS curve' on every evaluation for
-    the rest of the session. cmds.ikHandle creates one of these per spline
-    build (on the temporary curve it makes and this rig throws away), so
-    they accumulated one per rig part per build.
+    A curve reaches its curveInfo from the SHAPE
+    ('curveShape.worldSpace[0] -> curveInfo.inputCurve'), so asking the
+    transform for connections never finds it. Deleting the curve without
+    this leaves a curveInfo with no input, which then prints 'No valid NURBS
+    curve' on every evaluation for the rest of the session.
 
     Arguments:
         nodes (list): Nodes about to be deleted
@@ -433,18 +430,16 @@ def remove_nodes(nodes):
     """
     remove() for a whole list of nodes, in a handful of commands.
 
-    Same safety rule as remove() - disconnect everything before deleting, so
-    a delete cannot cascade through a connection web (deleting a connected
-    expression takes its loop network, its sibling FX expressions and their
-    composeMatrix nodes with it) - but the disconnect is one pass for the
-    whole list (see disconnect_nodes) and the delete is a single call.
+    Teardown deletes utility nodes by the thousand, so the per-node cost is
+    what matters: the disconnect is one pass for the entire list and the
+    delete is a single call.
 
-    That matters because teardown deletes utility nodes by the thousand: the
-    FK falloff and curve-info networks alone are hundreds of nodes per rig
-    part, and per-node remove() spent ~8 commands on each of them. A command
-    profile of a 12-part rebuild put delete at 18.8k calls / 6.3s.
-
-    Constraints keep remove()'s exemption from the disconnect pass.
+    The safety rule is remove()'s, and batching strengthens it. Deleting a
+    connected node can cascade through its whole web - a connected
+    expression takes its loop network, its sibling expressions and their
+    composeMatrix nodes with it - so nothing is deleted until everything in
+    the batch is disconnected. Constraints keep remove()'s exemption from
+    that pass.
 
     Arguments:
         nodes (list): Nodes to delete
@@ -473,9 +468,8 @@ def existing(nodes):
     """
     The nodes in a list that exist, in ONE command.
 
-    cmds.ls resolves a whole list at once, where objExists asks per node.
-    The teardown filters lists of hundreds of nodes, so the per-node version
-    was the most-called command in a build (68k calls in a 12-part profile).
+    cmds.ls resolves a whole list at once where objExists asks per node, and
+    teardown filters lists of hundreds at a time.
 
     Arguments:
         nodes (list): Node names, possibly with duplicates or None
@@ -725,10 +719,9 @@ def disconnect_nodes(nodes, source=True, destination=True, verified=False):
     """
     disconnect_all for a whole list of nodes, in two commands.
 
-    cmds.listConnections takes a list of nodes and answers for all of them
-    at once, so a chain of joints costs two queries instead of two per
-    joint. Teardown calls this for every joint of every chain of every rig
-    part, which is where the command count adds up.
+    cmds.listConnections answers for an entire list at once, so a joint
+    chain costs two queries rather than two per joint - and teardown runs
+    this over every chain of every rig part.
 
     Arguments:
         nodes (list): Nodes to disconnect
@@ -787,23 +780,19 @@ def break_connection(plug):
     Arguments:
         plug (str): Attribute plug to disconnect
     """
-    # The unlock goes through the API: this is called per plug from
-    # reset_opm and reset_transforms, and on a plug that is not locked (the
-    # usual case) the setAttr was a command spent to change nothing
+    # The unlock goes through the API rather than setAttr: this runs per plug
+    # from reset_opm and reset_transforms, and most plugs are not locked.
     node, _, attr = plug.partition('.')
     set_channel_flags(node, [attr], l=False, compound=True)
     if not cmds.connectionInfo(plug, id=True):
         return
     plug = cmds.connectionInfo(plug, ged=True)
 
-    # -icn takes the driver node down with the connection (an animCurve, a
-    # conversion node), which is what keeps rebuilds from accumulating
-    # orphans. It cannot touch a read-only destination though - a plug on a
-    # referenced node - and the cmds.ls(-ro) that used to test for that
-    # cost 0.8ms a call, thousands of times a build (7.9% of a profiled
-    # build was in ls). So attempt the delete and check the result: a plug
-    # still connected afterwards gets a plain disconnect, which needs no
-    # up-front test and costs two cheap connectionInfo queries.
+    # -icn takes the driver down with the connection - an animCurve, a
+    # conversion node - which is what keeps rebuilds from accumulating
+    # orphans. It cannot touch a read-only destination such as a plug on a
+    # referenced node, so rather than testing for that up front, attempt it
+    # and check: a plug still connected afterwards gets a plain disconnect.
     try:
         cmds.delete(plug, icn=True)
     except RuntimeError as err:
@@ -821,36 +810,30 @@ IDENTITY_MATRIX = om.MMatrix()
 
 def opm(node):
     """
-    Move transform values to Offset Parent Matrix.
-    Node must be transform or joint type and have attributes unlocked.
+    Move a node's local transform into its offsetParentMatrix, leaving the
+    node at identity but in the same world position.
 
-    A node whose local matrix is ALREADY identity has nothing to bake:
-    identity * opm == opm, so the write would set the value it already
-    holds, and every channel is already at its default so there is nothing
-    to reset either. That case is not an edge case - it is most of the
-    build. create_sdk_groups matches and bakes every SDK group the moment
-    it creates it (NUM_CTRL_FK + 1 per joint), and a freshly created group
-    is at identity. The full path costs ~35 Maya commands (a locked-attr
-    scan, the bake, then a reset of twelve channels); the check costs
-    three, and a command profile of a 12-part build put this function's
-    step at 13.7s of a 51s build.
+    This is the rig's core idiom: a joint or group holds its rest pose in
+    offsetParentMatrix, so translate/rotate/scale are free for the rig to
+    drive. Every SDK group is baked this way the moment it is placed.
 
-    The skip is only taken when nothing is locked and nothing drives the
-    node, because clearing those is the other half of what reset_transforms
-    does and a caller may be relying on it (falloff_rotation connects to an
-    SDK group's rotate, which fails on a plug left locked).
+    Two paths. When the local matrix is already identity there is nothing to
+    bake (identity * opm == opm) and no channel is off its default, so only
+    the unlock is owed and reset_transforms is left to do it. Otherwise the
+    local matrix is folded into offsetParentMatrix and the channels reset.
+
+    The identity case is the common one, not an edge case - a freshly
+    created group is at identity - and it is worth roughly ten times fewer
+    Maya commands than the bake.
 
     Arguments:
         node (str): Node to bake transforms
     """
     local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
     if local_matrix.isEquivalent(IDENTITY_MATRIX):
-        # Nothing to bake, and no locked plug can be off its default either:
-        # an identity local matrix IS every channel at its default, which is
-        # the whole of what has_non_default_locked_attributes tests for.
-        # reset_transforms still runs - it is what clears locks and incoming
-        # connections - and takes its own fast path when there is nothing
-        # left to clear.
+        # An identity local matrix IS every channel at its default, which is
+        # all has_non_default_locked_attributes tests for, so the locked-attr
+        # scan below can be skipped along with the bake.
         logger.trace(f"'{node}' is already at identity, nothing to bake")
         reset_transforms(node, local_matrix=local_matrix)
         return
@@ -883,7 +866,20 @@ def reset_opm(node, unlock=True):
 
 def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
     """
-    Reset translate, rotate, scale, shear, jointOrient to defaults.
+    Return translate/rotate/scale (and jointOrient on a joint) to their
+    defaults, clearing the locks and incoming connections in the way.
+
+    Clearing those is half the contract: the rig connects drivers onto
+    channels this has just freed, and a plug left locked or driven rejects
+    the connection.
+
+    Shear is not reset - its children are shearXY/XZ/YZ, so the per-axis
+    naming below never addresses it.
+
+    Locks and connections are queried once for the whole node rather than
+    per plug, and the caller may hand in what it already read; a node with
+    nothing driven and an identity local matrix needs only the unlock, since
+    every channel is already at its default.
 
     Arguments:
         node (str): Node to reset
@@ -892,33 +888,20 @@ def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
             already read it, so opm() does not pay for it twice
         locked (list): The node's locked attributes if already queried
     """
-    # Node-level lock/connection queries once, instead of an existence
-    # check, unlock and connection lookup per plug (this runs inside
-    # opm(), which the build calls constantly). translate/rotate/scale
-    # exist on every transform, jointOrient only on joints. Shear is not
-    # reset: its children are shearXY/XZ/YZ, so the old per-axis
-    # existence check never matched it anyway.
     conns = cmds.listConnections(node, s=True, d=False, p=True, c=True) or []
     connected = {conns[i].split('.', 1)[-1] for i in range(0, len(conns), 2)}
     if locked is None:
         locked = cmds.listAttr(node, locked=True) or []
     locked = set(locked)
 
-    # Nothing driven and already at identity: every channel holds its
-    # default, so the twelve value writes below would all be no-ops. Only
-    # the unlock is still owed - callers rely on it (falloff_rotation
-    # connects to an SDK group's rotate, which fails on a locked plug) - and
-    # that is an API write, not a command. See opm(): this is the common
-    # case, because a freshly created group is at identity and create_group
-    # locks its channels.
     if not connected:
         if local_matrix is None:
             local_matrix = om.MMatrix(cmds.xform(node, q=1, m=1, os=1))
         if local_matrix.isEquivalent(IDENTITY_MATRIX):
             if unlock and locked:
-                # jointOrient is passed unconditionally: a node that does
-                # not have it costs nothing to skip (see set_channel_flags),
-                # which saves asking whether this is a joint
+                # jointOrient is passed whether or not this is a joint: a
+                # node without it costs nothing to skip (set_channel_flags),
+                # which is cheaper than asking
                 set_channel_flags(node, ['translate', 'rotate', 'scale',
                                          'jointOrient'],
                                   l=False, compound=True)
@@ -928,11 +911,9 @@ def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
     if cmds.objectType(node, i='joint'):
         attributes.append('jointOrient')
 
-    # One API pass unlocks every channel and its compound parent, replacing
-    # a setAttr(l=0) per plug and the getAttr that had to follow it to catch
-    # a plug still locked through its compound. A plug that stays locked
-    # anyway (referenced node) now shows up as the setAttr below failing,
-    # which is handled the same way: skip it.
+    # One API pass unlocks every channel and its compound parent. A plug
+    # that stays locked anyway - a referenced node - surfaces as the setAttr
+    # below failing, and is skipped there.
     if unlock and locked:
         set_channel_flags(node, attributes, l=False, compound=True)
 
@@ -941,11 +922,10 @@ def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
         for axis in 'XYZ':
             attr = f"{attribute}{axis}"
             plug = f"{node}.{attr}"
-            # A lock or connection on the compound parent also blocks the
-            # child plug: a constraint drives '.translate', which reports as
-            # 'translate' here, never 'translateX'. Both names must be
-            # checked or the plug looks free and setAttr raises
-            # "locked or connected".
+            # A lock or connection on the compound parent blocks the child
+            # plug too, and reports under the parent's name: a constraint
+            # driving '.translate' never shows up as 'translateX'. Both
+            # names are checked, or the plug looks free and setAttr raises.
             maybe_locked = attr in locked or attribute in locked
             maybe_connected = attr in connected or attribute in connected
             if unlock:
@@ -963,7 +943,22 @@ def reset_transforms(node, unlock=True, local_matrix=None, locked=None):
 
 def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, unlock=True):
     """
-    Match transforms from source to target.
+    Move source onto target and bake the result into offsetParentMatrix.
+
+    With moc, source's children keep their world positions across the move.
+    They cannot simply be left alone - reparenting is what holds them, so
+    they are parked under a temporary group placed at the target, then
+    returned. Three paths, cheapest first:
+
+        no children      - nothing to hold, so just match and bake
+        already matching - no move happens, so nothing needs holding either
+        otherwise        - the full park-and-return
+
+    The middle path is what makes an FK rebuild cheap. A full teardown
+    deletes the SDK stack, so create_sdk_groups meets empty groups and takes
+    the first path; a light teardown keeps the stack, so its groups arrive
+    already nested and already placed, and would otherwise pay to protect
+    children against a move that never comes.
 
     Arguments:
         source (str): Source node to modify
@@ -984,48 +979,28 @@ def match_transform(source, target, pos=False, rot=False, scl=False, moc=False, 
     if unlock:
         disconnect_all(source, source=True)
     if moc:
-        # Children are tracked by UUID and their path re-read before each
-        # use. No name survives this stretch reliably: reparenting renames
-        # on a name clash and the ungroup below moves the node again, so a
-        # stored name can come back pointing at a different node, or none
         src_children = cmds.listRelatives(source, typ='transform', f=True) or []
         if not src_children:
-            # Nothing to hold in place, so the maintain-offset dance (temp
-            # group, re-parent every child out and back, ungroup) is pure
-            # overhead. The build hits this constantly: create_sdk_groups
-            # matches every SDK group the moment it is created, while it
-            # is still empty.
             apply_transform(source, target, pos, rot, scl)
             opm(source)
             return
         src_matrix = om.MMatrix(cmds.xform(source, q=1, m=1, ws=1))
         if src_matrix.isEquivalent(om.MMatrix(cmds.xform(target, q=1, m=1, ws=1))):
-            # Already where it is being asked to go, so there is no move for
-            # the children to be held against: the dance would re-parent
-            # every one of them out and back to protect them from nothing.
-            # Skip the move as well as the protection - a source that does
-            # not move cannot move its children, whereas re-issuing
-            # matchTransform re-introduces exactly the risk the dance
-            # exists to cover. opm() still runs, because baking local into
-            # offsetParentMatrix leaves the world matrix alone and is the
-            # rest of what this call is for.
-            #
-            # This is the whole of the light-teardown path in
-            # create_sdk_groups. A full teardown deletes the SDK stack
-            # (cleanup.restore_fk_joint_chain), so each group is re-created
-            # empty and takes the childless path above. A light teardown
-            # keeps the stack, so every group arrives already nested,
-            # already positioned, and holding the next layer as a child -
-            # ~20 commands of dance each, over (NUM_CTRL_FK + 1) groups per
-            # joint per rig part, ~2,400 of them on a 12-part build. That is
-            # where the light path's +12.2s over the full path goes.
+            # The move is skipped along with the protection: a source that
+            # stays put cannot carry its children anywhere, while re-issuing
+            # matchTransform would reintroduce the very risk the parking
+            # exists to cover. The bake still runs - it preserves the world
+            # matrix, so the children are unaffected by it either.
             logger.trace(f"'{source}' already matches '{target}', nothing to move")
             opm(source)
             return
+        # Children are tracked by UUID and their path re-read before each
+        # use: no name survives this stretch reliably, since reparenting
+        # renames on a clash and the ungroup below moves the node again, so
+        # a stored name can come back pointing at a different node or none.
         child_uids = cmds.ls(src_children, uuid=True)
-        # createNode, not cmds.group(em=True): the same empty transform at
-        # the world origin for a sixth of the cost (0.13ms against 0.76ms),
-        # and this runs per node in the maintain-offset path
+        # createNode over cmds.group(em=True) - the same empty transform at
+        # the origin for a sixth of the cost, once per node down this path
         tmp_grp = cmds.createNode('transform', n=f"{source}_tmp", ss=1)
         apply_transform(tmp_grp, target, pos, rot, scl)
 
