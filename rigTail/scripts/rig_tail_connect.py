@@ -452,15 +452,19 @@ def connect_fk(rigname, fk, ik):
     if ik:
         fk_skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP, rt_constants.TYPE_FK)
         rt_maya.parent_to(fkjnt_grp, fk_skeleton_grp)
-
-        for i in range(rt_constants.NUM_CTRL_FK):
-            fk_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, '', i+1)
-            add_proxy_attributes_to_controls(rigname, fk_ctrl, rt_constants.TYPE_FK)
-
         setup_switch_fk(rigname, fkroot_grp, fkjnt_grp)
     else:
         skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP)
         rt_maya.parent_to(fkjnt_grp, skeleton_grp)
+
+    # Proxies on the varFK controls in EITHER mode, not only alongside IK.
+    # Stretch is no longer IK-only, so an FK-only rig needs its Stretch /
+    # Squash / Preserve Volume dials on the controls the animator actually
+    # holds. The IKFK half of the proxy set drops out on its own when
+    # there is no switch to proxy.
+    for i in range(rt_constants.NUM_CTRL_FK):
+        fk_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, '', i+1)
+        add_proxy_attributes_to_controls(rigname, fk_ctrl, rt_constants.TYPE_FK)
 
 def connect_spline_fk(rigname):
     curve_fk = rt_naming.fstr(rigname, rt_constants.CURVE, rt_constants.TYPE_FK)
@@ -664,10 +668,16 @@ def add_proxy_attributes_to_controls(rigname, control, typ):
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
 
+    # The switch lives on the cog and only exists when IK is built. An
+    # FK-only rig has no mode to switch to, so proxying it would point at
+    # a missing attribute - skip the whole section rather than leave a
+    # divider labelling nothing.
     ikfk_switch = rt_naming.fstr(rigname, rt_constants.IKFK)
-    rt_maya.add_attribute_enum(control, rt_constants.IKFK_DIVIDER[0], rt_constants.IKFK_DIVIDER[1], rt_constants.IKFK_DIVIDER[2])
-    rt_maya.add_attribute_enum(control, rt_constants.IKFK_SWITCH[0], rt_constants.IKFK_SWITCH[1],
-                       pxy=f'{cog_ctrl}.{ikfk_switch}')
+    if cmds.objExists(cog_ctrl) and \
+            cmds.attributeQuery(ikfk_switch, n=cog_ctrl, ex=1):
+        rt_maya.add_attribute_enum(control, rt_constants.IKFK_DIVIDER[0], rt_constants.IKFK_DIVIDER[1], rt_constants.IKFK_DIVIDER[2])
+        rt_maya.add_attribute_enum(control, rt_constants.IKFK_SWITCH[0], rt_constants.IKFK_SWITCH[1],
+                           pxy=f'{cog_ctrl}.{ikfk_switch}')
 
     # STRETCH proxies always come before TWIST proxies
     if rt_constants.EFFECTS['stretchy']:

@@ -217,8 +217,10 @@ class RigTailUI(QtWidgets.QDialog):
             'along the chain) for direct per-joint rotation, on top of '
             'the variable-FK sliding controls. Requires FK.')
         self.chk_stretchy.setToolTip(
-            'Build the squash & stretch network. Requires IK: the '
-            'stretch nodes read the ikfk switch attribute.')
+            'Build the squash & stretch network, in whichever of FK/IK '
+            'is built. The Stretch slider works the same in both; IK '
+            'additionally stretches on its own as the controls pull the '
+            'curve, which variable FK has no equivalent of.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         self.style_checkbox(self.chk_indiv_fk, sub=True)
@@ -573,9 +575,9 @@ class RigTailUI(QtWidgets.QDialog):
         read only at build time - so they reset on reopen. Called from
         closeEvent so any close persists them, not only a build.
 
-        Conditioned the same way as the build: stretchy needs IK (its
-        network reads the ikfk switch attribute), and individual FK needs
-        FK, so an unreachable combination is never stored.
+        Conditioned the same way as the build: individual FK needs FK, so
+        an unreachable combination is never stored. Stretchy has no such
+        condition - it builds against whichever chains are built.
         '''
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
@@ -591,7 +593,7 @@ class RigTailUI(QtWidgets.QDialog):
         rt_constants.KEEP_WEIGHTS = self.chk_keep.isChecked()
         rt_constants.MAIN_CONTROLLER = self.chk_main.isChecked()
         rt_constants.EFFECTS = {
-            'stretchy': self.chk_stretchy.isChecked() and ik,
+            'stretchy': self.chk_stretchy.isChecked(),
             'wave': self.chk_wave.isChecked(),
             'curl': self.chk_curl.isChecked(),
             'noise': self.chk_noise.isChecked(),
@@ -672,8 +674,6 @@ class RigTailUI(QtWidgets.QDialog):
         Enforce build mode rules:
         - At least one of FK/IK stays checked (unchecking the last one
           is reverted).
-        - Stretchy requires IK: the stretch network reads the ikfk
-          switch attribute, which only exists when IK is built.
         - IKFK_MODES follows the build options: IK-only drops 'FK' from
           the switch modes, re-checking FK restores it (the same check
           also runs at build time in setup_rig).
@@ -686,9 +686,8 @@ class RigTailUI(QtWidgets.QDialog):
                 sender.blockSignals(False)
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
-        self.chk_stretchy.setEnabled(ik)
-        if not ik:
-            self.chk_stretchy.setChecked(False)
+        # Stretchy is not gated: it builds against FK, IK or both, and one
+        # of the two is always checked.
         # Individual FK controls require FK
         self.chk_indiv_fk.setEnabled(fk)
         if not fk:
@@ -700,10 +699,9 @@ class RigTailUI(QtWidgets.QDialog):
         '''
         Keep Weights only decides what happens to the weights on a mesh
         the build is about to touch, so it greys out when Bind Geometry is
-        off. Deliberately NOT unchecked with it (unlike Stretchy, which
-        cannot be built without IK): the setting is inert here, not
-        invalid, and clearing it would quietly rewrite the answer for the
-        next build that turns binding back on.
+        off. Deliberately NOT unchecked with it: the setting is inert
+        here, not invalid, and clearing it would quietly rewrite the
+        answer for the next build that turns binding back on.
         '''
         self.chk_keep.setEnabled(checked)
 

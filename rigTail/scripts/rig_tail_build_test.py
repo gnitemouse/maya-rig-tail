@@ -23,6 +23,7 @@ Usage:
     rt_build_test.test_wave() / rt_build_test.test_curl()
     rt_build_test.test_time_evaluation()  # time-varying FX across frames
     rt_build_test.test_twist_roll_offset('C_fintail')        # twist/roll/offset in FK and IK (MUTATES)
+    rt_build_test.test_stretch('C_fintail')                  # Stretch lengthens, equally in FK and IK (MUTATES)
     rt_build_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
     rt_build_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
     rt_build_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
@@ -1632,6 +1633,134 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
 
     if failures:
         print(f'  not wired: {", ".join(failures)}')
+    print('RESULT:', 'PASS' if ok else 'FAIL')
+    return ok
+
+
+def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
+    '''
+    Verify the Stretch slider lengthens the BN chain in EVERY IKFK mode,
+    and by the SAME amount in each (MUTATES, restores what it touches).
+
+    Three things this is here to catch, all of which have been wrong:
+
+      inert     FK stretch used to seed its per-joint multiply from an SDK
+                group's translateX, which create_sdk_groups leaves at zero
+                because it bakes the rest offset into offsetParentMatrix.
+                The whole network evaluated to 0 * ratio and nothing moved,
+                silently - no error, no warning. A length check is the only
+                thing that sees it.
+      mismatch  FK used to double the slider before adding it to the base
+                ratio, so one dial value stretched FK twice as far as IK
+                and a mode switch with stretch dialled in would pop.
+      not rest  at slider 0 the chain must sit exactly where it was built.
+                FK writes a DELTA onto a channel whose rest is 0, so a
+                regression to absolute values shows up here as a chain that
+                is wrong before anything is dialled at all.
+
+    Measured as the summed distance between consecutive BN joints, which
+    is what 'the tail got longer' means regardless of which mode's network
+    produced it. IK's reactive term is not exercised: the controls are left
+    where they are, so its curve keeps its rest length and only the slider
+    contributes - the term the two modes are supposed to share.
+
+    Arguments
+        rigname (str): Rig part to test
+        amount (float): Stretch dial value to sweep to
+        tolerance (float): Allowed relative difference between modes
+
+    Return
+        bool: True if every mode stretched, and all modes agreed
+    '''
+    print(f'\n=== STRETCH CHECK: {rigname} ===\n')
+
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    if not cmds.objExists(basectrl):
+        print(f'  x basectrl {basectrl} not found - build the rig first')
+        return False
+    if not cmds.attributeQuery('stretch', n=basectrl, ex=1):
+        print(f'  x no stretch attribute on {basectrl} - built without '
+              f'Stretchy?')
+        return False
+    bn = rt_constants.JOINTS_BN.get(rigname) or []
+    if len(bn) < 3:
+        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        return False
+
+    def _eval():
+        t = cmds.currentTime(q=1)
+        cmds.currentTime(t + 0.01, e=1)
+        cmds.currentTime(t, e=1)
+
+    def _length():
+        '''Summed distance along the BN chain.'''
+        pos = [cmds.xform(j, q=1, ws=1, t=1) for j in bn]
+        return sum(
+            sum((pos[i + 1][k] - pos[i][k]) ** 2 for k in range(3)) ** 0.5
+            for i in range(len(pos) - 1))
+
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
+    has_switch = (cmds.objExists(cog_ctrl)
+                  and cmds.attributeQuery(ikfk_attr, n=cog_ctrl, ex=1))
+    modes = list()
+    if has_switch:
+        enum = cmds.attributeQuery(ikfk_attr, n=cog_ctrl, le=1)[0].split(':')
+        modes = [(name, i) for i, name in enumerate(enum)]
+    else:
+        modes = [('(single mode)', None)]
+
+    saved_mode = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}') if has_switch else None
+    plug = f'{basectrl}.stretch'
+    saved_stretch = cmds.getAttr(plug)
+    if cmds.listConnections(plug, s=1, d=0, p=1):
+        print(f'  x {plug} is driven by a connection - drive the dashboard '
+              f'ALL value instead')
+        return False
+
+    ok = True
+    grew = dict()
+    for mode_name, mode_val in modes:
+        if mode_val is not None:
+            cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', mode_val)
+        cmds.setAttr(plug, 0)
+        _eval()
+        rest = _length()
+        cmds.setAttr(plug, amount)
+        _eval()
+        stretched = _length()
+
+        delta = stretched - rest
+        ratio = stretched / rest if rest > 1e-6 else 0.0
+        good = delta > 1e-4
+        if not good:
+            ok = False
+        grew[mode_name] = delta
+        print(f'  {mode_name:12s} rest={rest:8.3f}  stretched={stretched:8.3f}'
+              f'  x{ratio:5.3f}  {"OK" if good else "x DID NOT STRETCH"}')
+
+    # Every mode should have grown by the same amount: the slider term is
+    # shared, and the reactive term is not exercised here.
+    if len(grew) > 1 and ok:
+        biggest = max(grew.values())
+        smallest = min(grew.values())
+        spread = (biggest - smallest) / biggest if biggest > 1e-6 else 0.0
+        agree = spread <= tolerance
+        if not agree:
+            ok = False
+            worst = max(grew, key=grew.get)
+            least = min(grew, key=grew.get)
+            print(f'\n  x modes disagree by {spread * 100:.1f}%: '
+                  f"'{worst}' grew {biggest:.3f}, '{least}' grew "
+                  f'{smallest:.3f}')
+        else:
+            print(f'\n  modes agree within {spread * 100:.1f}%')
+
+    cmds.setAttr(plug, saved_stretch)
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
+    _eval()
+
     print('RESULT:', 'PASS' if ok else 'FAIL')
     return ok
 
