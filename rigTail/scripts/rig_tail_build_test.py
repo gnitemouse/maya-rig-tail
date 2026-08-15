@@ -1642,27 +1642,23 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
     Verify the Stretch slider lengthens the BN chain in EVERY IKFK mode,
     and by the SAME amount in each (MUTATES, restores what it touches).
 
-    Three things this is here to catch, all of which have been wrong:
+    Three failures this is placed to catch:
 
-      inert     FK stretch used to seed its per-joint multiply from an SDK
-                group's translateX, which create_sdk_groups leaves at zero
-                because it bakes the rest offset into offsetParentMatrix.
-                The whole network evaluated to 0 * ratio and nothing moved,
-                silently - no error, no warning. A length check is the only
-                thing that sees it.
-      mismatch  FK used to double the slider before adding it to the base
-                ratio, so one dial value stretched FK twice as far as IK
-                and a mode switch with stretch dialled in would pop.
-      not rest  at slider 0 the chain must sit exactly where it was built.
-                FK writes a DELTA onto a channel whose rest is 0, so a
-                regression to absolute values shows up here as a chain that
-                is wrong before anything is dialled at all.
+      inert     a per-joint multiply seeded from a channel that holds no
+                rest length evaluates to zero times the ratio and moves
+                nothing, with no error and no warning. Measuring the chain
+                is the only thing that sees it.
+      mismatch  a mode scaling the dial differently from the others makes
+                a switch pop whenever stretch is dialled in.
+      not rest  FK writes a delta onto a channel whose rest is 0, so an
+                absolute value there shows up as a chain already wrong
+                before anything is dialled.
 
-    Measured as the summed distance between consecutive BN joints, which
-    is what 'the tail got longer' means regardless of which mode's network
-    produced it. IK's reactive term is not exercised: the controls are left
-    where they are, so its curve keeps its rest length and only the slider
-    contributes - the term the two modes are supposed to share.
+    Measured as the summed distance between consecutive BN joints, which is
+    what 'the tail got longer' means whichever mode's network produced it.
+    IK's reactive term stays out of it: the controls are left where they
+    are, so its curve holds its rest length and only the slider contributes
+    - the term both modes share.
 
     Arguments
         rigname (str): Rig part to test

@@ -457,11 +457,10 @@ def connect_fk(rigname, fk, ik):
         skeleton_grp = rt_naming.fstr('', rt_constants.SKELETON_GRP)
         rt_maya.parent_to(fkjnt_grp, skeleton_grp)
 
-    # Proxies on the varFK controls in EITHER mode, not only alongside IK.
-    # Stretch is no longer IK-only, so an FK-only rig needs its Stretch /
-    # Squash / Preserve Volume dials on the controls the animator actually
-    # holds. The IKFK half of the proxy set drops out on its own when
-    # there is no switch to proxy.
+    # Stretch builds against whichever chains are built, so an FK-only rig
+    # needs its Stretch / Squash / Preserve Volume dials on the controls
+    # the animator holds. The IKFK half of the proxy set drops out on its
+    # own when there is no switch to point at.
     for i in range(rt_constants.NUM_CTRL_FK):
         fk_ctrl = rt_naming.fstr(rigname, rt_constants.CONTROL, '', i+1)
         add_proxy_attributes_to_controls(rigname, fk_ctrl, rt_constants.TYPE_FK)
