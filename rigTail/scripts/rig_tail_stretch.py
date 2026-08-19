@@ -11,10 +11,20 @@ stretch ratio and drives two outputs from it:
 The ratio is the tail curve's current length over its rest length. IK
 derives it live from a curveInfo (the rest length is cached once so
 rebuilding while posed doesn't adopt a stretched rest); FK is slider-
-only. A 'stretch' slider adds on top and the result is clamped. Length
-multiplies each joint's rest translateX; Thickness uses ratio^-0.5
-(the taffy rule), blended by 'preserveVolume', trimmed by 'squash',
-divided out by global scale, and scaled per joint by 'jntScaleYZ'.
+only, and deliberately so - nothing in variable FK pulls the tip, so
+there is no goal length to react to. A 'stretch' slider adds on top,
+scaled the same way in both modes, and the result is clamped.
+
+Length scales each joint's rest bone offset by the ratio. IK writes
+that absolutely onto the joint's own translate. FK cannot: its joints
+hang from SDK groups whose offsetParentMatrix already carries the rest
+offset, so it adds (ratio - 1) times that offset on the translate
+channel instead, which sums to the same thing and leaves an untouched
+slider at the rig's built rest state.
+
+Thickness uses ratio^-0.5 (the taffy rule), blended by
+'preserveVolume', trimmed by 'squash', divided out by global scale,
+and scaled per joint by 'jntScaleYZ'.
 
 Architecture notes:
   - Build/connect split: build_stretch() runs early and only creates
@@ -33,6 +43,9 @@ Functions:
         fallback_curve_length: Joint-distance fallback when curve fails
         remap_stretch_attr / create_stretch / create_squash /
         create_world_scale / create_joint_mult: network pieces
+        fk_stretch_delta: Name of the FK (ratio - 1) node
+        sdk_rest_offset: Rest bone offset out of an SDK group's OPM
+        driven_source: Whether a plug's driver is itself driven
     Connect phase (called from rig_tail_connect):
         add_stretch_attributes_to_basectrl: stretch/squash/preserveVolume
         add_jntscale_attributes_to_basectrl: per-joint jntScaleYZ sliders
@@ -135,8 +148,10 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
         stretch_ratio = f'{rt_constants.TYPE_IK}_{rigname}_stretch_ratio'
         connect_ik_stretch_to_joints(rigname, rt_constants.JOINTS_IK[rigname], stretch_ratio, rt_constants.TYPE_IK)
     if fk:
-        stretch_ratio = f'{rt_constants.TYPE_FK}_{rigname}_stretch_ratio'
-        connect_fk_stretch_to_joints(rigname, rt_constants.JOINTS_FK[rigname], stretch_ratio, rt_constants.TYPE_FK)
+        # The DELTA, not the ratio: FK adds to a rest offset already held
+        # in the SDK group's offsetParentMatrix
+        stretch_delta = fk_stretch_delta(rigname, rt_constants.TYPE_FK)
+        connect_fk_stretch_to_joints(rigname, rt_constants.JOINTS_FK[rigname], stretch_delta, rt_constants.TYPE_FK)
 
 def add_stretch_attributes_to_basectrl(rigname, basectrl):
     if not rt_constants.EFFECTS['stretchy']:
@@ -166,6 +181,84 @@ def add_jntscale_attributes_to_basectrl(rigname, basectrl):
 
 
 # CREATE NODES =========================================================
+
+def fk_stretch_delta(rigname, typ=rt_constants.TYPE_FK):
+    '''
+    Name of the node carrying (stretch ratio - 1) for the FK chain.
+
+    Both phases resolve the node through here so the build and connect
+    sides cannot drift apart on a rename.
+
+    Arguments
+        rigname (str): Name of rig component
+        typ (str): Rig type identifier (TYPE_FK)
+
+    Return
+        str: plusMinusAverage node name
+    '''
+    return f'{typ}_{rigname}_stretch_delta_plusMinusAverage'
+
+
+def driven_source(plug):
+    '''
+    Whether plug is fed by a node that is itself fed.
+
+    A node left behind by a rebuild that dropped its mode still answers
+    objExists and still holds a connection, so plain existence cannot tell
+    a live driver from a stale one. Reading one step further up does: the
+    stretch ratios all sit downstream of something, and an orphan has
+    nothing above it.
+
+    Arguments
+        plug (str): Destination plug to inspect
+
+    Return
+        bool: True when plug's source node has an input of its own
+    '''
+    src = cmds.listConnections(plug, s=True, d=False) or []
+    if not src:
+        return False
+    return bool(cmds.listConnections(src[0], s=True, d=False, skipConversionNodes=False))
+
+
+def sdk_rest_offset(sdk_grp):
+    '''
+    An SDK group's rest bone offset, expressed in its OWN local frame.
+
+    create_sdk_groups bakes each FK joint's rest transform into the top
+    SDK group's offsetParentMatrix and leaves the local channels at zero,
+    so the bone length is in that matrix rather than in translateX. This
+    reads it back in the units the translate channel is in.
+
+    The frame change is what makes a curved rest pose stretch correctly.
+    offsetParentMatrix carries the joint's ORIENTATION as well as its
+    offset, and a local translate is applied before it, so a raw
+    (length, 0, 0) would push the joint along the CHILD joint's aim axis
+    instead of along the bone. Rotating the offset into the local frame
+    cancels that. On a straight chain the rotation is identity and this
+    returns (length, 0, 0).
+
+    Dividing by each basis row's squared length also absorbs any scale
+    baked into the matrix, rather than mis-scaling the result by it.
+
+    Arguments
+        sdk_grp (str): SDK group whose offsetParentMatrix holds the rest
+
+    Return
+        list or None: [x, y, z] in the group's local frame, or None when a
+            basis row is degenerate (a zero-length bone, which no ratio
+            can stretch)
+    '''
+    mtx = cmds.getAttr(f'{sdk_grp}.offsetParentMatrix')
+    trans = mtx[12:15]
+    rest = list()
+    for row in (mtx[0:3], mtx[4:7], mtx[8:11]):
+        sqlen = row[0]*row[0] + row[1]*row[1] + row[2]*row[2]
+        if sqlen < 1e-12:
+            return None
+        rest.append((trans[0]*row[0] + trans[1]*row[1] + trans[2]*row[2]) / sqlen)
+    return rest
+
 
 def remap_stretch_attr(rigname):
     '''
@@ -267,23 +360,26 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
 
     elif typ == rt_constants.TYPE_FK:
-        # FK: Direct multiplier from stretch attribute
+        # Slider only. Nothing in variable FK pulls the tip, so there is no
+        # goal length to react to, and the FK curveInfo cannot supply one:
+        # that curve is skinned to the FK joints, so a length driving the
+        # stretch would be measuring what the stretch moved.
 
-        # (multiplyDivide) double user stretch
-        stretch_mult = f'{typ}_{rigname}_stretch_double_multiplyDivide'
-        if not cmds.objExists(stretch_mult):
-            cmds.createNode('multiplyDivide', n=stretch_mult, s=1, ss=1)
-        cmds.setAttr(f'{stretch_mult}.operation', 1)  # multiply
-        cmds.setAttr(f'{stretch_mult}.input1X', 2)
-        cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_mult}.input2X', f=1)
+        # A rebuild can meet a doubling node in this slot with nothing
+        # reading it, which would sit in the graph as an orphan.
+        stretch_double = f'{typ}_{rigname}_stretch_double_multiplyDivide'
+        if cmds.objExists(stretch_double):
+            cmds.delete(stretch_double)
 
-        # (plusMinusAverage) user stretch range - 0 to 2
+        # The remap scales the -10..10 dial to -0.5..0.5, the same term IK
+        # adds to its reactive ratio, so one dial value means one amount of
+        # stretch in either mode.
         stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
         if not cmds.objExists(stretch_pma):
             cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
         cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
         cmds.setAttr(f'{stretch_pma}.input1D[0]', 1)  # Base ratio = 1
-        cmds.connectAttr(f'{stretch_mult}.outputX', f'{stretch_pma}.input1D[1]', f=1)
+        cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_pma}.input1D[1]', f=1)
 
         # (clamp) stretch_ratio
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
@@ -292,6 +388,22 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
         cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
+
+        # The FK rest offset sits in an offsetParentMatrix, so the translate
+        # channel carries only what stretch adds on top: the ratio less its
+        # rest of 1 (see create_joint_mult).
+        #
+        # Read from the CLAMPED ratio and shared by every joint. The clamp
+        # is what bounds how far the tail can stretch, and a delta taken
+        # upstream of it would let length run past a bound that thickness
+        # still obeys.
+        stretch_delta = fk_stretch_delta(rigname, typ)
+        if not cmds.objExists(stretch_delta):
+            cmds.createNode('plusMinusAverage', n=stretch_delta, s=1, ss=1)
+        cmds.setAttr(f'{stretch_delta}.operation', 2)  # subtract
+        cmds.connectAttr(f'{stretch_ratio}.outputR',
+                         f'{stretch_delta}.input1D[0]', f=1)
+        cmds.setAttr(f'{stretch_delta}.input1D[1]', 1)
 
     else:
         abort_build(logger, f'Invalid TYPE {typ}. Choose TYPE_FK or TYPE_IK.')
@@ -323,14 +435,17 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
 
     # (multiplyDivide) squash_vol - Inverse sqrt for volume preservation
     # Shared between FK and IK builds; the IK stretch ratio wins when both
-    # are built (it reacts to curve length, FK's is user-driven only)
+    # are built, since it reacts to curve length where FK's only follows a
+    # slider. FK yields to a LIVE IK ratio only. A rebuild that drops IK
+    # leaves its ratio node behind with nothing driving it, and a clamp
+    # with no input holds its own minimum, which would peg thickness at a
+    # constant and leave the squash dials dead.
     squash_vol = f'{rigname}_squash_volume_multiplyDivide'
     if not cmds.objExists(squash_vol):
         cmds.createNode('multiplyDivide', n=squash_vol, s=1, ss=1)
         cmds.setAttr(f'{squash_vol}.operation', 3)  # power
         cmds.setAttr(f'{squash_vol}.input2X', -0.5)
-    if typ == rt_constants.TYPE_IK or \
-            not cmds.listConnections(f'{squash_vol}.input1X', s=1, d=0):
+    if typ == rt_constants.TYPE_IK or not driven_source(f'{squash_vol}.input1X'):
         cmds.connectAttr(f'{stretch_ratio}.outputR', f'{squash_vol}.input1X', f=1)
 
     # (blendTwoAttr) squash_blend - Blend volume preservation on/off
@@ -398,7 +513,10 @@ def create_joint_mult(rigname, joints, typ):
     Create multiply nodes for each joint.
     These will be connected in connect phase.
 
-    For stretch: multiply joint translateX by stretch_ratio
+    For stretch: scale the joint's rest bone offset. IK multiplies its
+        translateX by the ratio; FK multiplies its whole offset vector by
+        (ratio - 1), because its rest already sits in an SDK group's
+        offsetParentMatrix (see sdk_rest_offset).
     For squash: multiply base squash by per-joint scale attribute
 
     Arguments
@@ -423,16 +541,31 @@ def create_joint_mult(rigname, joints, typ):
             stretch_jnt_mult.append(jnt_mult)
 
     elif typ == rt_constants.TYPE_FK:
+        # The whole rest offset rather than its aim component alone, so a
+        # curved rest pose stretches along the bone (see sdk_rest_offset).
+        # The multiply therefore runs on all three channels.
         for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
             jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
-            first_sdk = rt_naming.fstr(rigname, rt_constants.SDK_GRP, typ, i, 1)
+            # SDK groups are named for the joint's OWN number
+            # (create_sdk_groups), which matches its position in the list
+            # only on a chain numbered from zero.
+            NN = rt_naming.get_index_from_name(jnt)
+            first_sdk = rt_naming.fstr(rigname, rt_constants.SDK_GRP, typ, NN, 1)
             if not cmds.objExists(jnt_mult):
                 cmds.createNode('multiplyDivide', n=jnt_mult, s=1, ss=1)
                 cmds.setAttr(f'{jnt_mult}.operation', 1)  # multiply
-            if cmds.objExists(first_sdk):
-                cmds.setAttr(f'{jnt_mult}.input1X', cmds.getAttr(f'{first_sdk}.translateX'))
-            else:
+            if not cmds.objExists(first_sdk):
                 logger.warning(f'SDK group {first_sdk} does not exist')
+                stretch_jnt_mult.append(jnt_mult)
+                continue
+            rest = sdk_rest_offset(first_sdk)
+            if rest is None:
+                # A zero multiply holds the joint at its rest length rather
+                # than scaling an offset with no direction to scale along
+                logger.warning(f"'{first_sdk}' has a degenerate rest "
+                               f"offset; '{jnt}' will not stretch")
+                rest = (0, 0, 0)
+            cmds.setAttr(f'{jnt_mult}.input1', *rest, type='double3')
             stretch_jnt_mult.append(jnt_mult)
 
     # Squash multiply nodes
@@ -564,24 +697,40 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
         # Connect to joint translateX
         cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.translateX', f=1)
 
-def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
+def connect_fk_stretch_to_joints(rigname, joints, stretch_delta, typ):
     '''
     Connect FK stretch to SDK groups.
 
+    Each joint's multiply holds its rest bone offset in the SDK group's
+    local frame (create_joint_mult). Multiplying by (ratio - 1) and writing
+    to translate ADDS to the rest the group's offsetParentMatrix already
+    contributes, landing the joint at rest * ratio - where IK puts it, by a
+    different route because FK has no joint translate of its own to
+    overwrite.
+
+    A delta rather than an absolute is what keeps an untouched slider free:
+    at ratio 1 the channel sits at 0, its built rest, so the network stays
+    inert and a rebuild over a stretched rig cannot read the pose as rest.
+
+    Joint 0 is skipped, as in IK, which also leaves its translate to the
+    'offset' dial driving the same channel one layer up (see
+    rig_tail_fk.connect_twist_roll).
+
     Arguments
         rigname (str): Name of rig component
-        joints (list): List of joint names to apply squash to
-        stretch_ratio (str): Stretch ratio multiplier
-        typ (str): Rig type identifier (TYPE_IK, TYPE_FK)
+        joints (list): List of joint names to apply stretch to
+        stretch_delta (str): Stretch delta node, (ratio - 1)
+        typ (str): Rig type identifier (TYPE_FK)
     '''
     logger.trace(f"{rigname}: Connect FK stretch to SDK groups")
 
-    if not cmds.objExists(stretch_ratio):
-        abort_build(logger, f'Stretch ratio node not found: {stretch_ratio}')
+    if not cmds.objExists(stretch_delta):
+        abort_build(logger, f'Stretch delta node not found: {stretch_delta}')
 
     for i, jnt in enumerate(joints[1:], 1):  # Skip first joint
         jnt_mult = f'{typ}_{rigname}_stretch_{i:02d}_multiplyDivide'
-        first_sdk = rt_naming.fstr(rigname, rt_constants.SDK_GRP, typ, i, 1)
+        NN = rt_naming.get_index_from_name(jnt)
+        first_sdk = rt_naming.fstr(rigname, rt_constants.SDK_GRP, typ, NN, 1)
         if not cmds.objExists(jnt_mult):
             logger.warning(f'Joint multiply node not found: {jnt_mult}')
             continue
@@ -589,10 +738,20 @@ def connect_fk_stretch_to_joints(rigname, joints, stretch_ratio, typ):
             logger.warning(f'SDK group not found: {first_sdk}')
             continue
 
-        # Connect stretch ratio to multiply node
-        cmds.connectAttr(f'{stretch_ratio}.outputR', f'{jnt_mult}.input2X', f=1)
-        # Connect to SDK group translateX
-        cmds.connectAttr(f'{jnt_mult}.outputX', f'{first_sdk}.translateX', f=1)
+        for axis in 'XYZ':
+            cmds.connectAttr(f'{stretch_delta}.output1D',
+                             f'{jnt_mult}.input2{axis}', f=1)
+
+        # Maya refuses a compound connection while a child plug is driven,
+        # and force does not cover it, so a rig holding translateX alone
+        # needs its children cleared. break_connection also unlocks, which
+        # is the state create_group leaves them in.
+        for axis in 'XYZ':
+            rt_maya.break_connection(f'{first_sdk}.translate{axis}')
+
+        # The rest offset is a vector in this group's frame, not a length
+        # on the aim axis, so all three channels carry it
+        cmds.connectAttr(f'{jnt_mult}.output', f'{first_sdk}.translate', f=1)
 
 
 # MEASURE CURVE LENGTH =================================================

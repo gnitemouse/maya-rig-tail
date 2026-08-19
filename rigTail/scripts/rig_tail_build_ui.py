@@ -130,9 +130,8 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_config.setToolTip(
-            'Config file currently in effect (Default = built-in '
-            'defaults). Type a path and press Enter to load it '
-            'directly; Load/Save Config update it too.')
+            'Config file in effect (Default = built-in). Type a path and '
+            'press Enter to load it; Load/Save Config update it too.')
         self.txt_config.returnPressed.connect(self.load_config_from_text)
         config_file_layout.addWidget(lbl_config)
         config_file_layout.addWidget(self.txt_config)
@@ -207,18 +206,18 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_fk.toggled.connect(self.on_build_mode_changed)
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.chk_fk.setToolTip(
-            'Build the FK chain: variable-FK sliding controls with '
-            'rotation falloff. At least one of FK/IK must stay checked.')
+            'A few controls that slide along the tail, each bending the '
+            'joints within its falloff. One of FK/IK must stay checked.')
         self.chk_ik.setToolTip(
-            'Build the IK chain: spline IK with clusters, plus IK and '
-            'Float control modes. At least one of FK/IK must stay checked.')
+            'Spline IK driven by cluster controls, giving the SplineIK, '
+            'IK and Float modes. One of FK/IK must stay checked.')
         self.chk_indiv_fk.setToolTip(
-            'Also build an individual FK control at each joint (nested '
-            'along the chain) for direct per-joint rotation, on top of '
-            'the variable-FK sliding controls. Requires FK.')
+            'A control at every joint for direct rotation, alongside the '
+            'sliding FK controls. Requires FK.')
         self.chk_stretchy.setToolTip(
-            'Build the squash & stretch network. Requires IK: the '
-            'stretch nodes read the ikfk switch attribute.')
+            'Squash and stretch dials for whichever chains are built. IK '
+            'also stretches on its own as its controls pull the curve; '
+            'variable FK follows the slider only.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         self.style_checkbox(self.chk_indiv_fk, sub=True)
@@ -255,17 +254,14 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_noise.setChecked(False)
         self.chk_loop.setChecked(False)
         self.chk_wave.setToolTip(
-            'Add animatable wave attributes: a traveling sine ripple '
-            'along the tail (amplitude/frequency per axis).')
+            'A travelling sine ripple along the tail, with amplitude and '
+            'frequency per axis.')
         self.chk_curl.setToolTip(
-            'Add animatable curl attributes: roll the tail up around '
-            'its base (curl X/Y/Z).')
+            'Rolls the tail up around its base, per axis.')
         self.chk_noise.setToolTip(
-            'Add animatable noise attributes: random jitter on the '
-            'joints for organic motion.')
+            'Random jitter on the joints, for organic motion.')
         self.chk_loop.setToolTip(
-            'Add a looping time driver so wave/curl/noise effects cycle '
-            'seamlessly over the timeline.')
+            'Cycles wave, curl and noise seamlessly over the timeline.')
         self.style_checkbox(self.chk_wave)
         self.style_checkbox(self.chk_curl)
         self.style_checkbox(self.chk_noise)
@@ -284,25 +280,22 @@ class RigTailUI(QtWidgets.QDialog):
         # Keep Weights only means something once it does, so it reads as
         # the sub-option it is and greys out when binding is off.
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_main = QtWidgets.QCheckBox('All Tail Controls on Cog')
+        self.chk_main = QtWidgets.QCheckBox('All Tails (Attrs on Cog)')
         self.chk_main.setEnabled(len(rt_constants.RIGPARTS) > 1)
         self.chk_main.setToolTip(
             'Drive every tail from one ALL section on the cog, with a '
-            'per-tail Override flag to opt out. Needs 2+ rig parts.')
+            'per-tail Override to opt out. Needs 2+ rig parts.')
         self.chk_bind = QtWidgets.QCheckBox('Bind Geometry')
         self.chk_bind.setToolTip(
             'Bind each mesh named after a rig part to that part\'s BN '
-            'joints. Off leaves the geometry completely alone - nothing '
-            'is bound and nothing is unbound, in the build or in Setup - '
-            'for meshes another department owns, wrap/blendshape setups, '
-            'weights coming from an imported file, or a model that is '
-            'not final. The rig still builds and still drives its joints.')
+            'joints. Off leaves geometry untouched, bound or not, for '
+            'meshes another department owns or a model that is not '
+            'final. The rig still builds and drives its joints.')
         self.chk_keep = QtWidgets.QCheckBox('Keep Weights (skinClusters)')
         self.chk_keep.setToolTip(
-            'Keep existing skinClusters and their painted weights: rig '
-            'joints are added to the cluster (new ones at weight 0) and '
-            'the paint survives. Off unbinds and rebinds from scratch, '
-            'losing the weights. Only applies while Bind Geometry is on.')
+            'Add rig joints to existing skinClusters at weight 0, so '
+            'painted weights survive. Off rebinds from scratch. Only '
+            'applies while Bind Geometry is on.')
         self.chk_bind.toggled.connect(self.on_bind_geometry_changed)
         self.style_checkbox(self.chk_main)
         self.style_checkbox(self.chk_bind)
@@ -573,9 +566,9 @@ class RigTailUI(QtWidgets.QDialog):
         read only at build time - so they reset on reopen. Called from
         closeEvent so any close persists them, not only a build.
 
-        Conditioned the same way as the build: stretchy needs IK (its
-        network reads the ikfk switch attribute), and individual FK needs
-        FK, so an unreachable combination is never stored.
+        Conditioned the same way as the build: individual FK needs FK, so
+        an unreachable combination is never stored. Stretchy has no such
+        condition - it builds against whichever chains are built.
         '''
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
@@ -591,7 +584,7 @@ class RigTailUI(QtWidgets.QDialog):
         rt_constants.KEEP_WEIGHTS = self.chk_keep.isChecked()
         rt_constants.MAIN_CONTROLLER = self.chk_main.isChecked()
         rt_constants.EFFECTS = {
-            'stretchy': self.chk_stretchy.isChecked() and ik,
+            'stretchy': self.chk_stretchy.isChecked(),
             'wave': self.chk_wave.isChecked(),
             'curl': self.chk_curl.isChecked(),
             'noise': self.chk_noise.isChecked(),
@@ -672,8 +665,6 @@ class RigTailUI(QtWidgets.QDialog):
         Enforce build mode rules:
         - At least one of FK/IK stays checked (unchecking the last one
           is reverted).
-        - Stretchy requires IK: the stretch network reads the ikfk
-          switch attribute, which only exists when IK is built.
         - IKFK_MODES follows the build options: IK-only drops 'FK' from
           the switch modes, re-checking FK restores it (the same check
           also runs at build time in setup_rig).
@@ -686,9 +677,8 @@ class RigTailUI(QtWidgets.QDialog):
                 sender.blockSignals(False)
         fk = self.chk_fk.isChecked()
         ik = self.chk_ik.isChecked()
-        self.chk_stretchy.setEnabled(ik)
-        if not ik:
-            self.chk_stretchy.setChecked(False)
+        # Stretchy is not gated: it builds against FK, IK or both, and one
+        # of the two is always checked.
         # Individual FK controls require FK
         self.chk_indiv_fk.setEnabled(fk)
         if not fk:
@@ -700,10 +690,9 @@ class RigTailUI(QtWidgets.QDialog):
         '''
         Keep Weights only decides what happens to the weights on a mesh
         the build is about to touch, so it greys out when Bind Geometry is
-        off. Deliberately NOT unchecked with it (unlike Stretchy, which
-        cannot be built without IK): the setting is inert here, not
-        invalid, and clearing it would quietly rewrite the answer for the
-        next build that turns binding back on.
+        off. Deliberately NOT unchecked with it: the setting is inert
+        here, not invalid, and clearing it would quietly rewrite the
+        answer for the next build that turns binding back on.
         '''
         self.chk_keep.setEnabled(checked)
 
