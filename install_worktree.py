@@ -264,6 +264,7 @@ def _choose_components(branch, module_dir):
         cmds.text(label='Add shelf buttons running Rig Tail from:', align='left')
         cmds.text(label='    branch  {0}'.format(branch), align='left')
         cmds.text(label='    folder  {0}'.format(module_dir), align='left')
+
         cmds.separator(style='in', height=10)
         cmds.text(
             label='Nothing is copied and no module is registered. Your\n'
@@ -272,13 +273,14 @@ def _choose_components(branch, module_dir):
         cmds.separator(style='in', height=10)
 
         boxes = {}
+        boxes[CHAIN] = cmds.checkBox(
+            label='Chain Builder', value=False)
+        boxes[SETUP] = cmds.checkBox(
+            label='Tail Setup', value=False)
         boxes[BUILD] = cmds.checkBox(
             label='Tail Builder', value=True, enable=False)
         boxes[RELOAD] = cmds.checkBox(
-            label='Tail Reload  (modules bound for the Script Editor)',
-            value=True)
-        boxes[SETUP] = cmds.checkBox(label='Tail Setup', value=False)
-        boxes[CHAIN] = cmds.checkBox(label='Joint Chain Builder', value=False)
+            label='Tail Reload', value=True)
         cmds.separator(style='in', height=10)
         cmds.rowLayout(numberOfColumns=2, adjustableColumn=1,
                        columnAttach=(1, 'both', 0))
@@ -316,10 +318,10 @@ def _add_shelf_buttons(icons_dir, tool_dir, branch, selection):
         RELOAD: LAUNCH_RELOAD_COMMAND,
     }
     annotations = {
-        CHAIN: 'Joint Chain Builder',
-        SETUP: 'Tail Setup UI (skeleton orient / mirror)',
-        BUILD: 'Tail Builder UI',
-        RELOAD: 'Reload every module and bind them in the Script Editor',
+        CHAIN: 'Chain Builder UI (space joint chains)',
+        SETUP: 'Tail Setup UI (orient/mirror skeleton)',
+        BUILD: 'Tail Builder UI (build rig)',
+        RELOAD: 'Tail Reload UI (reload modules)',
     }
 
     labels = []
