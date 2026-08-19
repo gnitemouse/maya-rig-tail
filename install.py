@@ -124,16 +124,11 @@ PREAMBLE_TOKEN = '#@TOOL_DIR@'
 PURGE_TOKEN = '#@PURGE@'
 
 # Every launcher purges the whole rig_tail package, not just its own tool's
-# modules.
-#
-# Each tool sits on top of the shared core -- rig_tail_maya, _joint,
-# _naming, _cleanup, _math -- and purging only 'rig_tail_chain' left that
-# core loaded from whenever it was first imported. A core module that gained
-# a function then looked, from the tool, like it had never had one:
-# "module 'rig_tail_maya' has no attribute 'unique_path'", with nothing to
-# suggest a stale import was the cause. Clicking the tool's own button is
-# what an artist does after an update, so that is where the reload has to be
-# complete.
+# modules. Each tool sits on the shared core -- rig_tail_maya, _joint,
+# _naming, _cleanup, _math -- so a partial purge leaves that core at
+# whatever version it was first imported at, and the tool then fails on a
+# core function it cannot see. Clicking a tool's own button is what an
+# artist does after an update, so that is where the reload has to be whole.
 #
 # rig_tail_constants is deliberately kept: it holds the roster and settings
 # for the session, and re-importing it would throw away RIGPARTS edits made
@@ -400,9 +395,8 @@ def _prune_stale(src, dst, keep):
     '''Remove destination files this install no longer covers.
 
     That means files dropped from the source AND files belonging to a shelf
-    button left unticked this time, so re-installing over an older install
-    with fewer buttons clears what was dropped instead of orphaning it.
-
+    button left unticked this time, so re-installing with fewer buttons
+    clears what they owned instead of orphaning it.
     '''
     for dirpath, dirnames, filenames in os.walk(dst):
         if os.path.basename(dirpath) == '__pycache__':
@@ -448,20 +442,20 @@ def _choose_destination(src_dir, modules_dir):
 
         cmds.separator(style='in', height=10)
         cmds.text(
-            label='Only the files the ticked buttons need are copied.\n'
+            label='Only the files the ticked buttons need are copied. '
                   'Installing in place copies nothing at all.',
             align='left')
         cmds.text(
-            label="'Chain Builder' creates and re-spaces joint chains.",
+            label="- 'Chain Builder' creates and re-spaces joint chains.",
             align='left')
         cmds.text(
-            label="'Tail Setup' orients and mirrors the skeleton.",
+            label="- 'Tail Setup' orients and mirrors the skeleton.",
             align='left')
         cmds.text(
-            label="'Tail Builder' builds the rig, and is always installed.",
+            label="- 'Tail Builder' builds the rig, and is always installed.",
             align='left')
         cmds.text(
-            label="'Tail Reload' reloads all modules and binds them in the "
+            label="- 'Tail Reload' reloads all modules and binds them in the "
                   'Script Editor.',
             align='left')
         cmds.separator(style='in', height=10)
