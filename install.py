@@ -35,36 +35,47 @@ scripts: scripts
 icons: icons
 '''
 
-# Shelf icon colours: white=chain, light-grey=setup, dark-grey=build, black=reload.
 SHELF_ICON_CHAIN = 'octopus_white.png'
 SHELF_ICON_SETUP = 'octopus_light_grey.png'
 SHELF_ICON_BUILD = 'octopus_dark_grey.png'
 SHELF_ICON_RELOAD = 'octopus_black.png'
 
-SHELF_ICON_LABEL_CHAIN_BUILD = 'Chain'
-SHELF_ICON_LABEL_SETUP = 'Setup'
-SHELF_ICON_LABEL_BUILD = 'Build'
-SHELF_ICON_LABEL_RELOAD = 'Reload'
-
-SHELF_BUILD_LABEL = 'TailBuild'
-SHELF_SETUP_LABEL = 'TailSetup'
-SHELF_RELOAD_LABEL = 'TailReload'
-SHELF_CHAIN_BUILD_LABEL = 'ChainBuild'
-
-# The four shelf buttons, in the order they appear in the install dialog and
-# on the shelf. BUILD is the tool proper and is never optional.
 CHAIN = 'chain'
 SETUP = 'setup'
 BUILD = 'build'
 RELOAD = 'reload'
 COMPONENTS = (CHAIN, SETUP, BUILD, RELOAD)
 
-SHELF_LABELS = {
-    CHAIN: SHELF_CHAIN_BUILD_LABEL,
-    SETUP: SHELF_SETUP_LABEL,
-    BUILD: SHELF_BUILD_LABEL,
-    RELOAD: SHELF_RELOAD_LABEL,
+TOOL_NAMES = {
+    CHAIN: 'ChainBuild',
+    SETUP: 'TailSetup',
+    BUILD: 'TailBuild',
+    RELOAD: 'TailReload',
 }
+
+OVERLAY_LABELS = {
+    CHAIN: 'Chain',
+    SETUP: 'Setup',
+    BUILD: 'Build',
+    RELOAD: 'Reload',
+}
+
+# One icon per button, and the only icons that install. The _200 variants
+# in icons/ are documentation assets, so leaving them unlisted keeps them
+# out of a copied install.
+COMPONENT_ICONS = {
+    CHAIN: SHELF_ICON_CHAIN,
+    SETUP: SHELF_ICON_SETUP,
+    BUILD: SHELF_ICON_BUILD,
+    RELOAD: SHELF_ICON_RELOAD,
+}
+
+# A black badge behind the overlay text. install_worktree.py uses amber
+# for the same icons, so the two installs stay distinguishable on a shelf
+# carrying both.
+OVERLAY_BACK_COLOR = (0.0, 0.0, 0.0, 1.0)
+OVERLAY_TEXT_COLOR = (1.0, 1.0, 1.0)
+
 
 # Scripts each optional button owns. Anything absent from this table is core
 # -- the Builder's own modules and the shared library beneath them -- and
@@ -99,15 +110,6 @@ COMPONENT_SCRIPTS = {
 OPTIONAL_SCRIPTS = frozenset(
     name for names in COMPONENT_SCRIPTS.values() for name in names)
 
-# One icon per button. The _200 variants in icons/ are documentation assets
-# and never install, so unlisted icons do not ship.
-COMPONENT_ICONS = {
-    CHAIN: (SHELF_ICON_CHAIN,),
-    SETUP: (SHELF_ICON_SETUP,),
-    BUILD: (SHELF_ICON_BUILD,),
-    RELOAD: (SHELF_ICON_RELOAD,),
-}
-
 # Each launcher pins its selected scripts directory ahead of other installs.
 TOOL_DIR_PREAMBLE = '''import sys
 import importlib as il
@@ -122,16 +124,11 @@ PREAMBLE_TOKEN = '#@TOOL_DIR@'
 PURGE_TOKEN = '#@PURGE@'
 
 # Every launcher purges the whole rig_tail package, not just its own tool's
-# modules.
-#
-# Each tool sits on top of the shared core -- rig_tail_maya, _joint,
-# _naming, _cleanup, _math -- and purging only 'rig_tail_chain' left that
-# core loaded from whenever it was first imported. A core module that gained
-# a function then looked, from the tool, like it had never had one:
-# "module 'rig_tail_maya' has no attribute 'unique_path'", with nothing to
-# suggest a stale import was the cause. Clicking the tool's own button is
-# what an artist does after an update, so that is where the reload has to be
-# complete.
+# modules. Each tool sits on the shared core -- rig_tail_maya, _joint,
+# _naming, _cleanup, _math -- so a partial purge leaves that core at
+# whatever version it was first imported at, and the tool then fails on a
+# core function it cannot see. Clicking a tool's own button is what an
+# artist does after an update, so that is where the reload has to be whole.
 #
 # rig_tail_constants is deliberately kept: it holds the roster and settings
 # for the session, and re-importing it would throw away RIGPARTS edits made
@@ -313,7 +310,8 @@ def _install_filter(selection):
         if not wanted:
             continue
         scripts.update(COMPONENT_SCRIPTS.get(key, ()))
-        icons.update(COMPONENT_ICONS.get(key, ()))
+        if key in COMPONENT_ICONS:
+            icons.add(COMPONENT_ICONS[key])
 
     def keep(rel_path):
         folder, _, name = rel_path.replace('\\', '/').rpartition('/')
@@ -397,9 +395,8 @@ def _prune_stale(src, dst, keep):
     '''Remove destination files this install no longer covers.
 
     That means files dropped from the source AND files belonging to a shelf
-    button left unticked this time, so re-installing over an older install
-    with fewer buttons clears what was dropped instead of orphaning it.
-
+    button left unticked this time, so re-installing with fewer buttons
+    clears what they owned instead of orphaning it.
     '''
     for dirpath, dirnames, filenames in os.walk(dst):
         if os.path.basename(dirpath) == '__pycache__':
@@ -442,32 +439,36 @@ def _choose_destination(src_dir, modules_dir):
             label='{0}  ({1})'.format(current_label,
                                        os.path.join(src_dir, MODULE_NAME)))
         cmds.radioButton(label=other_label)
+
+        cmds.separator(style='in', height=10)
+        cmds.text(
+            label='Only the files the ticked buttons need are copied. '
+                  'Installing in place copies nothing at all.',
+            align='left')
+        cmds.text(
+            label="- 'Chain Builder' creates and re-spaces joint chains.",
+            align='left')
+        cmds.text(
+            label="- 'Tail Setup' orients and mirrors the skeleton.",
+            align='left')
+        cmds.text(
+            label="- 'Tail Builder' builds the rig, and is always installed.",
+            align='left')
+        cmds.text(
+            label="- 'Tail Reload' reloads all modules and binds them in the "
+                  'Script Editor.',
+            align='left')
         cmds.separator(style='in', height=10)
 
         cmds.text(label='Which shelf buttons should be installed?', align='left')
         boxes = {}
-        boxes[CHAIN] = cmds.checkBox(
-            label='Add a "Joint Chain Builder" shelf button', value=True)
-        cmds.text(
-            label='Opens the Chain Build UI to create and re-space joint chains.',
-            align='left')
-        boxes[SETUP] = cmds.checkBox(
-            label='Add a "Tail Setup" shelf button', value=True)
-        cmds.text(
-            label='Opens the Setup UI to orient and mirror the raw skeleton.',
-            align='left')
-        # Ticked and greyed out: the Builder is the tool itself, so the user
-        # can see it is going in rather than wonder where its option went.
+        boxes[CHAIN] = cmds.checkBox(label='Chain Builder', value=True)
+        boxes[SETUP] = cmds.checkBox(label='Tail Setup', value=True)
+        # Ticked and disabled, so the Builder reads as going in rather than
+        # as an option that went missing
         boxes[BUILD] = cmds.checkBox(
-            label='Add a "Tail Builder" shelf button', value=True,
-            enable=False)
-        cmds.text(label='The main tool -- always installed.', align='left')
-        boxes[RELOAD] = cmds.checkBox(
-            label='Add a "Tail Reload" shelf button', value=True)
-        cmds.text(
-            label='Reloads every module and lays the workflow out in the '
-                  'Script Editor.',
-            align='left')
+            label='Tail Builder', value=True, enable=False)
+        boxes[RELOAD] = cmds.checkBox(label='Tail Reload', value=True)
         cmds.separator(style='in', height=10)
         cmds.rowLayout(numberOfColumns=2, adjustableColumn=1,
                        columnAttach=(1, 'both', 0))
@@ -623,68 +624,51 @@ def _icon_path(icons_dir, name):
 
 
 def _add_shelf_buttons(icons_dir, tool_dir, selection):
-    '''Refresh the selected chain, setup, build, and reload launchers.
+    '''Refresh the selected launchers and return (shelf, labels).
 
     Every Rig Tail button is removed first, so a component left unticked
     loses the button an earlier install made for it.
 
+    Reload's command is assembled per install rather than held as a
+    constant, since a selective install can leave the Chain or Setup
+    modules off disk and importing them would raise on click.
+
     '''
     shelf = _current_shelf()
-    for label in SHELF_LABELS.values():
+    commands = {
+        CHAIN: LAUNCH_CHAIN_COMMAND,
+        SETUP: LAUNCH_SETUP_COMMAND,
+        BUILD: LAUNCH_BUILD_COMMAND,
+        RELOAD: _reload_command(selection),
+    }
+    annotations = {
+        CHAIN: 'Chain Builder UI (create and re-space joint chains)',
+        SETUP: 'Tail Setup UI (orient and mirror the skeleton)',
+        BUILD: 'Tail Builder UI (build the rig)',
+        RELOAD: 'Reload every module and bind them in the Script Editor',
+    }
+
+    labels = []
+    for key in COMPONENTS:
+        label = TOOL_NAMES[key]
         _remove_existing_button(shelf, label)
-
-    if selection.get(CHAIN):
-        icon = _icon_path(icons_dir, SHELF_ICON_CHAIN)
+        if not selection.get(key):
+            continue
+        icon = _icon_path(icons_dir, COMPONENT_ICONS[key])
         cmds.shelfButton(
             parent=shelf,
-            label=SHELF_CHAIN_BUILD_LABEL,
-            annotation='Open the Joint Chain Builder (Chain Build UI) to create and re-space joint chains.',
+            label=label,
+            annotation='{0}\n{1}'.format(annotations[key], tool_dir),
             image=icon,
             image1=icon,
-            imageOverlayLabel=SHELF_ICON_LABEL_CHAIN_BUILD,
+            imageOverlayLabel=OVERLAY_LABELS[key],
+            overlayLabelColor=OVERLAY_TEXT_COLOR,
+            overlayLabelBackColor=OVERLAY_BACK_COLOR,
             sourceType='python',
-            command=_shelf_command(LAUNCH_CHAIN_COMMAND, tool_dir),
+            command=_shelf_command(commands[key], tool_dir),
         )
-
-    if selection.get(SETUP):
-        icon = _icon_path(icons_dir, SHELF_ICON_SETUP)
-        cmds.shelfButton(
-            parent=shelf,
-            label=SHELF_SETUP_LABEL,
-            annotation='Launch the Tail Setup UI (skeleton orient / mirror)',
-            image=icon,
-            image1=icon,
-            imageOverlayLabel=SHELF_ICON_LABEL_SETUP,
-            sourceType='python',
-            command=_shelf_command(LAUNCH_SETUP_COMMAND, tool_dir),
-        )
-
-    icon = _icon_path(icons_dir, SHELF_ICON_BUILD)
-    cmds.shelfButton(
-        parent=shelf,
-        label=SHELF_BUILD_LABEL,
-        annotation='Launch the Tail Builder UI',
-        image=icon,
-        image1=icon,
-        imageOverlayLabel=SHELF_ICON_LABEL_BUILD,
-        sourceType='python',
-        command=_shelf_command(LAUNCH_BUILD_COMMAND, tool_dir),
-    )
-
-    if selection.get(RELOAD):
-        icon = _icon_path(icons_dir, SHELF_ICON_RELOAD)
-        cmds.shelfButton(
-            parent=shelf,
-            label=SHELF_RELOAD_LABEL,
-            annotation='Rig Tail Reload: load/reload every module fresh, with '
-                       'build / setup / test commands ready in the Script Editor',
-            image=icon,
-            image1=icon,
-            imageOverlayLabel=SHELF_ICON_LABEL_RELOAD,
-            sourceType='python',
-            command=_shelf_command(_reload_command(selection), tool_dir),
-        )
-    return shelf
+        labels.append(label)
+    return shelf, labels
 
 
 def onMayaDroppedPythonFile(*args):
@@ -703,9 +687,9 @@ def onMayaDroppedPythonFile(*args):
         mod_path = _write_mod(modules_dir, module_dir)
         _write_manifest(modules_dir, module_dir, tool_dir, copied, selection)
         _activate_for_session(module_dir)
-        shelf = _add_shelf_buttons(os.path.join(module_dir, 'icons'), tool_dir,
-                                   selection)
-    except Exception as exc:  # surface a readable error to the user
+        shelf, labels = _add_shelf_buttons(
+            os.path.join(module_dir, 'icons'), tool_dir, selection)
+    except Exception as exc:
         cmds.confirmDialog(
             title='Rig Tail install failed',
             message=str(exc),
@@ -713,7 +697,6 @@ def onMayaDroppedPythonFile(*args):
             icon='critical')
         raise
 
-    labels = [SHELF_LABELS[key] for key in COMPONENTS if selection.get(key)]
     cmds.inViewMessage(
         amg='<hl>Rig Tail installed</hl> - see the {0} buttons on the "{1}" '
             'shelf'.format(', '.join('"{0}"'.format(label) for label in labels),
