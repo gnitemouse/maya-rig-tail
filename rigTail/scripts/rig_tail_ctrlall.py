@@ -161,6 +161,27 @@ def routed_attr_specs(fk, ik):
 
 # BUILD ================================================================
 
+def add_all_ikfk_to_cog(cog_ctrl):
+    '''
+    Add the ALL IKFK mode attribute to the cog.
+
+    Called from rig_tail_connect.add_attributes_ikfk_switch, so it lands
+    directly under the TAIL IKFK divider and above the per-tail switches
+    it overrides. The channel box orders dynamic attributes by creation,
+    so where this runs is what decides where it shows.
+
+    Arguments
+        cog_ctrl (str): Cog control
+    '''
+    # The build-derived default the per-tail switches use: a tail whose
+    # override is Off follows this value, so a stale mode here would put
+    # that tail in it regardless of its own default.
+    dv = rt_constants.IKFK_SWITCH[3]
+    rt_maya.add_attribute_enum(cog_ctrl, all_attr('ikfk'), 'All IKFK',
+                              rt_constants.IKFK_SWITCH[2], dv)
+    rt_maya.set_attr_value(f'{cog_ctrl}.{all_attr("ikfk")}', dv)
+
+
 def add_dashboard_to_cog(cog_ctrl, fk, ik):
     '''
     Add the ALL and OVERRIDE ALL sections to the cog control.
@@ -168,6 +189,9 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
     switches, so the channel box reads: IKFK switches, ALL values,
     override flags. Existing attributes are kept (values survive a
     rebuild); missing ones are added.
+
+    ALL IKFK is not added here - it heads the TAIL IKFK section instead
+    (add_all_ikfk_to_cog).
 
     Arguments
         cog_ctrl (str): Cog control
@@ -180,14 +204,6 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
     # are left to Maya ('all_wave_frequency' -> 'All Wave Frequency').
     rt_maya.add_attribute_enum(cog_ctrl, rt_constants.ALL_DIVIDER[0],
                               rt_constants.ALL_DIVIDER[1], rt_constants.ALL_DIVIDER[2])
-    if ik:
-        # Same build-derived default as the per-tail switches: a tail whose
-        # override is Off follows this one, so leaving it on a stale mode
-        # would put the rig in that mode regardless of the per-tail default.
-        dv = rt_constants.IKFK_SWITCH[3]
-        rt_maya.add_attribute_enum(cog_ctrl, all_attr('ikfk'), 'All IKFK',
-                                  rt_constants.IKFK_SWITCH[2], dv)
-        rt_maya.set_attr_value(f'{cog_ctrl}.{all_attr("ikfk")}', dv)
     for attr, kwargs in routed_attr_specs(fk, ik):
         ln = all_attr(attr)
         if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
@@ -411,7 +427,13 @@ def cleanup_ctrlall(fk, ik):
             expected_attrs.add(rt_naming.fstr(rigname, rt_constants.OVERRIDE))
             if ik:
                 expected_attrs.add(rt_naming.fstr(rigname, rt_constants.IKFK_RESOLVED))
+    # ALL IKFK is exempt. It heads the TAIL IKFK section, which survives
+    # builds that do not rebuild IK, and the channel box has no way to
+    # reorder: sweeping it on one build and re-adding it on the next would
+    # move it to the bottom of the cog for good.
     for attr in cmds.listAttr(cog_ctrl, ud=1) or []:
+        if attr == all_attr('ikfk'):
+            continue
         dashboard = (attr.startswith(rt_constants.ALL_PREFIX)
                      or attr.endswith('_override')
                      or attr.endswith('_ikfk_resolved')

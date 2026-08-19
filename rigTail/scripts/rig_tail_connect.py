@@ -645,6 +645,13 @@ def add_attributes_ikfk_switch(control, fk, ik):
 
     rt_maya.add_attribute_enum(control, rt_constants.TAIL_IKFK_DIVIDER[0], rt_constants.TAIL_IKFK_DIVIDER[1], rt_constants.TAIL_IKFK_DIVIDER[2])
 
+    # All IKFK heads the section it belongs to, above the per-tail
+    # switches it overrides. Created here rather than with the rest of the
+    # dashboard because the channel box orders dynamic attributes by
+    # creation, and the dashboard is built after this.
+    if rt_ctrlall.active():
+        rt_ctrlall.add_all_ikfk_to_cog(control)
+
     # Start every build in the build-derived default mode: FK when FK was
     # built, otherwise SplineIK (see rt_constants.ikfk_default_index, applied to
     # IKFK_SWITCH by update_ikfk_modes). Set explicitly as well as

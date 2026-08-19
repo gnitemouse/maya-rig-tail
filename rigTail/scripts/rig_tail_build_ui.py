@@ -130,9 +130,8 @@ class RigTailUI(QtWidgets.QDialog):
             }
         ''')
         self.txt_config.setToolTip(
-            'Config file currently in effect (Default = built-in '
-            'defaults). Type a path and press Enter to load it '
-            'directly; Load/Save Config update it too.')
+            'Config file in effect (Default = built-in). Type a path and '
+            'press Enter to load it; Load/Save Config update it too.')
         self.txt_config.returnPressed.connect(self.load_config_from_text)
         config_file_layout.addWidget(lbl_config)
         config_file_layout.addWidget(self.txt_config)
@@ -207,20 +206,18 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_fk.toggled.connect(self.on_build_mode_changed)
         self.chk_ik.toggled.connect(self.on_build_mode_changed)
         self.chk_fk.setToolTip(
-            'Build the FK chain: variable-FK sliding controls with '
-            'rotation falloff. At least one of FK/IK must stay checked.')
+            'A few controls that slide along the tail, each bending the '
+            'joints within its falloff. One of FK/IK must stay checked.')
         self.chk_ik.setToolTip(
-            'Build the IK chain: spline IK with clusters, plus IK and '
-            'Float control modes. At least one of FK/IK must stay checked.')
+            'Spline IK driven by cluster controls, giving the SplineIK, '
+            'IK and Float modes. One of FK/IK must stay checked.')
         self.chk_indiv_fk.setToolTip(
-            'Also build an individual FK control at each joint (nested '
-            'along the chain) for direct per-joint rotation, on top of '
-            'the variable-FK sliding controls. Requires FK.')
+            'A control at every joint for direct rotation, alongside the '
+            'sliding FK controls. Requires FK.')
         self.chk_stretchy.setToolTip(
-            'Build the squash & stretch network, in whichever of FK/IK '
-            'is built. The Stretch slider works the same in both; IK '
-            'additionally stretches on its own as the controls pull the '
-            'curve, which variable FK has no equivalent of.')
+            'Squash and stretch dials for whichever chains are built. IK '
+            'also stretches on its own as its controls pull the curve; '
+            'variable FK follows the slider only.')
         self.style_checkbox(self.chk_fk)
         self.style_checkbox(self.chk_ik)
         self.style_checkbox(self.chk_indiv_fk, sub=True)
@@ -257,17 +254,14 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_noise.setChecked(False)
         self.chk_loop.setChecked(False)
         self.chk_wave.setToolTip(
-            'Add animatable wave attributes: a traveling sine ripple '
-            'along the tail (amplitude/frequency per axis).')
+            'A travelling sine ripple along the tail, with amplitude and '
+            'frequency per axis.')
         self.chk_curl.setToolTip(
-            'Add animatable curl attributes: roll the tail up around '
-            'its base (curl X/Y/Z).')
+            'Rolls the tail up around its base, per axis.')
         self.chk_noise.setToolTip(
-            'Add animatable noise attributes: random jitter on the '
-            'joints for organic motion.')
+            'Random jitter on the joints, for organic motion.')
         self.chk_loop.setToolTip(
-            'Add a looping time driver so wave/curl/noise effects cycle '
-            'seamlessly over the timeline.')
+            'Cycles wave, curl and noise seamlessly over the timeline.')
         self.style_checkbox(self.chk_wave)
         self.style_checkbox(self.chk_curl)
         self.style_checkbox(self.chk_noise)
@@ -286,25 +280,22 @@ class RigTailUI(QtWidgets.QDialog):
         # Keep Weights only means something once it does, so it reads as
         # the sub-option it is and greys out when binding is off.
         toggles_layout = QtWidgets.QHBoxLayout()
-        self.chk_main = QtWidgets.QCheckBox('All Tail Controls on Cog')
+        self.chk_main = QtWidgets.QCheckBox('All Tails (Attrs on Cog)')
         self.chk_main.setEnabled(len(rt_constants.RIGPARTS) > 1)
         self.chk_main.setToolTip(
             'Drive every tail from one ALL section on the cog, with a '
-            'per-tail Override flag to opt out. Needs 2+ rig parts.')
+            'per-tail Override to opt out. Needs 2+ rig parts.')
         self.chk_bind = QtWidgets.QCheckBox('Bind Geometry')
         self.chk_bind.setToolTip(
             'Bind each mesh named after a rig part to that part\'s BN '
-            'joints. Off leaves the geometry completely alone - nothing '
-            'is bound and nothing is unbound, in the build or in Setup - '
-            'for meshes another department owns, wrap/blendshape setups, '
-            'weights coming from an imported file, or a model that is '
-            'not final. The rig still builds and still drives its joints.')
+            'joints. Off leaves geometry untouched, bound or not, for '
+            'meshes another department owns or a model that is not '
+            'final. The rig still builds and drives its joints.')
         self.chk_keep = QtWidgets.QCheckBox('Keep Weights (skinClusters)')
         self.chk_keep.setToolTip(
-            'Keep existing skinClusters and their painted weights: rig '
-            'joints are added to the cluster (new ones at weight 0) and '
-            'the paint survives. Off unbinds and rebinds from scratch, '
-            'losing the weights. Only applies while Bind Geometry is on.')
+            'Add rig joints to existing skinClusters at weight 0, so '
+            'painted weights survive. Off rebinds from scratch. Only '
+            'applies while Bind Geometry is on.')
         self.chk_bind.toggled.connect(self.on_bind_geometry_changed)
         self.style_checkbox(self.chk_main)
         self.style_checkbox(self.chk_bind)
