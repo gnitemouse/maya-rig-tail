@@ -8,3 +8,9 @@ __pycache__/
 *.md
 !README.md
 !rig_tail_documentation.md
+
+# Worktree shelf launchers. Local development tooling: they run the tool
+# from whichever checkout they sit in, so a tracked copy would ship a
+# branch-testing installer to every user of the module.
+install_worktree.py
+uninstall_worktree.py
