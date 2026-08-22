@@ -41,6 +41,9 @@ import maya.api.OpenMaya as om
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 import rig_tail_anim as rt_anim
+import rig_tail_cleanup as rt_cleanup
+import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 
 
 # STAGE PROBE ================================================
@@ -1459,27 +1462,34 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
               the route that really did break once, when a consumer read
               the basectrl directly instead of rt_ctrlall.resolved_plug.
 
+    offset is driven SIGNED, by rt_mirror.translation_signs. The chain
+    spans its whole curve, so the dial can only slide it back along that
+    curve, and a mirrored side reaches that one direction through the
+    opposite dial sign (connect_spline_ik's mirror node). One fixed sign
+    therefore tests the blocked direction on one side of every mirrored
+    pair, where a perfectly wired offset moves nothing at all.
+
     Arguments
         rigname (str): Rig part to test
         amount (float): Degrees to drive twist/roll to
         offset_amount (float): Scene units to drive offset to. Separate
-            because offset is a distance, not an angle.
+            because offset is a distance, not an angle. Its sign comes
+            from the part's mirroring, not from this value.
 
     Return
         bool: True if every mode responded to every attribute by both routes
     '''
     print(f'\n=== TWIST / ROLL / OFFSET CHECK: {rigname} ===\n')
 
-    import rig_tail_ctrlall as rt_ctrlall
-
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
     if not cmds.objExists(basectrl):
         print(f'  x basectrl {basectrl} not found - build the rig first')
         return False
-    bn = rt_constants.JOINTS_BN.get(rigname) or []
+    bn = bn_joints(rigname)
     if len(bn) < 3:
-        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        print(f'  x need at least 3 BN joints, found {len(bn)} - is '
+              f"'{rigname}' spelled as it is in RIGPARTS?")
         return False
 
     ai = {'x': 0, 'y': 1, 'z': 2}.get(
@@ -1574,6 +1584,16 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
                                 n=cog_ctrl, ex=1)
     saved_ovr = cmds.getAttr(override) if has_override else None
 
+    # The chain spans its whole curve, so 'offset' can only slide it BACK
+    # along that curve - there is nothing ahead to slide into. Which dial
+    # sign that is flips per side, because connect_spline_ik puts a
+    # negating mirror node on a signed side. Driving the same sign on both
+    # tests the blocked direction on one of them, where a perfectly wired
+    # offset moves nothing and reads as dead. Same source the build signs
+    # from, so an inverted mirror still fails rather than being papered over.
+    offset_sign = rt_mirror.translation_signs(rigname).get(
+        rt_mirror.aim_axis(), 1.0)
+
     # (label, plug builder, override value the path needs)
     paths = [('local', lambda a: f'{basectrl}.{a}', 1)]
     if dash:
@@ -1603,8 +1623,9 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
                 # offset is a DISTANCE, not an angle: driving it to the
                 # same number as twist/roll slides the chain by that many
                 # scene units per joint, which says nothing extra about
-                # whether it is wired.
-                value = offset_amount if attr == 'offset' else amount
+                # whether it is wired. Signed per side - see offset_sign.
+                value = (offset_amount * offset_sign if attr == 'offset'
+                         else amount)
                 moved, rotated, rel = _drive(plug, value)
                 # Wired = the chain changed AT ALL, by translation or by
                 # rotation. Requiring translation hides spline-IK twist,
@@ -1637,10 +1658,158 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
     return ok
 
 
+def test_spline_mid_rot(rigname='tail', amount=30.0, axis='Z', tolerance=0.02):
+    '''
+    Tell a constraint fault from curve geometry when rotating
+    spline_mid_rot S-curves the tail's top section (MUTATES, restores).
+
+    mid_rot rigidly swings top, top_sml and upvec_end - top's group is
+    parented under it - so those CVs travel together. Whether the TIP goes
+    with them is a separate question, and the two failures look identical
+    in the viewport. This measures them apart:
+
+      tracking  end cluster travel / top control travel. ~1.0 means the
+                chain from mid_rot through top to the upvec end cluster
+                carries the swing intact. Well under 1 means a constraint
+                is dropping it, and the RIGGING is at fault.
+      follow    tip joint travel / top control travel. Below 1 by the
+                curve's own arithmetic, not by any fault: the driver curve
+                is cubic over NUM_CTRL_IK+2 CVs, so the span nearest the
+                tip is still weighted by the fixed mid CV and the tip
+                cannot swing rigidly however sound the constraints are.
+
+    So a low follow alongside tracking at ~1.0 is geometry. Raising
+    NUM_CTRL_IK narrows each CV's influence and tightens it; hunting
+    constraints will not. Only tracking decides the pass.
+
+    Arguments
+        rigname (str): Rig part to test
+        amount (float): Degrees to rotate mid_rot
+        axis (str): Local axis of mid_rot to rotate about
+        tolerance (float): Allowed shortfall in tracking
+
+    Return
+        bool: True if the end cluster tracked the swing
+    '''
+    print(f'\n=== SPLINE MID_ROT CHECK: {rigname} ===\n')
+
+    typ = rt_constants.TYPE_IK
+    mid_rot = rt_naming.fstr(rigname, rt_constants.SPLINE_MID_ROT, typ)
+    top = rt_naming.fstr(rigname, rt_constants.SPLINE_TOP, typ)
+    end_cluster = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE,
+                                 typ, TAG='end')
+    for node in (mid_rot, top, end_cluster):
+        if not cmds.objExists(node):
+            print(f'  x {node} not found - build IK first')
+            return False
+
+    bn = bn_joints(rigname)
+    if len(bn) < 3:
+        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        return False
+    tip = bn[-1]
+
+    plug = f'{mid_rot}.rotate{axis.upper()}'
+    if cmds.listConnections(plug, s=1, d=0, p=1):
+        print(f'  x {plug} is driven by a connection')
+        return False
+
+    def _eval():
+        t = cmds.currentTime(q=1)
+        cmds.currentTime(t + 0.01, e=1)
+        cmds.currentTime(t, e=1)
+
+    def _pos(node):
+        '''World rotate-pivot: a cluster handle's translate sits at the
+        origin with its pivot on the CV, so translate says nothing.'''
+        return cmds.xform(node, q=1, ws=1, rp=1)
+
+    def _travel(a, b):
+        return sum((b[i] - a[i]) ** 2 for i in range(3)) ** 0.5
+
+    # mid_rot only has influence in SplineIK mode, which is position 0
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
+    has_switch = (cmds.objExists(cog_ctrl)
+                  and cmds.attributeQuery(ikfk_attr, n=cog_ctrl, ex=1))
+    saved_mode = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}') if has_switch else None
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', 0)
+
+    saved_rot = cmds.getAttr(plug)
+    cmds.setAttr(plug, 0)
+    _eval()
+    before = {n: _pos(n) for n in (top, end_cluster, tip)}
+    cmds.setAttr(plug, amount)
+    _eval()
+    after = {n: _pos(n) for n in (top, end_cluster, tip)}
+
+    cmds.setAttr(plug, saved_rot)
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
+    _eval()
+
+    top_travel = _travel(before[top], after[top])
+    cluster_travel = _travel(before[end_cluster], after[end_cluster])
+    tip_travel = _travel(before[tip], after[tip])
+
+    print(f'  mid_rot.rotate{axis.upper()} 0 -> {amount}')
+    print(f'  {"top control":16s} travelled {top_travel:8.3f}')
+    print(f'  {"end cluster":16s} travelled {cluster_travel:8.3f}')
+    print(f'  {"tip joint":16s} travelled {tip_travel:8.3f}')
+
+    if top_travel < 1e-4:
+        print(f'\n  x top control did not move - mid_rot is not swinging it, '
+              f'so nothing downstream can be judged')
+        return False
+
+    tracking = cluster_travel / top_travel
+    follow = tip_travel / top_travel
+    ok = tracking >= 1.0 - tolerance
+    print(f'\n  tracking {tracking:5.3f}  '
+          f'{"OK - constraints carry the swing" if ok else "x cluster is not following top"}')
+    print(f'  follow   {follow:5.3f}  '
+          f'(tip vs top; below 1 is the cubic driver curve, not a fault)')
+    if ok and follow < 0.9:
+        print(f'\n  the S-curve is the curve, not the rigging: the tip span '
+              f'is still weighted by the fixed mid CV.\n  NUM_CTRL_IK is '
+              f'{rt_constants.NUM_CTRL_IK}; raising it narrows each CV\'s '
+              f'influence and tightens the tip.')
+
+    print('RESULT:', 'PASS' if ok else 'FAIL')
+    return ok
+
+
+def bn_joints(rigname):
+    '''
+    The tail's BN chain, read from the scene when the cache is empty.
+
+    JOINTS_BN is build-time state, not something the scene carries, so any
+    module reload leaves it empty - and the worktree Reload button purges
+    rig_tail_constants outright, by design, so a branch's own templates are
+    the ones that answer. A test that trusted the cache would then report a
+    rig with no joints, which reads as a broken rig rather than an empty
+    dict. detect_joints_bn is the same non-destructive scan Setup and the
+    build both start from: no renaming, no FK/IK duplication.
+
+    Arguments
+        rigname (str): Rig part
+
+    Return
+        list: BN joint names, empty when the scene holds no chain for it
+    '''
+    joints = rt_constants.JOINTS_BN.get(rigname) or []
+    if not joints:
+        rt_cleanup.detect_joints_bn()
+        joints = rt_constants.JOINTS_BN.get(rigname) or []
+    return joints
+
+
 def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
     '''
-    Verify the Stretch slider lengthens the BN chain in EVERY IKFK mode,
-    and by the SAME amount in each (MUTATES, restores what it touches).
+    Verify the Stretch slider lengthens the BN chain in the modes that own
+    a stretch mechanism, and by the SAME amount in each (MUTATES, restores
+    what it touches).
 
     Three failures this is placed to catch:
 
@@ -1656,9 +1825,19 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
 
     Measured as the summed distance between consecutive BN joints, which is
     what 'the tail got longer' means whichever mode's network produced it.
-    IK's reactive term stays out of it: the controls are left where they
-    are, so its curve holds its rest length and only the slider contributes
-    - the term both modes share.
+
+    The dial is proved to reach the stretch remap before anything is
+    measured. A tail whose override flag is Off reads the cog's ALL value,
+    so sweeping its basectrl moves nothing at all - which looks exactly
+    like a rig that cannot stretch, and sends you hunting the wrong end.
+
+    Only IK and FK are held to it. FK adds the dial onto its ratio; IK
+    spends it on spreading its own control row
+    (rt_stretch.connect_stretch_to_ik_controls), and the two should land in
+    the same place. SplineIK and Float drive the same clusters from
+    independent controls that no spread reaches yet, so their dial moves
+    nothing and they are reported rather than failed. Mode positions are
+    the contract here, not names: [0]=SplineIK, [1]=IK, [2]=Float, [3]=FK.
 
     Arguments
         rigname (str): Rig part to test
@@ -1679,9 +1858,10 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
         print(f'  x no stretch attribute on {basectrl} - built without '
               f'Stretchy?')
         return False
-    bn = rt_constants.JOINTS_BN.get(rigname) or []
+    bn = bn_joints(rigname)
     if len(bn) < 3:
-        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        print(f'  x need at least 3 BN joints, found {len(bn)} - is '
+              f"'{rigname}' spelled as it is in RIGPARTS?")
         return False
 
     def _eval():
@@ -1714,8 +1894,42 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
               f'ALL value instead')
         return False
 
+    # With the dashboard active the tail follows the cog's ALL value until
+    # its own override flag is On, so the basectrl dial this sweeps is read
+    # by nothing. Flip the flag for the duration and put it back.
+    override_plug = None
+    saved_override = None
+    if rt_ctrlall.active() and cmds.objExists(cog_ctrl):
+        override_attr = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
+        if cmds.attributeQuery(override_attr, n=cog_ctrl, ex=1):
+            override_plug = f'{cog_ctrl}.{override_attr}'
+            saved_override = cmds.getAttr(override_plug)
+            cmds.setAttr(override_plug, 1)
+
+    # Nothing downstream can stretch if the dial does not reach the remap,
+    # and a dead dial reads exactly like a rig that cannot stretch. Prove
+    # the signal arrives before blaming what it drives.
+    stretch_remap = f'{rigname}_stretch_remap_multiplyDivide'
+    if cmds.objExists(stretch_remap):
+        cmds.setAttr(plug, amount)
+        _eval()
+        reached = cmds.getAttr(f'{stretch_remap}.outputX')
+        cmds.setAttr(plug, saved_stretch)
+        if abs(reached) < 1e-6:
+            print(f'  x {plug} does not reach {stretch_remap} - the dial is '
+                  f'routed elsewhere, so this measures nothing')
+            if override_plug is not None:
+                cmds.setAttr(override_plug, saved_override)
+            return False
+
+    # Mode positions that own a stretch mechanism: IK spreads its control
+    # row, FK adds the dial onto its ratio. A build with no switch is
+    # FK-only, so its single mode stretches too.
+    spread_modes = (1, 3)
+
     ok = True
     grew = dict()
+    unspread = list()
     for mode_name, mode_val in modes:
         if mode_val is not None:
             cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', mode_val)
@@ -1728,15 +1942,20 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
 
         delta = stretched - rest
         ratio = stretched / rest if rest > 1e-6 else 0.0
-        good = delta > 1e-4
-        if not good:
-            ok = False
-        grew[mode_name] = delta
+        if mode_val is not None and mode_val not in spread_modes:
+            unspread.append(mode_name)
+            note = '- no spread of its own'
+        else:
+            good = delta > 1e-4
+            if not good:
+                ok = False
+            grew[mode_name] = delta
+            note = 'OK' if good else 'x DID NOT STRETCH'
         print(f'  {mode_name:12s} rest={rest:8.3f}  stretched={stretched:8.3f}'
-              f'  x{ratio:5.3f}  {"OK" if good else "x DID NOT STRETCH"}')
+              f'  x{ratio:5.3f}  {note}')
 
-    # Every mode should have grown by the same amount: the slider term is
-    # shared, and the reactive term is not exercised here.
+    # The two that do stretch reach the same length by different routes, so
+    # a disagreement here is what pops the tail on a switch mid-dial
     if len(grew) > 1 and ok:
         biggest = max(grew.values())
         smallest = min(grew.values())
@@ -1752,7 +1971,14 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
         else:
             print(f'\n  modes agree within {spread * 100:.1f}%')
 
+    if unspread:
+        print(f'\n  dial does nothing in: {", ".join(unspread)} - their '
+              f'controls are independent, so each needs an offset summed '
+              f'from the controls before it')
+
     cmds.setAttr(plug, saved_stretch)
+    if override_plug is not None:
+        cmds.setAttr(override_plug, saved_override)
     if has_switch:
         cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
     _eval()
