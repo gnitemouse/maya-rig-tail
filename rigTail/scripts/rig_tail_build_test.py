@@ -1922,14 +1922,11 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
                 cmds.setAttr(override_plug, saved_override)
             return False
 
-    # Mode positions that own a stretch mechanism: IK spreads its control
-    # row, FK adds the dial onto its ratio. A build with no switch is
-    # FK-only, so its single mode stretches too.
-    spread_modes = (1, 3)
-
+    # Every mode owns a stretch mechanism: each IK set spreads its own
+    # controls, FK adds the dial onto its ratio. So none is exempt, and a
+    # mode that does not grow is a failure rather than a known gap.
     ok = True
     grew = dict()
-    unspread = list()
     for mode_name, mode_val in modes:
         if mode_val is not None:
             cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', mode_val)
@@ -1942,20 +1939,16 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
 
         delta = stretched - rest
         ratio = stretched / rest if rest > 1e-6 else 0.0
-        if mode_val is not None and mode_val not in spread_modes:
-            unspread.append(mode_name)
-            note = '- no spread of its own'
-        else:
-            good = delta > 1e-4
-            if not good:
-                ok = False
-            grew[mode_name] = delta
-            note = 'OK' if good else 'x DID NOT STRETCH'
+        good = delta > 1e-4
+        if not good:
+            ok = False
+        grew[mode_name] = delta
+        note = 'OK' if good else 'x DID NOT STRETCH'
         print(f'  {mode_name:12s} rest={rest:8.3f}  stretched={stretched:8.3f}'
               f'  x{ratio:5.3f}  {note}')
 
-    # The two that do stretch reach the same length by different routes, so
-    # a disagreement here is what pops the tail on a switch mid-dial
+    # Each mode reaches its length by a different route, so a disagreement
+    # here is what pops the tail on a switch mid-dial
     if len(grew) > 1 and ok:
         biggest = max(grew.values())
         smallest = min(grew.values())
@@ -1970,11 +1963,6 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
                   f'{smallest:.3f}')
         else:
             print(f'\n  modes agree within {spread * 100:.1f}%')
-
-    if unspread:
-        print(f'\n  dial does nothing in: {", ".join(unspread)} - their '
-              f'controls are independent, so each needs an offset summed '
-              f'from the controls before it')
 
     cmds.setAttr(plug, saved_stretch)
     if override_plug is not None:

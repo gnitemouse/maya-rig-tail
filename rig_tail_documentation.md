@@ -844,19 +844,30 @@ re-runs. The parent's squash would shear OPM children — `rig_tail_matrix`
 cancels it with a `squashInv` term.
 
 The `stretch` dial takes a different route per mode. FK adds it onto the
-ratio directly. IK's ratio is reactive only, so the dial spreads the IK
-control row instead (`connect_stretch_to_ik_controls`): each nested
-control group holds the segment vector to the control above it, scaling
-every segment grows the driver curve, and the reactive ratio follows the
-curve on its own. That keeps the controls sitting on the tail rather than
-stranded up its length, and it keeps the network acyclic — the controls
-are upstream of the curve that feeds the ratio, so a control may read the
-dial and its baked rest but never the curve, its length or the joints.
-Float and SplineIK modes have no spread of their own yet, so their dial
-does nothing.
+ratio directly. The IK ratio is reactive only, so the dial spreads the
+controls instead (`connect_stretch_to_ik_controls`): spreading them grows
+the driver curve, and the reactive ratio follows the curve on its own.
+That keeps the controls sitting on the tail rather than stranded up its
+length, and it keeps the network acyclic — the controls are upstream of
+the curve that feeds the ratio, so a control may read the dial and its
+baked rest but never the curve, its length or the joints.
+
+All three IK modes share one ratio and one spread factor, because they
+share one spline; a set that spread differently would move the tail on a
+mode switch rather than on the dial. What differs is how each hierarchy
+carries the factor. IK and SplineIK nest, so each group holds the segment
+to the control above it and scaling every segment lets the DAG accumulate
+the spread (`spread_nested`); SplineIK's `bot` is its anchor and its `mid`
+is parentConstrained to `bot`/`top`, so both sit out. Float's groups are
+siblings under the base control, so each translate is already cumulative
+and is scaled about the first control instead (`spread_flat`,
+`rest₁ + (restᵢ − rest₁) × factor`). All three spread at once with no mode
+gating — only the active mode's controls drive the clusters, and the rest
+are hidden.
 
 Key functions: `build_stretch`, `connect_stretch_to_joints`,
-`connect_stretch_to_ik_controls`, `add_stretch_attributes_to_basectrl`,
+`connect_stretch_to_ik_controls`, `spread_nested`, `spread_flat`,
+`spread_factor_node`, `add_stretch_attributes_to_basectrl`,
 `add_jntscale_attributes_to_basectrl`, `set_curveinfo_stretch`,
 `build_advanced_twist`.
 
