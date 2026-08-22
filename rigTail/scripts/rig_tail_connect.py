@@ -825,5 +825,25 @@ def setup_switch_upvec(rigname, typ=rt_constants.TYPE_IK):
     cluster_handle_bse = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='base')
     cluster_handle_end = rt_naming.fstr(rigname, rt_constants.CLUSTER_UPV_HANDLE, typ, TAG='end')
 
-    cmds.parentConstraint(upvec_bsectrl, cluster_handle_bse)
-    cmds.parentConstraint(upvec_endctrl, cluster_handle_end)
+    # These handles are the spline solver's up reference - it reads their
+    # xformMatrix (rt_stretch.build_advanced_twist) and rotates the up
+    # vectors by it - so their REST orientation is what the tail's twist is
+    # measured from. maintainOffset separates that from how the control is
+    # drawn: the handle keeps the world-aligned rest the up vectors were
+    # measured in, while the control sits in the chain's frame for the
+    # animator. Without it the handle copies the control outright, and
+    # orienting the control re-twists the tail.
+    for ctrl, handle in ((upvec_bsectrl, cluster_handle_bse),
+                         (upvec_endctrl, cluster_handle_end)):
+        if not cmds.objExists(handle):
+            logger.warning(f'Upvec cluster handle not found: {handle}')
+            continue
+        # A handle carrying a constraint from an earlier build would bake
+        # that pose in as the new rest. Rotation goes back to identity
+        # first; it deforms nothing, the pivot being on its single CV.
+        for constr in cmds.listRelatives(handle, type='constraint') or []:
+            cmds.delete(constr)
+        for axis in 'XYZ':
+            rt_maya.break_connection(f'{handle}.rotate{axis}')
+            cmds.setAttr(f'{handle}.rotate{axis}', 0)
+        cmds.parentConstraint(ctrl, handle, mo=1)

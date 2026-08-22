@@ -670,6 +670,27 @@ updates them, and `PRESERVE_CTRL_SHAPES` keeps hand-edited shapes. The
 SplineIK set is fixed at 5 controls on fixed tail fractions regardless of
 `NUM_CTRL_IK`; `spline_control_index` maps the clusters onto them.
 
+The up-vector pair takes its POSITION from its cluster handle and its
+ORIENTATION from `orient_control_aims` — the same frame every other IK
+control row gets (+Y down the row, +Z rolled to `spline_up_vector`). A
+cluster handle carries no rotation, so matching it for both would leave
+these world-aligned on every tail, which only looks right where a tail
+happens to run along a world axis. The joints' own axes are a *different*
+convention and their up is not reliably the tail's visual up, so orienting
+to them gives these controls a frame of their own and throws the shapes
+sideways; sharing the row's frame is the point, and it is the frame they
+already move in via `setup_switch_upvec`.
+
+The pair **brackets** the chain — base before the first joint, end past
+the last — so their shapes offset along the row (local ±Y), signed by the
+same `flip_aim` factor the row is aimed with so both point away from the
+tail on a mirrored side. An unrotated group offsets along *world* Y, which
+brackets only a tail that happens to run that way and steps sideways off
+every other one. What keeps the reorientation safe is on the
+cluster is constrained to the control with `maintainOffset`, so the handle
+the twist solver reads keeps its world-aligned rest and the twist at rest
+is unchanged.
+
 Key functions: `create_root_cog`, `create_basectrl`, `create_controls_fk`,
 `create_controls_ik` (+ `create_spline_controls_ik`/`_float`/`_spline`,
 `create_spline_up_vectors`), `get_controls_ik`, `set_control_color`,
@@ -822,9 +843,22 @@ wires the basectrl sliders once they exist; nodes are reused by name on
 re-runs. The parent's squash would shear OPM children — `rig_tail_matrix`
 cancels it with a `squashInv` term.
 
+The `stretch` dial takes a different route per mode. FK adds it onto the
+ratio directly. IK's ratio is reactive only, so the dial spreads the IK
+control row instead (`connect_stretch_to_ik_controls`): each nested
+control group holds the segment vector to the control above it, scaling
+every segment grows the driver curve, and the reactive ratio follows the
+curve on its own. That keeps the controls sitting on the tail rather than
+stranded up its length, and it keeps the network acyclic — the controls
+are upstream of the curve that feeds the ratio, so a control may read the
+dial and its baked rest but never the curve, its length or the joints.
+Float and SplineIK modes have no spread of their own yet, so their dial
+does nothing.
+
 Key functions: `build_stretch`, `connect_stretch_to_joints`,
-`add_stretch_attributes_to_basectrl`, `add_jntscale_attributes_to_basectrl`,
-`set_curveinfo_stretch`, `build_advanced_twist`.
+`connect_stretch_to_ik_controls`, `add_stretch_attributes_to_basectrl`,
+`add_jntscale_attributes_to_basectrl`, `set_curveinfo_stretch`,
+`build_advanced_twist`.
 
 ---
 

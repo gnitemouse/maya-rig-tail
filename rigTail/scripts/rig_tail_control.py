@@ -752,7 +752,21 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
 def create_spline_up_vectors(rigname, cluster_handles, scale=1):
     '''
     Build up-vector controls for twist on first and last controls.
-    Creates two sphere controls offset from the base and end positions.
+
+    The two BRACKET the chain: base sits before the first joint, end past
+    the last, so the tail runs between them.
+
+    Position comes from the cluster handle, which is where the CV is;
+    orientation from orient_control_aims, the same frame the other IK rows
+    get and the one setup_switch_upvec then constrains these to. A cluster
+    handle carries no rotation, so matching it for both leaves these
+    world-aligned - and the bracket offset along the row then only brackets
+    a tail that happens to run along world Y.
+
+    Reorienting them is safe because rig_tail_connect constrains the
+    CLUSTER with maintainOffset: the handle keeps the world-aligned rest
+    that build_advanced_twist's up vectors were measured in, so the twist
+    at rest is unchanged and only the animator's frame moves.
 
     The offset is baked into the CVs, so it is applied only to shapes
     built by this call. Preserved shapes already carry it from the build
@@ -794,18 +808,29 @@ def create_spline_up_vectors(rigname, cluster_handles, scale=1):
                                                  shape='sphere',
                                                  preserve=preserve)
 
+    flip_aim = rt_mirror.flip_control_aim(rigname)
+    orient_control_aims([upvec_bsegrp, upvec_endgrp], basectrl,
+                        flip_aim=flip_aim)
+
     if not preserve:
         # Full paths: short shape names are ambiguous when the scene
         # contains duplicate node names
         upvec_bsectrl_shapes = cmds.listRelatives(upvec_bsectrl, s=True, f=True) or []
         upvec_endctrl_shapes = cmds.listRelatives(upvec_endctrl, s=True, f=True) or []
-        # Offset shape CVs
+        # Bracketing is an offset ALONG the row, which is local Y once
+        # orient_control_aims has run. orient_aim_controls_nulls negates
+        # the aim on a mirrored side, so +Y runs back UP the row there;
+        # carrying the same factor keeps both controls pointing away from
+        # the tail on both sides rather than folding into it on one.
+        aim_sign = -1 if flip_aim else 1
         for shape in upvec_bsectrl_shapes:
             tr = (rt_constants.SPLINE_BOT_SZ + 0.5) * scale
-            cmds.move(0,tr,0, f'{shape}.cv[*]', r=True, objectSpace=True)
+            cmds.move(0, -aim_sign*tr, 0, f'{shape}.cv[*]',
+                      r=True, objectSpace=True)
         for shape in upvec_endctrl_shapes:
             tr = (rt_constants.SPLINE_TOP_SZ + 0.5) * scale
-            cmds.move(0,-tr,0, f'{shape}.cv[*]', r=True, objectSpace=True)
+            cmds.move(0, aim_sign*tr, 0, f'{shape}.cv[*]',
+                      r=True, objectSpace=True)
     return [upvec_bsectrl, upvec_endctrl], [upvec_bsegrp, upvec_endgrp]
 
 
