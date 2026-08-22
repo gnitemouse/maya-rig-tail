@@ -12,8 +12,15 @@ The ratio is the tail curve's current length over its rest length. IK
 derives it live from a curveInfo (the rest length is cached once so
 rebuilding while posed doesn't adopt a stretched rest); FK is slider-
 only, and deliberately so - nothing in variable FK pulls the tip, so
-there is no goal length to react to. A 'stretch' slider adds on top,
-scaled the same way in both modes, and the result is clamped.
+there is no goal length to react to.
+
+The 'stretch' slider reaches the two modes by different routes. FK adds
+it straight onto the ratio. IK cannot: a term there lengthens the bones
+while the curve stays where it was, and the tail walks out past the very
+controls meant to hold it. So IK spends the slider on the CONTROLS
+instead - the row spreads, the curve grows with it, and the reactive
+ratio picks the new length up by itself. One mechanism, and the controls
+sit on the tail because they define it. Both modes are clamped.
 
 Length scales each joint's rest bone offset by the ratio. IK writes
 that absolutely onto the joint's own translate. FK cannot: its joints
@@ -35,6 +42,15 @@ Architecture notes:
   - BN children are placed by offsetParentMatrix, so a parent's squash
     would shear them; rig_tail_matrix cancels it with a squashInv OPM
     term.
+  - The IK controls sit UPSTREAM of everything they deform: control ->
+    cluster -> driver curve -> solver curve -> ikHandle and curveInfo ->
+    joints. Whatever drives a control may read the sliders, its own baked
+    rest, or controls nearer the base; reading the curve, its length or
+    the joints closes the loop and cycles.
+  - preserveVolume is a thickness dial only: it fades the taffy rule in
+    and out of scaleY/Z and has no say in how long the tail is. Gating
+    the reactive ratio with it would make preserveVolume = 0 mean the IK
+    length cannot react to its own curve.
 
 Functions:
     Build phase (called from rig_tail):
@@ -50,6 +66,9 @@ Functions:
         add_stretch_attributes_to_basectrl: stretch/squash/preserveVolume
         add_jntscale_attributes_to_basectrl: per-joint jntScaleYZ sliders
         connect_stretch_to_joints: Wire sliders and outputs to joints
+        connect_stretch_to_ik_controls: Spread the IK control row from
+            the dial, so IK stretches by growing its own curve
+        ik_control_groups / ik_rest_segment: the row, and its baked rest
     Spline IK:
         build_advanced_twist: Spline IK advanced twist setup
 '''
@@ -63,6 +82,10 @@ import rig_tail_ctrlall as rt_ctrlall
 import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
+
+# Rest segment vector cached on each IK control group, so a rebuild reads
+# the built rest rather than whatever the dial is currently spreading
+REST_SEGMENT_ATTR = 'stretch_rest_segment'
 
 
 # BUILD STRETCH NODES (Called from rig_tail) ===========================
@@ -122,6 +145,7 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
     - World scale nodes -> scale_grp
     - Squash nodes -> joint multiply nodes
     - Joint multiply nodes -> joint scaleY/Z
+    - Stretch dial -> IK control row, which is how IK stretches at all
 
     Arguments
         rigname (str): Name of rig component
@@ -147,6 +171,10 @@ def connect_stretch_to_joints(rigname, basectrl, fk, ik):
     if ik:
         stretch_ratio = f'{rt_constants.TYPE_IK}_{rigname}_stretch_ratio'
         connect_ik_stretch_to_joints(rigname, rt_constants.JOINTS_IK[rigname], stretch_ratio, rt_constants.TYPE_IK)
+        # IK reads its ratio off the curve, so the dial reaches the joints
+        # by moving the controls that shape it, not by a term of its own
+        stretch_remap = f'{rigname}_stretch_remap_multiplyDivide'
+        connect_stretch_to_ik_controls(rigname, stretch_remap, rt_constants.TYPE_IK)
     if fk:
         # The DELTA, not the ratio: FK adds to a rest offset already held
         # in the SDK group's offsetParentMatrix
@@ -293,7 +321,8 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
     '''
     Create stretch calculation node network.
 
-    IK: Reactive stretch (curve length / initial length) + user stretch
+    IK: Reactive stretch only (curve length / initial length). The dial
+        reaches IK through the controls (connect_stretch_to_ik_controls)
     FK: User stretch only (0 to 2 range)
 
     Arguments
@@ -335,27 +364,26 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         cmds.connectAttr(crvlen, f'{stretch_reactive}.input1X', f=1)
         cmds.setAttr(f'{stretch_reactive}.input2X', initial_len)
 
-        # (blendTwoAttr) Blend reactive stretch on/off with preserveVolume
-        stretch_preservevol = f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr'
-        if not cmds.objExists(stretch_preservevol):
-            cmds.createNode('blendTwoAttr', n=stretch_preservevol, s=1, ss=1)
-        cmds.setAttr(f'{stretch_preservevol}.input[0]', 1.0)  # No reactive
-        cmds.connectAttr(f'{stretch_reactive}.outputX', f'{stretch_preservevol}.input[1]', f=1)
-        # preserveVolume connection made later in connect phase
-
-        # (plusMinusAverage) user stretch + reactive stretch
-        stretch_pma = f'{typ}_{rigname}_stretch_user_plusMinusAverage'
-        if not cmds.objExists(stretch_pma):
-            cmds.createNode('plusMinusAverage', n=stretch_pma, s=1, ss=1)
-        cmds.setAttr(f'{stretch_pma}.operation', 1)  # sum
-        cmds.connectAttr(f'{stretch_preservevol}.output', f'{stretch_pma}.input1D[0]', f=1)
-        cmds.connectAttr(f'{stretch_remap}.outputX', f'{stretch_pma}.input1D[1]', f=1)
+        # The reactive ratio IS the whole IK ratio. It already tracks
+        # whatever the controls do to the curve, so the dial spreads those
+        # controls (connect_stretch_to_ik_controls) instead of adding a
+        # second term here - a term that grows the bones without moving
+        # anything, which is what walks the tail out past its own controls.
+        #
+        # Older rigs hold a preserveVolume blend and a user sum in this
+        # slot. Neither belongs in the length path - the blend pins the
+        # ratio to 1.0 wherever preserveVolume reaches 0, and the sum is
+        # where the slider term went in.
+        for stale in (f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr',
+                      f'{typ}_{rigname}_stretch_user_plusMinusAverage'):
+            if cmds.objExists(stale):
+                cmds.delete(stale)
 
         # (clamp) stretch_ratio - 0.1 to 2.0
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
         if not cmds.objExists(stretch_ratio):
             cmds.createNode('clamp', n=stretch_ratio, s=1, ss=1)
-        cmds.connectAttr(f'{stretch_pma}.output1D', f'{stretch_ratio}.inputR', f=1)
+        cmds.connectAttr(f'{stretch_reactive}.outputX', f'{stretch_ratio}.inputR', f=1)
         cmds.setAttr(f'{stretch_ratio}.minR', 0.1)
         cmds.setAttr(f'{stretch_ratio}.maxR', 2.0)
 
@@ -584,7 +612,12 @@ def create_joint_mult(rigname, joints, typ):
 
 def connect_preserve_volume(rigname, basectrl, squash_blend):
     '''
-    Connect preserveVolume attribute to blend nodes.
+    Connect preserveVolume attribute to the squash blend.
+
+    preserveVolume is a THICKNESS dial only: it fades the taffy rule in and
+    out of scaleY/Z, and has no say in how long the tail is. Blending the
+    IK length path with it too would make 'preserveVolume = 0' pin the
+    ratio to 1.0, leaving the joints unable to follow their own curve.
 
     Arguments
         rigname (str): Name of rig component
@@ -599,12 +632,6 @@ def connect_preserve_volume(rigname, basectrl, squash_blend):
     # resolved_plug: override condition output when the main controller
     # dashboard is active, the basectrl attribute otherwise
     preservevol_src = rt_ctrlall.resolved_plug(rigname, 'preserveVolume')
-
-    # Check if IK nodes exist
-    stretch_preservevol = f'{rt_constants.TYPE_IK}_{rigname}_stretch_preservevol_blendTwoAttr'
-    if cmds.objExists(stretch_preservevol):
-        cmds.connectAttr(preservevol_src,
-                         f'{stretch_preservevol}.attributesBlender', f=1)
 
     # Connect to squash blend
     if cmds.objExists(squash_blend):
@@ -696,6 +723,110 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
         cmds.connectAttr(f'{stretch_ratio}.outputR', f'{jnt_mult}.input2X', f=1)
         # Connect to joint translateX
         cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.translateX', f=1)
+
+def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE_IK):
+    '''
+    Spread the IK controls along the tail from the stretch dial.
+
+    The IK ratio is reactive only, so the dial cannot lengthen the tail on
+    its own: it has to lengthen the CURVE, and the controls are what the
+    curve is made of. create_spline_controls_ik nests the row and
+    create_control puts a group under every control, so each group's
+    translate is the segment vector from the control above it. Scaling
+    every segment by one factor scales the whole row about its base, and
+    the hierarchy accumulates it - no control has to read another.
+
+    Nothing here reads the curve, its length or the joints: all three sit
+    downstream of the controls, so a control reading them would feed its
+    own input. The factor is the dial and a rest vector baked at build.
+
+    Arguments
+        rigname (str): Name of rig component
+        stretch_remap (str): Stretch dial scaled to -0.5..0.5
+        typ (str): Rig type identifier (TYPE_IK)
+    '''
+    logger.trace(f'{rigname}: Spread IK controls from the stretch dial')
+    ctrlgrps = ik_control_groups(rigname, typ)
+    if len(ctrlgrps) < 2:
+        logger.warning(f'{rigname}: fewer than two IK control groups, so '
+                       'the stretch dial has no row to spread')
+        return
+
+    # (plusMinusAverage) spread factor: 1 + dial
+    spread_factor = f'{typ}_{rigname}_spread_factor_plusMinusAverage'
+    if not cmds.objExists(spread_factor):
+        cmds.createNode('plusMinusAverage', n=spread_factor, s=1, ss=1)
+    cmds.setAttr(f'{spread_factor}.operation', 1)  # sum
+    cmds.setAttr(f'{spread_factor}.input1D[0]', 1)
+    cmds.connectAttr(f'{stretch_remap}.outputX', f'{spread_factor}.input1D[1]', f=1)
+
+    # The first group holds where the row STARTS rather than a segment, so
+    # scaling it would slide the whole tail off its own base.
+    for i, ctrlgrp in enumerate(ctrlgrps[1:], 1):
+        spread_mult = f'{typ}_{rigname}_spread_{i:02d}_multiplyDivide'
+        if not cmds.objExists(spread_mult):
+            cmds.createNode('multiplyDivide', n=spread_mult, s=1, ss=1)
+            cmds.setAttr(f'{spread_mult}.operation', 1)  # multiply
+        cmds.setAttr(f'{spread_mult}.input1', *ik_rest_segment(ctrlgrp),
+                     type='double3')
+        for axis in 'XYZ':
+            cmds.connectAttr(f'{spread_factor}.output1D',
+                             f'{spread_mult}.input2{axis}', f=1)
+
+        # Maya refuses a compound connection while a child plug is driven,
+        # and force does not cover it (see connect_fk_stretch_to_joints)
+        for axis in 'XYZ':
+            rt_maya.break_connection(f'{ctrlgrp}.translate{axis}')
+
+        cmds.connectAttr(f'{spread_mult}.output', f'{ctrlgrp}.translate', f=1)
+
+def ik_control_groups(rigname, typ=rt_constants.TYPE_IK):
+    '''
+    The IK control groups, base first, skipping any that are missing.
+
+    Named here rather than read back through rig_tail_control, which would
+    import the control module into this one for two f-strings.
+
+    Arguments
+        rigname (str): Name of rig component
+        typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        ctrlgrps (list): Control group names, in row order
+    '''
+    ctrlgrps = list()
+    for NN in range(1, rt_constants.NUM_CTRL_IK+1):
+        ctrl = rt_naming.fstr(rigname, rt_constants.SPLINE_IK_CTRL, typ, NN)
+        ctrlgrp = f'{ctrl}_{rt_constants.GRP}'
+        if cmds.objExists(ctrlgrp):
+            ctrlgrps.append(ctrlgrp)
+        else:
+            logger.warning(f"IK control group '{ctrlgrp}' does not exist")
+    return ctrlgrps
+
+def ik_rest_segment(ctrlgrp):
+    '''
+    A control group's rest segment vector, cached on the group itself.
+
+    Once the spread network drives the group its translate reads the
+    CURRENT spread, so a rebuild that re-baked it would fold the dial into
+    the rest and compound it every time. Cached once on first build, the
+    same guard set_curveinfo_stretch puts on initial_length.
+
+    Arguments
+        ctrlgrp (str): IK control group
+
+    Return
+        rest (tuple): Rest translate in the group's parent frame
+    '''
+    if not cmds.attributeQuery(REST_SEGMENT_ATTR, node=ctrlgrp, exists=True):
+        cmds.addAttr(ctrlgrp, ln=REST_SEGMENT_ATTR, at='double3')
+        for axis in 'XYZ':
+            cmds.addAttr(ctrlgrp, ln=f'{REST_SEGMENT_ATTR}{axis}', at='double',
+                         parent=REST_SEGMENT_ATTR)
+        cmds.setAttr(f'{ctrlgrp}.{REST_SEGMENT_ATTR}',
+                     *cmds.getAttr(f'{ctrlgrp}.translate')[0], type='double3')
+    return cmds.getAttr(f'{ctrlgrp}.{REST_SEGMENT_ATTR}')[0]
 
 def connect_fk_stretch_to_joints(rigname, joints, stretch_delta, typ):
     '''
