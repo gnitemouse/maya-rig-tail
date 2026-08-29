@@ -76,8 +76,6 @@ Functions:
         build_advanced_twist: Spline IK advanced twist setup
 '''
 
-import re
-
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_constants
@@ -735,7 +733,15 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
 # is parentConstrained to bot and top (constrain_spline_controls) - it
 # follows them already, and its translate is not ours to drive.
 SPLINE_ROLES = ('bot', 'bot_sml', 'mid', 'top_sml', 'top', 'mid_rot')
-SPLINE_SPREAD_ROLES = ('bot_sml', 'mid_rot', 'top', 'top_sml')
+# Which rule a role spreads by is decided by its PARENT, not by where it
+# sits in the row. bot_sml hangs off bot, top off mid_rot and top_sml off
+# top, so each of those translates is a segment the DAG accumulates.
+# mid_rot hangs off the BASE CONTROL, like bot and mid do, so its translate
+# is a whole offset from the base and scaling it moves it about the base's
+# origin instead of about bot.
+SPLINE_NESTED_ROLES = ('bot_sml', 'top', 'top_sml')
+SPLINE_ANCHOR_ROLE = 'bot'
+SPLINE_FLAT_ROLES = ('mid_rot',)
 
 
 def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE_IK):
@@ -755,6 +761,14 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
     where they would have been had they been active. That is what keeps a
     switch mid-dial from popping.
 
+    Every set spreads about its own FIRST control, which is what lets the
+    modes agree. SplineIK needs both rules to manage it: mid_rot hangs off
+    the base control rather than off another spline control, so the nested
+    rule would scale it about the base's origin while the rest of the set
+    scales about bot. The two centres differ by bot's own offset from the
+    base, and mid - which tracks the average of bot and top - lands on the
+    bot-centred answer, so mid and mid_rot pulled apart as the dial went up.
+
     Nothing here reads the curve, its length or the joints: all three sit
     downstream of the controls, so a control reading them would feed its
     own input. The factor is the dial and a rest vector baked at build.
@@ -767,27 +781,32 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
     logger.trace(f'{rigname}: Spread the IK control sets from the stretch dial')
     factor = spread_factor_node(rigname, stretch_remap, typ)
 
-    # Rigs built before Float and SplineIK had a spread name the IK
-    # multiplies without a set. Left alone they would sit driving nothing.
-    # Matched in Python: to cmds.ls a '[' opens a component index, so a
-    # character class is a syntax error rather than a pattern.
-    untagged = re.compile(rf'{re.escape(typ)}_{re.escape(rigname)}'
-                          rf'_spread_\d\d_multiplyDivide$')
-    stale = [node for node in cmds.ls(f'{typ}_{rigname}_spread_*') or []
-             if untagged.search(node)]
-    if stale:
-        rt_maya.remove_nodes(stale)
-
-    spread_nested(rigname, 'ik', ik_control_groups(rigname, typ)[1:],
-                  factor, typ)
+    built = set()
+    built |= spread_nested(rigname, 'ik', ik_control_groups(rigname, typ)[1:],
+                           factor, typ)
 
     spline = spline_control_groups(rigname, typ)
-    spread_nested(rigname, 'spline',
-                  [spline[role] for role in SPLINE_SPREAD_ROLES
-                   if role in spline], factor, typ)
+    if SPLINE_ANCHOR_ROLE in spline:
+        built |= spread_flat(
+            rigname, 'spline_base',
+            [spline[SPLINE_ANCHOR_ROLE]]
+            + [spline[role] for role in SPLINE_FLAT_ROLES if role in spline],
+            factor, typ)
+    built |= spread_nested(rigname, 'spline',
+                           [spline[role] for role in SPLINE_NESTED_ROLES
+                            if role in spline], factor, typ)
 
-    spread_flat(rigname, 'float', float_control_groups(rigname, typ),
-                factor, typ)
+    built |= spread_flat(rigname, 'float',
+                         float_control_groups(rigname, typ), factor, typ)
+
+    # Which node drives which group is decided by the set's name and the
+    # group's place in it, so a set that gains or loses a role - as SplineIK
+    # just did - renames its whole row. Anything the pass above did not
+    # write is from an older layout and would sit driving nothing.
+    stale = [node for node in cmds.ls(f'{typ}_{rigname}_spread_*') or []
+             if node not in built and node != factor]
+    if stale:
+        rt_maya.remove_nodes(stale)
 
 def spread_factor_node(rigname, stretch_remap, typ=rt_constants.TYPE_IK):
     '''
@@ -833,7 +852,11 @@ def spread_nested(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
         ctrlgrps (list): Control groups to drive, anchor already dropped
         factor (str): Spread factor node
         typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        set: Nodes this wrote, for the caller's stale sweep
     '''
+    built = set()
     for i, ctrlgrp in enumerate(ctrlgrps, 1):
         mult = f'{typ}_{rigname}_spread_{setname}_{i:02d}_multiplyDivide'
         if not cmds.objExists(mult):
@@ -843,6 +866,8 @@ def spread_nested(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
         for axis in 'XYZ':
             cmds.connectAttr(f'{factor}.output1D', f'{mult}.input2{axis}', f=1)
         drive_group_translate(ctrlgrp, f'{mult}.output')
+        built.add(mult)
+    return built
 
 def spread_flat(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
     '''
@@ -868,11 +893,15 @@ def spread_flat(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
         ctrlgrps (list): Control groups, base first, anchor included
         factor (str): Spread factor node
         typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        set: Nodes this wrote, for the caller's stale sweep
     '''
+    built = set()
     if len(ctrlgrps) < 2:
         logger.warning(f'{rigname}: fewer than two {setname} control groups, '
                        'so the stretch dial has no row to spread')
-        return
+        return built
 
     anchor = spread_rest(ctrlgrps[0])
     for i, ctrlgrp in enumerate(ctrlgrps[1:], 1):
@@ -895,6 +924,8 @@ def spread_flat(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
         cmds.setAttr(f'{pma}.input3D[1]', *anchor, type='double3')
 
         drive_group_translate(ctrlgrp, f'{pma}.output3D')
+        built |= {mult, pma}
+    return built
 
 def drive_group_translate(ctrlgrp, plug):
     '''

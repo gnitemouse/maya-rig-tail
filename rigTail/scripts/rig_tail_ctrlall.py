@@ -205,10 +205,7 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
     # are left to Maya ('all_wave_frequency' -> 'All Wave Frequency').
     rt_maya.add_attribute_enum(cog_ctrl, rt_constants.ALL_DIVIDER[0],
                               rt_constants.ALL_DIVIDER[1], rt_constants.ALL_DIVIDER[2])
-    for attr, kwargs in routed_attr_specs(fk, ik):
-        ln = all_attr(attr)
-        if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
-            cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+    order_all_section(cog_ctrl, routed_attr_specs(fk, ik))
 
     # OVERRIDE section: per-tail flags. Off (default) follows the
     # ALL values; On uses the tail's own basectrl values.
@@ -219,6 +216,51 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
         ln = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
         nn = re.sub(r'[-_\s]+', ' ', ln).title()
         rt_maya.add_attribute_enum(cog_ctrl, ln, nn, rt_constants.OVERRIDE_ENUM, 0)
+
+def order_all_section(cog_ctrl, specs):
+    '''
+    Put the ALL values in routed_attr_specs order, whatever order an
+    earlier build left them in.
+
+    The channel box orders dynamic attributes by CREATION, and there is no
+    command to move one. So an attribute a later build adds - Stretch on a
+    rig first built with Stretchy off, say - lands under everything already
+    there, and stays under it for good. Adding the missing ones is not
+    enough; the section has to be laid down again in one pass.
+
+    Only ALL values are rebuilt this way, and only when they are already
+    out of order. They are read by the override conditions alone, which
+    build_override_conditions rewires afterwards in the same phase. The
+    per-tail switches and override flags look reorderable too and are NOT:
+    every control proxies them, and deleting a proxy's master breaks the
+    proxy rather than moving it.
+
+    Arguments
+        cog_ctrl (str): Cog control
+        specs (list): [(attr, addAttr kwargs), ...] in the wanted order
+    '''
+    wanted = [(all_attr(attr), kwargs) for attr, kwargs in specs]
+    names = [ln for ln, _ in wanted]
+    present = [a for a in cmds.listAttr(cog_ctrl, ud=1) or [] if a in names]
+
+    if present == [ln for ln in names if ln in present]:
+        for ln, kwargs in wanted:
+            if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
+                cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+        return
+
+    logger.debug(f"'{cog_ctrl}': ALL values are out of order, laying the "
+                 f'section down again')
+    # The animator's values are the point of keeping these across a
+    # rebuild, so they come back on the far side of the delete
+    saved = {ln: cmds.getAttr(f'{cog_ctrl}.{ln}') for ln in present}
+    for ln in present:
+        rt_maya.remove_attribute(cog_ctrl, ln)
+    for ln, kwargs in wanted:
+        cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+        if ln in saved:
+            rt_maya.set_attr_value(f'{cog_ctrl}.{ln}', saved[ln])
+
 
 def add_override_to_control(rigname, control):
     '''

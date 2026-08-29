@@ -1534,9 +1534,11 @@ def test_override_routing(rigname='tail', tolerance=1e-3):
     saved = {p: cmds.getAttr(p) for p in (override_plug, ikfk_plug, all_plug)}
 
     # Something has to differ between the two modes or neither half of the
-    # sweep measures anything
-    fk_ctrl0 = rt_naming.fstr(rigname, rt_constants.CONTROL,
-                              rt_constants.TYPE_FK, 0)
+    # sweep measures anything. The variable-FK controls the animator holds
+    # carry no type prefix and count from 1 (see connect_fk) - naming them
+    # 'FK_<part>_00_ctrl' finds nothing, and a sweep with no pose behind it
+    # reports a dead switch rather than an unposed rig.
+    fk_ctrl0 = rt_naming.fstr(rigname, rt_constants.CONTROL, '', 1)
     posed = cmds.objExists(fk_ctrl0)
     saved_rot = cmds.getAttr(f'{fk_ctrl0}.rotate')[0] if posed else None
     if posed:
@@ -1933,7 +1935,7 @@ def test_spline_mid_rot(rigname='tail', amount=30.0, axis='Z', tolerance=0.02):
 
 
 def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
-                            tolerance=5.0):
+                            tolerance=0.02):
     '''
     Measure whether bending the tail puts an S in the SOLVER curve
     (MUTATES, restores).
@@ -1943,19 +1945,26 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
     looks between them, so it passes on an S-curved tail. This looks at
     the shape.
 
-    Deviation from the chord is NOT the measurement. A bent tail is
-    supposed to leave its own chord, so that number grows with the bend
-    whether the shape is right or wrong.
+    Two metrics do NOT work here, both tried:
 
-    What the rest correction promises is narrower and testable: each
-    solver CV sits at its driver sample plus an offset held in the
-    curve's own frame, so the ANGLE between that offset and the curve's
-    tangent there is a property of the rest pose and must not change when
-    the tail bends. It is exactly what a world-locked correction gets
-    wrong - the sample swings round and the offset does not follow, so
-    the angle opens up, worst toward the tip where the shape has turned
-    furthest. Both are read off the rig's own pointOnCurveInfo nodes, so
-    this measures the network rather than a reimplementation of it.
+      chord     deviation from the curve's own chord. A bent tail is
+                supposed to leave its chord, so it grows with the bend
+                whether the shape is right or wrong.
+      tangent   the angle between a CV's correction and the curve tangent
+                there. That one cannot fail: the aimMatrix aligns its
+                primary axis TO the tangent, so the bake fixes that angle
+                and any frame built this way preserves it. It reported
+                0.00 drift on every CV of a tail that still had the S.
+
+    What is left unconstrained by the aim, and is therefore what this
+    measures, is the correction's position ACROSS the curve: each solver
+    CV's distance to the driver curve. The correction is a rigid offset,
+    so if its frame really turns with the curve that distance is a
+    property of the rest pose and holds through a bend. A frame that goes
+    stale swings the offset relative to the curve and the distance moves
+    with it - worst toward the tip, where the shape has turned furthest.
+    The roll about the tangent is the part still taken from the base
+    control, so this is aimed at the half that can still be wrong.
 
     Curvature flips are reported alongside as the visible symptom: with
     only mid_rot rotated the driver curve bends one way and flips zero
@@ -1967,10 +1976,10 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
         rigname (str): Rig part to test
         amount (float): Degrees to rotate mid_rot
         axis (str): Local axis of mid_rot to rotate about
-        tolerance (float): Allowed angle drift in degrees
+        tolerance (float): Allowed drift, as a fraction of the tail's length
 
     Return
-        bool: True if every correction held its angle to the curve
+        bool: True if every correction held its distance to the curve
     '''
     print(f'\n=== SOLVER CURVE SHAPE: {rigname} ===\n')
 
@@ -1985,13 +1994,6 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
 
     solver_shape = cmds.listRelatives(solver, s=1, ni=1)[0]
     num_cv = cmds.getAttr(f'{solver}.controlPoints', size=True)
-    pocis = [f'{typ}_{rigname}_poci_{i:02d}_pointOnCurveInfo'
-             for i in range(num_cv)]
-    if not all(cmds.objExists(p) for p in pocis):
-        print(f'  x the per-CV pointOnCurveInfo nodes are missing - this '
-              f'reads the rest correction off them, so there is nothing '
-              f'to measure')
-        return False
 
     plug = f'{mid_rot}.rotate{axis.upper()}'
     if cmds.listConnections(plug, s=1, d=0, p=1):
@@ -2012,30 +2014,31 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
     def _norm(a):
         return _dot(a, a) ** 0.5
 
-    def _angles():
-        '''Angle at each CV between its rest correction and the tangent.'''
+    def _across():
+        '''Each solver CV's distance to the driver curve.'''
         out = list()
-        for i, poci in enumerate(pocis):
-            sample = cmds.getAttr(f'{poci}.position')[0]
-            tangent = cmds.getAttr(f'{poci}.normalizedTangent')[0]
+        for i in range(num_cv):
             cv = cmds.xform(f'{solver_shape}.cv[{i}]', q=1, ws=1, t=1)
-            offset = _sub(cv, sample)
-            scale = _norm(offset) * _norm(tangent)
-            # A CV the driver curve already reaches has no correction and
-            # therefore no angle to hold
-            out.append(None if scale < 1e-6
-                       else math.degrees(math.acos(
-                           max(-1.0, min(1.0, _dot(offset, tangent) / scale)))))
+            near = cmds.nearestPointOnCurve(driver, ip=cv, p=1)
+            out.append(_norm(_sub(cv, near)))
         return out
 
     def _flips(curve):
-        '''Curvature sign changes along a curve, in its own bend plane.'''
+        '''
+        Curvature sign changes along a curve, in its own bend plane.
+
+        Nearly straight stretches have a curvature vector that is mostly
+        rounding, and its sign flips at random - so the threshold is a
+        fraction of the biggest curvature on this curve rather than a
+        fixed epsilon, which counted noise as flips.
+        '''
         pts = [cmds.pointOnCurve(curve, pr=p / 40.0, top=1, p=1)
                for p in range(41)]
         kurv = [[pts[j-1][k] - 2 * pts[j][k] + pts[j+1][k] for k in range(3)]
                 for j in range(1, len(pts) - 1)]
         ref = max(kurv, key=_norm)
-        signs = [_dot(k, ref) for k in kurv if _norm(k) > 1e-5]
+        floor = _norm(ref) * 0.05
+        signs = [_dot(k, ref) for k in kurv if _norm(k) > floor]
         return sum(1 for a, b in zip(signs, signs[1:]) if a * b < 0)
 
     # mid_rot only has influence in SplineIK mode, which is position 0
@@ -2050,10 +2053,11 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
     saved_rot = cmds.getAttr(plug)
     cmds.setAttr(plug, 0)
     _eval()
-    rest = _angles()
+    rest = _across()
+    rest_flips = (_flips(solver), _flips(driver))
     cmds.setAttr(plug, amount)
     _eval()
-    bent = _angles()
+    bent = _across()
     bent_flips = (_flips(solver), _flips(driver))
 
     cmds.setAttr(plug, saved_rot)
@@ -2061,32 +2065,34 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
         cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
     _eval()
 
-    drift = [(i, abs(b - r)) for i, (r, b) in enumerate(zip(rest, bent))
-             if r is not None and b is not None]
-    if not drift:
-        print('  x no CV carries a rest correction - nothing to measure')
-        return False
+    # Scale-relative: the drift that matters is how big it is against the
+    # tail, and these run from a few units long to a few hundred
+    span = max(rest) if max(rest) > 1e-6 else 1.0
+    drift = [(i, abs(b - r) / span) for i, (r, b) in enumerate(zip(rest, bent))]
 
-    print(f'  mid_rot.rotate{axis.upper()} 0 -> {amount}, {len(drift)} '
-          f'corrected CVs\n')
-    print(f'  {"cv":>4s} {"rest":>8s} {"bent":>8s} {"drift":>8s}')
+    print(f'  mid_rot.rotate{axis.upper()} 0 -> {amount}, {num_cv} solver '
+          f'CVs, distances to {driver}\n')
+    print(f'  {"cv":>4s} {"rest":>9s} {"bent":>9s} {"drift":>9s}')
     for i, d in drift:
         mark = '' if d <= tolerance else '  x'
-        print(f'  {i:4d} {rest[i]:8.2f} {bent[i]:8.2f} {d:8.2f}{mark}')
+        print(f'  {i:4d} {rest[i]:9.4f} {bent[i]:9.4f} {d * 100:8.2f}%{mark}')
 
     worst_cv, worst = max(drift, key=lambda pair: pair[1])
     ok = worst <= tolerance
-    print(f'\n  worst drift {worst:.2f} deg at CV {worst_cv} of '
-          f'{num_cv}  {"OK" if ok else "x CORRECTION IS NOT FOLLOWING THE CURVE"}')
-    print(f'  curvature flips: solver {bent_flips[0]}, driver '
+    print(f'\n  worst drift {worst * 100:.2f}% at CV {worst_cv} of {num_cv}  '
+          f'{"OK" if ok else "x CORRECTION IS NOT FOLLOWING THE CURVE"}')
+    print(f'  curvature flips  rest: solver {rest_flips[0]}, driver '
+          f'{rest_flips[1]}')
+    print(f'                   bent: solver {bent_flips[0]}, driver '
           f'{bent_flips[1]}')
     if bent_flips[0] > bent_flips[1]:
         print(f'    the solver curve changes direction where the driver '
               f'curve does not - that is the S')
     if not ok:
         print(f'\n  the correction is turning with something other than the '
-              f'curve. rig_tail_curve.wire_aim_frame is what aims it; a '
-              f'frame taken from basectrl cannot see a local bend at all.')
+              f'curve. rig_tail_curve.wire_aim_frame is what aims it, and '
+              f'its ROLL about the tangent still comes from the base '
+              f'control (base_up_node) - which cannot see a local bend.')
 
     print('RESULT:', 'PASS' if ok else 'FAIL')
     return ok

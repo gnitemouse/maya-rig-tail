@@ -498,6 +498,11 @@ def connect_ik(rigname, fk, ik):
         add_proxy_attributes_to_controls(rigname, ik_controls['float'][i], rt_constants.TYPE_IK)
     for spline_ctrl in ik_controls['spline']:
         add_proxy_attributes_to_controls(rigname, spline_ctrl, rt_constants.TYPE_IK)
+    # The up-vector pair takes the mode and the flag but not the dials
+    for tag in ('base', 'end'):
+        upvec = rt_naming.fstr(rigname, rt_constants.UPV_CTRL, TAG=tag)
+        if cmds.objExists(upvec):
+            add_switch_proxies_to_control(rigname, upvec)
 
 def connect_spline_ik(rigname):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
@@ -670,13 +675,25 @@ def add_attributes_ikfk_switch(control, fk, ik):
         if rigname in rebuilt:
             rt_maya.set_attr_value(f'{control}.{ln_ikfk}', dv)
 
-def add_proxy_attributes_to_controls(rigname, control, typ):
-    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
-    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+def add_switch_proxies_to_control(rigname, control):
+    '''
+    The two proxies every control of a tail carries: which control set is
+    live (Override All) and which mode it is in (IKFK Switch).
 
-    # Channel box order: OVERRIDE ALL, IKFK, STRETCH, TWIST. The override
-    # flag comes first because it decides whether the dials under it are
-    # the live ones - reading them without it says nothing.
+    Split out from the dial proxies so the up-vector controls can take
+    these without the STRETCH and TWIST sections - they shape the spline's
+    up reference rather than the tail, so those dials would mean nothing
+    on them, but the mode and the flag still govern them.
+
+    Channel box order: OVERRIDE ALL, then IKFK. The flag comes first
+    because it decides whether the dials under it are the live ones -
+    reading them without it says nothing - and it governs the switch too.
+
+    Arguments
+        rigname (str): Name of rig component
+        control (str): Control to add the proxies to
+    '''
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
     if rt_ctrlall.active():
         rt_ctrlall.add_override_to_control(rigname, control)
 
@@ -690,6 +707,11 @@ def add_proxy_attributes_to_controls(rigname, control, typ):
         rt_maya.add_attribute_enum(control, rt_constants.IKFK_DIVIDER[0], rt_constants.IKFK_DIVIDER[1], rt_constants.IKFK_DIVIDER[2])
         rt_maya.add_attribute_enum(control, rt_constants.IKFK_SWITCH[0], rt_constants.IKFK_SWITCH[1],
                            pxy=f'{cog_ctrl}.{ikfk_switch}')
+
+def add_proxy_attributes_to_controls(rigname, control, typ):
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+
+    add_switch_proxies_to_control(rigname, control)
 
     # STRETCH proxies always come before TWIST proxies
     if rt_constants.EFFECTS['stretchy']:
