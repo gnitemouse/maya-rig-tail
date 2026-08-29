@@ -1966,11 +1966,11 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
     The roll about the tangent is the part still taken from the base
     control, so this is aimed at the half that can still be wrong.
 
-    Curvature flips are reported alongside as the visible symptom: with
-    only mid_rot rotated the driver curve bends one way and flips zero
-    times, so any flip the solver curve has and the driver curve does not
-    IS the S. It is reported rather than failed on, since a pose that
-    genuinely S-curves the driver curve would flip both.
+    Curvature flips are the plainer of the two, and on a tail whose
+    corrections are small they carry most of the signal: any flip the
+    solver curve has and the driver curve does not IS the S. Reported
+    rather than failed on, since a pose that genuinely S-curves the driver
+    curve would flip both.
 
     Arguments
         rigname (str): Rig part to test
@@ -2080,21 +2080,26 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
         cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
     _eval()
 
-    # Scale-relative: the drift that matters is how big it is against the
-    # tail, and these run from a few units long to a few hundred
-    span = max(rest) if max(rest) > 1e-6 else 1.0
-    drift = [(i, abs(b - r) / span) for i, (r, b) in enumerate(zip(rest, bent))]
+    # Against the TAIL, not against the corrections. Dividing by the
+    # biggest rest distance reads a hair's movement off a hair-sized base
+    # and reports four figures of percent for a deviation nothing can see;
+    # what decides whether a shape is wrong is how big it is on the tail.
+    length = cmds.arclen(driver) or 1.0
+    drift = [(i, abs(b - r) / length)
+             for i, (r, b) in enumerate(zip(rest, bent))]
 
     print(f'  mid_rot.rotate{axis.upper()} 0 -> {amount}, {num_cv} solver '
-          f'CVs, distances to {driver}\n')
+          f'CVs, distances to {driver}')
+    print(f'  tail is {length:.3f} long\n')
     print(f'  {"cv":>4s} {"rest":>9s} {"bent":>9s} {"drift":>9s}')
     for i, d in drift:
         mark = '' if d <= tolerance else '  x'
-        print(f'  {i:4d} {rest[i]:9.4f} {bent[i]:9.4f} {d * 100:8.2f}%{mark}')
+        print(f'  {i:4d} {rest[i]:9.4f} {bent[i]:9.4f} {d * 100:8.3f}%{mark}')
 
     worst_cv, worst = max(drift, key=lambda pair: pair[1])
     ok = worst <= tolerance
-    print(f'\n  worst drift {worst * 100:.2f}% at CV {worst_cv} of {num_cv}  '
+    print(f'\n  worst drift {worst * 100:.3f}% of the tail '
+          f'({worst * length:.4f} units) at CV {worst_cv} of {num_cv}  '
           f'{"OK" if ok else "x CORRECTION IS NOT FOLLOWING THE CURVE"}')
     print(f'  curvature flips  rest: solver {rest_flips[0]}, driver '
           f'{rest_flips[1]}')
