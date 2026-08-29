@@ -1993,6 +1993,7 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
             return False
 
     solver_shape = cmds.listRelatives(solver, s=1, ni=1)[0]
+    driver_shape = cmds.listRelatives(driver, s=1, ni=1)[0]
     num_cv = cmds.getAttr(f'{solver}.controlPoints', size=True)
 
     plug = f'{mid_rot}.rotate{axis.upper()}'
@@ -2015,12 +2016,22 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
         return _dot(a, a) ** 0.5
 
     def _across():
-        '''Each solver CV's distance to the driver curve.'''
+        '''
+        Each solver CV's distance to the driver curve.
+
+        Through MFnNurbsCurve rather than cmds: nearestPointOnCurve is a
+        node type, not a command, and building one per sample would put
+        the thing being measured into the graph that computes it.
+        '''
+        sel = om.MSelectionList()
+        sel.add(driver_shape)
+        fn = om.MFnNurbsCurve(sel.getDagPath(0))
         out = list()
         for i in range(num_cv):
             cv = cmds.xform(f'{solver_shape}.cv[{i}]', q=1, ws=1, t=1)
-            near = cmds.nearestPointOnCurve(driver, ip=cv, p=1)
-            out.append(_norm(_sub(cv, near)))
+            point = om.MPoint(cv[0], cv[1], cv[2])
+            near = fn.closestPoint(point, space=om.MSpace.kWorld)
+            out.append(point.distanceTo(near))
         return out
 
     def _flips(curve):

@@ -755,9 +755,61 @@ def constrain_spline_controls(rigname, typ=rt_constants.TYPE_IK):
         spline_constraints.append(cluster_constr)
     logger.trace(f'constraints {spline_constraints}')
 
-    cmds.parentConstraint(ik_controls['spline'][0], ik_controls['spline'][4], ik_ctrlgrps['spline'][2], mo=1)
+    mid_constraint = cmds.parentConstraint(
+        ik_controls['spline'][0], ik_controls['spline'][4],
+        ik_ctrlgrps['spline'][2], mo=1)[0]
+    weight_mid_to_its_place(mid_constraint, ik_controls['spline'][0],
+                            ik_controls['spline'][4], ik_ctrlgrps['spline'][2])
 
     return spline_constraints
+
+def weight_mid_to_its_place(constraint, bot, top, mid_grp):
+    '''
+    Weight the spline mid control's constraint by where it actually sits
+    between bot and top, instead of leaving it at an even 1:1.
+
+    Even weights put mid halfway through any motion of the pair, and mid
+    does not sit halfway: on the squid's L_sidetail it is 66% of the way
+    up the row. That never showed while the two ends moved together, but
+    the stretch spread moves top and leaves bot pinned, so mid crept up at
+    half the rate of the controls beside it and separated from mid_rot -
+    which spreads by its own rest fraction - by the difference.
+
+    Safe to set after the fact because of maintainOffset: each target
+    reproduces mid's rest pose on its own, so at rest every weighting
+    averages the same value and the rest pose cannot move. The weights
+    only decide how mid interpolates once the two ends disagree.
+
+    Arguments
+        constraint (str): The mid group's parentConstraint
+        bot (str): Bottom spline control, constraint target 0
+        top (str): Top spline control, constraint target 1
+        mid_grp (str): The constrained group
+    '''
+    aliases = cmds.parentConstraint(constraint, q=1, weightAliasList=1) or []
+    if len(aliases) != 2:
+        logger.warning(f"'{constraint}' has {len(aliases)} targets, expected "
+                       f'bot and top; leaving its weights even')
+        return
+
+    b = cmds.xform(bot, q=1, ws=1, rp=1)
+    t = cmds.xform(top, q=1, ws=1, rp=1)
+    m = cmds.xform(mid_grp, q=1, ws=1, rp=1)
+    row = [t[i] - b[i] for i in range(3)]
+    span = sum(v * v for v in row)
+    if span < 1e-9:
+        logger.warning(f'{bot} and {top} are in the same place, so there is '
+                       f'no row to place the mid control along')
+        return
+
+    # Projected onto the row, so a mid control sitting off the line between
+    # them still lands on the right fraction ALONG it
+    frac = sum((m[i] - b[i]) * row[i] for i in range(3)) / span
+    frac = max(0.0, min(1.0, frac))
+    cmds.setAttr(f'{constraint}.{aliases[0]}', 1.0 - frac)
+    cmds.setAttr(f'{constraint}.{aliases[1]}', frac)
+    logger.trace(f"'{constraint}': mid sits {frac:.3f} of the way from "
+                 f'{bot} to {top}')
 
 
 # IKFK MODE SWITCH =====================================================
