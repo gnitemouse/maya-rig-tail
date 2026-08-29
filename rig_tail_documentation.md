@@ -249,8 +249,13 @@ again by templated name.
   it so new features work in a stale session (see "How the modules get
   loaded").
 - **Global truth on the cog.** Per-tail IKFK switches and the optional
-  ALL/override dashboard live on the cog control; base controls carry
-  proxies (`rig_tail_ctrlall`).
+  ALL/override dashboard live on the cog control; every control carrying
+  those dials shows proxies of them (`rig_tail_ctrlall`). The override
+  flag reads `Cog` or `Basectrl` - it names which control wins rather
+  than reporting a state, since both sit in the same channel box.
+  Consumers reach the routed value through `resolved_plug()` and the
+  mode through `ikfk_driver()`; reading the raw per-tail switch bypasses
+  the flag, which is how the BN blend once escaped it.
 
 ---
 
@@ -946,8 +951,9 @@ Is the dashboard enabled for the current settings.
 #### `add_dashboard_to_cog(cog_ctrl, fk, ik)`
 Add the ALL and OVERRIDE sections to the cog control.
 
-#### `add_override_to_basectrl(rigname, basectrl)`
-Proxy a tail's override flag onto its base control.
+#### `add_override_to_control(rigname, control)`
+Proxy a tail's override flag onto one of its controls. Added to every
+control carrying the routed dials, above the IKFK section.
 
 #### `build_override_conditions(rigname, fk, ik)`
 Create/rewire the per-tail condition nodes (local vs ALL).

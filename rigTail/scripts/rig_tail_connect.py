@@ -379,7 +379,7 @@ def connect_basectrl(rigname, fk, ik):
     # TWIST, ANIMATION, JNT SCALE
     # (STRETCH attributes always come before TWIST attributes)
     if rt_ctrlall.active():
-        rt_ctrlall.add_override_to_basectrl(rigname, basectrl)
+        rt_ctrlall.add_override_to_control(rigname, basectrl)
     if ik:
         add_ikfk_attributes_to_basectrl(rigname, basectrl)
     rt_stretch.add_stretch_attributes_to_basectrl(rigname, basectrl)
@@ -673,6 +673,12 @@ def add_attributes_ikfk_switch(control, fk, ik):
 def add_proxy_attributes_to_controls(rigname, control, typ):
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+
+    # Channel box order: OVERRIDE ALL, IKFK, STRETCH, TWIST. The override
+    # flag comes first because it decides whether the dials under it are
+    # the live ones - reading them without it says nothing.
+    if rt_ctrlall.active():
+        rt_ctrlall.add_override_to_control(rigname, control)
 
     # The switch lives on the cog and only exists when IK is built. An
     # FK-only rig has no mode to switch to, so proxying it would point at
