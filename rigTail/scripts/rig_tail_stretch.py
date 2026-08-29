@@ -76,6 +76,8 @@ Functions:
         build_advanced_twist: Spline IK advanced twist setup
 '''
 
+import re
+
 import maya.cmds as cmds
 from logger_config import logger_setup, abort_build
 import rig_tail_constants as rt_constants
@@ -377,10 +379,12 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         # slot. Neither belongs in the length path - the blend pins the
         # ratio to 1.0 wherever preserveVolume reaches 0, and the sum is
         # where the slider term went in.
-        for stale in (f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr',
-                      f'{typ}_{rigname}_stretch_user_plusMinusAverage'):
-            if cmds.objExists(stale):
-                cmds.delete(stale)
+        # remove_nodes, not cmds.delete: both sit BETWEEN the reactive node
+        # and the clamp, so a delete that does not disconnect first can
+        # cascade into the length path it was meant to clear.
+        rt_maya.remove_nodes(
+            [f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr',
+             f'{typ}_{rigname}_stretch_user_plusMinusAverage'])
 
         # (clamp) stretch_ratio - 0.1 to 2.0
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
@@ -399,8 +403,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         # A rebuild can meet a doubling node in this slot with nothing
         # reading it, which would sit in the graph as an orphan.
         stretch_double = f'{typ}_{rigname}_stretch_double_multiplyDivide'
-        if cmds.objExists(stretch_double):
-            cmds.delete(stretch_double)
+        rt_maya.remove_nodes([stretch_double])
 
         # The remap scales the -10..10 dial to -0.5..0.5, the same term IK
         # adds to its reactive ratio, so one dial value means one amount of
@@ -766,9 +769,14 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
 
     # Rigs built before Float and SplineIK had a spread name the IK
     # multiplies without a set. Left alone they would sit driving nothing.
-    stale = cmds.ls(f'{typ}_{rigname}_spread_[0-9][0-9]_multiplyDivide') or []
+    # Matched in Python: to cmds.ls a '[' opens a component index, so a
+    # character class is a syntax error rather than a pattern.
+    untagged = re.compile(rf'{re.escape(typ)}_{re.escape(rigname)}'
+                          rf'_spread_\d\d_multiplyDivide$')
+    stale = [node for node in cmds.ls(f'{typ}_{rigname}_spread_*') or []
+             if untagged.search(node)]
     if stale:
-        cmds.delete(stale)
+        rt_maya.remove_nodes(stale)
 
     spread_nested(rigname, 'ik', ik_control_groups(rigname, typ)[1:],
                   factor, typ)
