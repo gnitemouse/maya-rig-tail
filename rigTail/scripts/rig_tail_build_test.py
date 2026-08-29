@@ -1570,9 +1570,10 @@ def test_override_routing(rigname='tail', tolerance=1e-3):
           f'{"OK - the switch drives it" if driven else "x SWITCH DOES NOTHING"}')
     if not held:
         print(f'\n  something downstream reads {ikfk_plug} directly rather '
-              f'than rt_ctrlall.ikfk_driver({rigname!r}) - the BN blend '
+              f'than rt_ctrlall.ikfk_driver({rigname!r}). The BN blend '
               f"weight ('{rigname}_NN_ikfk_remap_condition.firstTerm') is "
-              f'where this went wrong before')
+              f'the one to check first: it decides where the joints go, '
+              f'and it is the consumer furthest from the dashboard')
     if not driven and not posed:
         print(f'\n  no FK control {fk_ctrl0} to pose, so the two modes may '
               f'simply agree - this half proves nothing on its own')
@@ -1945,26 +1946,22 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
     looks between them, so it passes on an S-curved tail. This looks at
     the shape.
 
-    Two metrics do NOT work here, both tried:
+    Two measurements suggest themselves here and neither works. Deviation
+    from the curve's own chord grows with the bend whichever way the shape
+    came out, because a bent tail is supposed to leave its chord. The angle
+    between a CV's correction and the tangent there cannot fail at all:
+    the aimMatrix aligns its primary axis TO the tangent, so the bake fixes
+    that angle and any frame built this way preserves it - 0.00 drift on
+    every CV of a tail that still has the S.
 
-      chord     deviation from the curve's own chord. A bent tail is
-                supposed to leave its chord, so it grows with the bend
-                whether the shape is right or wrong.
-      tangent   the angle between a CV's correction and the curve tangent
-                there. That one cannot fail: the aimMatrix aligns its
-                primary axis TO the tangent, so the bake fixes that angle
-                and any frame built this way preserves it. It reported
-                0.00 drift on every CV of a tail that still had the S.
-
-    What is left unconstrained by the aim, and is therefore what this
-    measures, is the correction's position ACROSS the curve: each solver
-    CV's distance to the driver curve. The correction is a rigid offset,
-    so if its frame really turns with the curve that distance is a
-    property of the rest pose and holds through a bend. A frame that goes
-    stale swings the offset relative to the curve and the distance moves
-    with it - worst toward the tip, where the shape has turned furthest.
-    The roll about the tangent is the part still taken from the base
-    control, so this is aimed at the half that can still be wrong.
+    What the aim leaves unconstrained, and what this measures, is the
+    correction's position ACROSS the curve: each solver CV's distance to
+    the driver curve. The correction is a rigid offset, so a frame that
+    really turns with the curve holds that distance through a bend, while
+    a stale one swings the offset relative to the curve and carries the
+    distance with it - worst toward the tip, where the shape has turned
+    furthest. The roll about the tangent is the half still taken from the
+    base control, which is the half this is aimed at.
 
     Curvature flips are the plainer of the two, and on a tail whose
     corrections are small they carry most of the signal: any flip the

@@ -67,10 +67,10 @@ def build_matrix_offset_network(rigname, fk, ik):
         return
 
     joints = rt_constants.JOINTS_BN[rigname]
-    # The same resolved plug the mode SDKs are driven from, not the tail's
-    # own switch: the joints are what 'the tail is in FK' means, so reading
-    # the raw switch made a control's mode change move them while the
-    # dashboard held every other consumer on the ALL value.
+    # The same resolved plug the mode SDKs read, not the tail's own switch.
+    # The joints are what 'the tail is in FK' means, so a raw switch here
+    # puts them in a mode the dashboard is holding every other consumer out
+    # of - and does it silently, since the controls still obey the flag.
     ikfk_plug = rt_ctrlall.ikfk_driver(rigname)
 
     # Build FX list from constants

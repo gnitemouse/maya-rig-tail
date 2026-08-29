@@ -66,10 +66,9 @@ Functions:
         add_stretch_attributes_to_basectrl: stretch/squash/preserveVolume
         add_jntscale_attributes_to_basectrl: per-joint jntScaleYZ sliders
         connect_stretch_to_joints: Wire sliders and outputs to joints
-        connect_stretch_to_ik_controls: Spread the IK control row from
-            the dial, so IK stretches by growing its own curve
         connect_stretch_to_ik_controls: spread all three IK control sets
-        spread_nested / spread_flat: the spread, by set hierarchy
+            from the dial, so IK stretches by growing its own curve
+        spread_nested / spread_flat: the spread, by group parentage
         spread_factor_node / spread_rest: the shared factor, the baked rest
         ik_ / float_ / spline_control_groups: the sets to spread
     Spline IK:
@@ -765,9 +764,8 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
     modes agree. SplineIK needs both rules to manage it: mid_rot hangs off
     the base control rather than off another spline control, so the nested
     rule would scale it about the base's origin while the rest of the set
-    scales about bot. The two centres differ by bot's own offset from the
-    base, and mid - which tracks the average of bot and top - lands on the
-    bot-centred answer, so mid and mid_rot pulled apart as the dial went up.
+    scales about bot - two centres, differing by bot's own offset from the
+    base.
 
     Nothing here reads the curve, its length or the joints: all three sit
     downstream of the controls, so a control reading them would feed its
@@ -800,9 +798,9 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
                          float_control_groups(rigname, typ), factor, typ)
 
     # Which node drives which group is decided by the set's name and the
-    # group's place in it, so a set that gains or loses a role - as SplineIK
-    # just did - renames its whole row. Anything the pass above did not
-    # write is from an older layout and would sit driving nothing.
+    # group's place in it, so a set that gains or loses a role renames its
+    # whole row. Anything this pass did not write belongs to an older
+    # layout and would sit driving nothing.
     stale = [node for node in cmds.ls(f'{typ}_{rigname}_spread_*') or []
              if node not in built and node != factor]
     if stale:
@@ -979,8 +977,8 @@ def spline_control_groups(rigname, typ=rt_constants.TYPE_IK):
     The SplineIK control groups by role, skipping any that are missing.
 
     Keyed rather than indexed: this set is a fixed six with its own
-    hierarchy, so which one a group is matters more than where it sits in
-    the list (see SPLINE_SPREAD_ROLES).
+    hierarchy, and which rule a group spreads by depends on which one it
+    is, not on where it sits in a list (see SPLINE_NESTED_ROLES).
 
     Arguments
         rigname (str): Name of rig component

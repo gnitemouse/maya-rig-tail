@@ -766,19 +766,22 @@ def constrain_spline_controls(rigname, typ=rt_constants.TYPE_IK):
 def weight_mid_to_its_place(constraint, bot, top, mid_grp):
     '''
     Weight the spline mid control's constraint by where it actually sits
-    between bot and top, instead of leaving it at an even 1:1.
+    between bot and top.
 
-    Even weights put mid halfway through any motion of the pair, and mid
-    does not sit halfway: on the squid's L_sidetail it is 66% of the way
-    up the row. That never showed while the two ends moved together, but
-    the stretch spread moves top and leaves bot pinned, so mid crept up at
-    half the rate of the controls beside it and separated from mid_rot -
-    which spreads by its own rest fraction - by the difference.
+    Even weights move mid halfway through any disagreement between the
+    pair, which is only right if it sits halfway - and it does not.
+    match_target places it on the middle JOINT, and a chain whose joints
+    bunch toward the base puts that joint well past the midpoint of the
+    line bot to top (66% of it on the squid's L_sidetail). The two ends
+    moving together hides the difference; the stretch spread pins bot and
+    moves top, which is exactly when it shows, as mid falling behind
+    mid_rot - its neighbour at the same position, spreading by its own
+    rest fraction.
 
-    Safe to set after the fact because of maintainOffset: each target
-    reproduces mid's rest pose on its own, so at rest every weighting
-    averages the same value and the rest pose cannot move. The weights
-    only decide how mid interpolates once the two ends disagree.
+    maintainOffset is what makes the weights safe to set here rather than
+    at creation: each target reproduces mid's rest pose alone, so at rest
+    every weighting averages the same value and the rest pose cannot move.
+    The weights only decide how mid interpolates once the ends disagree.
 
     Arguments
         constraint (str): The mid group's parentConstraint

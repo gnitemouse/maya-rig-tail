@@ -371,12 +371,13 @@ ALL_DIVIDER = ('all_divider', '----------', 'ALL')
 # the ALL section with this tail's own values)
 OVERRIDE_DIVIDER = ('override_divider', '----------', 'OVERRIDE')
 OVERRIDE_ALL_DIVIDER = ('override_all_divider', '----------', 'OVERRIDE ALL')
-# Per-tail override flag on the cog. The enum names the control that wins
-# rather than the flag's state: Off/On said nothing about WHICH of two
-# dials an animator is looking at was the live one, and both sit in the
-# same channel box. Positions are unchanged - Cog (0, default) = follow
-# the ALL section, Basectrl (1) = use this tail's own values - so the
-# override conditions still test == 1.
+# Per-tail override flag on the cog: Cog (0, default) = the tail follows
+# the ALL section, Basectrl (1) = it uses its own values. The enum names
+# the control that wins rather than the flag's state, because both dials
+# sit in the same channel box and a bare Off/On does not say which of the
+# two an animator is reading. The positions are the contract - the
+# override conditions test == 1 - so the labels can be renamed but not
+# reordered.
 OVERRIDE = '{rigname}_override'
 OVERRIDE_ENUM = 'Cog:Basectrl'
 # Hidden resolved IKFK driver on the cog (all_ikfk vs the tail's own

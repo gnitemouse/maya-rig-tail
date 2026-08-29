@@ -36,6 +36,7 @@ Functions:
     active: is the dashboard enabled for the current settings
     routed_attr_specs: the attributes routed through the dashboard
     add_dashboard_to_cog: add the ALL and OVERRIDE sections to the cog
+    order_all_section: keep the ALL values in their intended order
     add_override_to_control: proxy a tail's override flag onto a control
     build_override_conditions: create/rewire a tail's override conditions
     resolved_plug: source plug a consumer reads for a routed attribute
@@ -228,12 +229,11 @@ def order_all_section(cog_ctrl, specs):
     there, and stays under it for good. Adding the missing ones is not
     enough; the section has to be laid down again in one pass.
 
-    Only ALL values are rebuilt this way, and only when they are already
-    out of order. They are read by the override conditions alone, which
-    build_override_conditions rewires afterwards in the same phase. The
-    per-tail switches and override flags look reorderable too and are NOT:
-    every control proxies them, and deleting a proxy's master breaks the
-    proxy rather than moving it.
+    Safe to delete and re-add because the ALL values are read by the
+    override conditions alone, which build_override_conditions rewires
+    afterwards in the same phase. The per-tail switches and override flags
+    look reorderable too and are NOT: every control proxies them, and
+    deleting a proxy's master breaks the proxy rather than moving it.
 
     Arguments
         cog_ctrl (str): Cog control
@@ -243,14 +243,14 @@ def order_all_section(cog_ctrl, specs):
     names = [ln for ln, _ in wanted]
     present = [a for a in cmds.listAttr(cog_ctrl, ud=1) or [] if a in names]
 
-    if present == [ln for ln in names if ln in present]:
-        for ln, kwargs in wanted:
-            if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
-                cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+    # Every one of them there, in order, is the only case that needs no
+    # work. A missing one cannot simply be added: it would land at the
+    # bottom whatever its place in the section, which is the disorder
+    # this exists to undo.
+    if present == names:
         return
 
-    logger.debug(f"'{cog_ctrl}': ALL values are out of order, laying the "
-                 f'section down again')
+    logger.debug(f"'{cog_ctrl}': laying the ALL section down in order")
     # The animator's values are the point of keeping these across a
     # rebuild, so they come back on the far side of the delete
     saved = {ln: cmds.getAttr(f'{cog_ctrl}.{ln}') for ln in present}

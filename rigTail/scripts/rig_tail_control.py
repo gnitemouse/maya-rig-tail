@@ -742,17 +742,16 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
                                             preserve=preserve)
         controls.append(control)
         groups.append(group)
-    # Only the five main controls, and only because they are the ones
-    # SPLINE_CONTROLS happens to list in row order. orient_aim_controls_nulls
-    # aims each entry at the NEXT in the list, so handing it all six aimed
-    # top at mid_rot - halfway back down the tail - and then left mid_rot,
-    # as the last entry, aiming -Y at top above it. Both came out pointing
-    # the other way from every control around them.
+    # The five main controls only. orient_aim_controls_nulls aims each
+    # entry at the NEXT in the list, so the list it gets has to BE the row -
+    # and SPLINE_CONTROLS is not one past the fifth, since it ends on
+    # mid_rot at 0.5 of the tail. All six would aim top back down at
+    # mid_rot, and mid_rot, as the last entry, away from top above it.
     main = len(SPLINE_MAIN_FRACS)
     orient_control_aims(groups[:main], orient_world,
                         flip_aim=rt_mirror.flip_control_aim(rigname))
-    # mid_rot shares mid's position by construction, so it shares its frame
-    # rather than aiming at anything of its own
+    # mid_rot shares mid's position by construction, so it has no row of
+    # its own to aim along and takes mid's frame outright
     cmds.matchTransform(groups[5], groups[2], pos=1, rot=1, scl=0, piv=0)
 
     rt_maya.parent_to(groups[1], controls[0]) # Parent bot_sml to bot
