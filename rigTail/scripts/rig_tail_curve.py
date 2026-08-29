@@ -331,7 +331,11 @@ def rest_aim_frames(rest_cvs, params, basectrl, up_plug):
         cmds.setAttr(f'{tmp_poci}.parameter', param)
         frames.append(cmds.getAttr(f'{tmp_aim}.outputMatrix'))
 
-    cmds.delete(tmp_aim, tmp_poci, tmp_curve)
+    # remove_nodes, not cmds.delete: the up node is upstream of tmp_aim and
+    # this is the only thing reading it yet, so a bare delete cascades back
+    # through that connection and takes it with them - leaving the runtime
+    # frames below with no roll reference to wire.
+    rt_maya.remove_nodes([tmp_aim, tmp_poci, tmp_curve])
     return frames
 
 
