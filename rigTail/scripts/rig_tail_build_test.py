@@ -24,6 +24,8 @@ Usage:
     rt_build_test.test_time_evaluation()  # time-varying FX across frames
     rt_build_test.test_twist_roll_offset('C_fintail')        # twist/roll/offset in FK and IK (MUTATES)
     rt_build_test.test_stretch('C_fintail')                  # Stretch lengthens, equally in FK and IK (MUTATES)
+    rt_build_test.test_override_routing('C_fintail')         # Override All gates the IKFK mode (MUTATES)
+    rt_build_test.test_solver_curve_shape('L_sidetail')      # bending does not S-curve the solver curve (MUTATES)
     rt_build_test.report_bend('C_fintail')                   # current bend, read-only (manual before/after)
     rt_build_test.measure_rebuild_degradation('C_fintail')   # curvature loss across rebuilds (MUTATES)
     rt_build_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
@@ -1428,6 +1430,159 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     print()
 
 
+def test_override_routing(rigname='tail', tolerance=1e-3):
+    '''
+    Verify the Override All flag actually gates the tail's IKFK mode, and
+    that every control shows the same two dials (MUTATES, restores).
+
+    The joints are what 'the tail is in FK' means, and they reach their
+    mode by a different route from everything else: the visibility and
+    constraint SDKs are keyed on the resolved driver, while the BN blend
+    weight comes off a remap condition wired in rig_tail_matrix. Point
+    that condition at the tail's own switch and the rig LOOKS routed -
+    the controls hide and show on the ALL value - while the joints follow
+    the per-tail switch behind them. Nothing errors; the only thing that
+    sees it is moving the switch and watching what does not move.
+
+    So the sweep is run twice, and it is the FIRST half that catches it:
+
+      Cog       the per-tail switch is swept and the chain must NOT move.
+                Movement here means something downstream reads the raw
+                switch instead of the resolved plug.
+      Basectrl  the same sweep must move the chain, or the override flag
+                is dead in the other direction and the tail can never be
+                driven on its own.
+
+    FK is posed first, since with both chains at rest the two modes put
+    the joints in the same place and neither half would measure anything.
+
+    The proxy audit is a pre-flight, not a pass condition: a control
+    missing the switch is an inconvenience, a control whose switch is not
+    the cog's is a second source of truth.
+
+    Arguments
+        rigname (str): Rig part to test
+        tolerance (float): Movement below this counts as none
+
+    Return
+        bool: True if the flag gates the mode in both directions
+    '''
+    print(f'\n=== OVERRIDE ROUTING CHECK: {rigname} ===\n')
+
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    if not rt_ctrlall.active() or not cmds.objExists(cog_ctrl):
+        print('  - dashboard not active - nothing to route, skipping')
+        return True
+
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
+    override_attr = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
+    for attr in (ikfk_attr, override_attr, rt_ctrlall.all_attr('ikfk')):
+        if not cmds.attributeQuery(attr, n=cog_ctrl, ex=1):
+            print(f'  x {cog_ctrl}.{attr} not found - build with IK and the '
+                  f'Main Controller on')
+            return False
+
+    bn = bn_joints(rigname)
+    if len(bn) < 3:
+        print(f'  x need at least 3 BN joints, found {len(bn)}')
+        return False
+
+    fk_mode = rt_constants.ikfk_fk_mode_index()
+    if fk_mode is None or fk_mode == 0:
+        print('  x no distinct FK mode to switch to - build FK and IK')
+        return False
+
+    # Proxy audit. A control belongs to this tail when its name carries
+    # the part between separators, which is what keeps 'L_tail1' from
+    # claiming 'L_tail11'.
+    print('PROXIES (should all read the cog):')
+    missing, foreign = list(), list()
+    for control in cmds.ls(f'*_{rt_constants.CTRL}', type='transform') or []:
+        if not (control.startswith(f'{rigname}_')
+                or f'_{rigname}_' in control):
+            continue
+        for attr, master in ((rt_constants.IKFK_SWITCH[0], ikfk_attr),
+                             (override_attr, override_attr)):
+            if not cmds.attributeQuery(attr, n=control, ex=1):
+                missing.append(f'{control}.{attr}')
+                continue
+            src = cmds.listConnections(f'{control}.{attr}', s=1, d=0, p=1) or []
+            if f'{cog_ctrl}.{master}' not in src:
+                foreign.append(f'{control}.{attr} <- {src or "nothing"}')
+    print(f'  {"missing":8s} {len(missing)}')
+    for name in missing:
+        print(f'    - {name}')
+    print(f'  {"foreign":8s} {len(foreign)}')
+    for name in foreign:
+        print(f'    x {name}')
+
+    def _eval():
+        t = cmds.currentTime(q=1)
+        cmds.currentTime(t + 0.01, e=1)
+        cmds.currentTime(t, e=1)
+
+    def _travel(a, b):
+        return sum(sum((b[i][k] - a[i][k]) ** 2 for k in range(3)) ** 0.5
+                   for i in range(len(a)))
+
+    def _pose():
+        return [cmds.xform(j, q=1, ws=1, t=1) for j in bn]
+
+    override_plug = f'{cog_ctrl}.{override_attr}'
+    ikfk_plug = f'{cog_ctrl}.{ikfk_attr}'
+    all_plug = f'{cog_ctrl}.{rt_ctrlall.all_attr("ikfk")}'
+    saved = {p: cmds.getAttr(p) for p in (override_plug, ikfk_plug, all_plug)}
+
+    # Something has to differ between the two modes or neither half of the
+    # sweep measures anything. The variable-FK controls the animator holds
+    # carry no type prefix and count from 1 (see connect_fk) - naming them
+    # 'FK_<part>_00_ctrl' finds nothing, and a sweep with no pose behind it
+    # reports a dead switch rather than an unposed rig.
+    fk_ctrl0 = rt_naming.fstr(rigname, rt_constants.CONTROL, '', 1)
+    posed = cmds.objExists(fk_ctrl0)
+    saved_rot = cmds.getAttr(f'{fk_ctrl0}.rotate')[0] if posed else None
+    if posed:
+        cmds.setAttr(f'{fk_ctrl0}.rotate', 0, 0, 30)
+
+    print('\nSWEEP (per-tail switch 0 -> FK, ALL held at 0):')
+    cmds.setAttr(all_plug, 0)
+    travel = dict()
+    for label, flag in (('Cog', 0), ('Basectrl', 1)):
+        cmds.setAttr(override_plug, flag)
+        cmds.setAttr(ikfk_plug, 0)
+        _eval()
+        before = _pose()
+        cmds.setAttr(ikfk_plug, fk_mode)
+        _eval()
+        travel[label] = _travel(before, _pose())
+
+    if posed:
+        cmds.setAttr(f'{fk_ctrl0}.rotate', *saved_rot)
+    for plug, value in saved.items():
+        cmds.setAttr(plug, value)
+    _eval()
+
+    held = travel['Cog'] <= tolerance
+    driven = travel['Basectrl'] > tolerance
+    print(f'  {"Cog":10s} chain moved {travel["Cog"]:9.4f}  '
+          f'{"OK - the flag holds it" if held else "x SWITCH LEAKS PAST THE FLAG"}')
+    print(f'  {"Basectrl":10s} chain moved {travel["Basectrl"]:9.4f}  '
+          f'{"OK - the switch drives it" if driven else "x SWITCH DOES NOTHING"}')
+    if not held:
+        print(f'\n  something downstream reads {ikfk_plug} directly rather '
+              f'than rt_ctrlall.ikfk_driver({rigname!r}). The BN blend '
+              f"weight ('{rigname}_NN_ikfk_remap_condition.firstTerm') is "
+              f'the one to check first: it decides where the joints go, '
+              f'and it is the consumer furthest from the dashboard')
+    if not driven and not posed:
+        print(f'\n  no FK control {fk_ctrl0} to pose, so the two modes may '
+              f'simply agree - this half proves nothing on its own')
+
+    ok = held and driven
+    print('RESULT:', 'PASS' if ok else 'FAIL')
+    return ok
+
+
 def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
     '''
     Verify twist / roll / offset move the BN chain in EVERY IKFK mode, by
@@ -1780,6 +1935,186 @@ def test_spline_mid_rot(rigname='tail', amount=30.0, axis='Z', tolerance=0.02):
     return ok
 
 
+def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
+                            tolerance=0.02):
+    '''
+    Measure whether bending the tail puts an S in the SOLVER curve
+    (MUTATES, restores).
+
+    test_spline_mid_rot measures how far the ENDS travel, which is what
+    separates a dropped constraint from curve geometry - but it never
+    looks between them, so it passes on an S-curved tail. This looks at
+    the shape.
+
+    Two measurements suggest themselves here and neither works. Deviation
+    from the curve's own chord grows with the bend whichever way the shape
+    came out, because a bent tail is supposed to leave its chord. The angle
+    between a CV's correction and the tangent there cannot fail at all:
+    the aimMatrix aligns its primary axis TO the tangent, so the bake fixes
+    that angle and any frame built this way preserves it - 0.00 drift on
+    every CV of a tail that still has the S.
+
+    What the aim leaves unconstrained, and what this measures, is the
+    correction's position ACROSS the curve: each solver CV's distance to
+    the driver curve. The correction is a rigid offset, so a frame that
+    really turns with the curve holds that distance through a bend, while
+    a stale one swings the offset relative to the curve and carries the
+    distance with it - worst toward the tip, where the shape has turned
+    furthest. The roll about the tangent is the half still taken from the
+    base control, which is the half this is aimed at.
+
+    Curvature flips are the plainer of the two, and on a tail whose
+    corrections are small they carry most of the signal: any flip the
+    solver curve has and the driver curve does not IS the S. Reported
+    rather than failed on, since a pose that genuinely S-curves the driver
+    curve would flip both.
+
+    Arguments
+        rigname (str): Rig part to test
+        amount (float): Degrees to rotate mid_rot
+        axis (str): Local axis of mid_rot to rotate about
+        tolerance (float): Allowed drift, as a fraction of the tail's length
+
+    Return
+        bool: True if every correction held its distance to the curve
+    '''
+    print(f'\n=== SOLVER CURVE SHAPE: {rigname} ===\n')
+
+    typ = rt_constants.TYPE_IK
+    mid_rot = rt_naming.fstr(rigname, rt_constants.SPLINE_MID_ROT, typ)
+    driver = rt_naming.fstr(rigname, rt_constants.CURVE, typ)
+    solver = rt_naming.fstr(rigname, rt_constants.CURVE, typ, TAG='spline')
+    for node in (mid_rot, driver, solver):
+        if not cmds.objExists(node):
+            print(f'  x {node} not found - build IK first')
+            return False
+
+    solver_shape = cmds.listRelatives(solver, s=1, ni=1)[0]
+    driver_shape = cmds.listRelatives(driver, s=1, ni=1)[0]
+    num_cv = cmds.getAttr(f'{solver}.controlPoints', size=True)
+
+    plug = f'{mid_rot}.rotate{axis.upper()}'
+    if cmds.listConnections(plug, s=1, d=0, p=1):
+        print(f'  x {plug} is driven by a connection')
+        return False
+
+    def _eval():
+        t = cmds.currentTime(q=1)
+        cmds.currentTime(t + 0.01, e=1)
+        cmds.currentTime(t, e=1)
+
+    def _sub(a, b):
+        return [a[k] - b[k] for k in range(3)]
+
+    def _dot(a, b):
+        return sum(a[k] * b[k] for k in range(3))
+
+    def _norm(a):
+        return _dot(a, a) ** 0.5
+
+    def _across():
+        '''
+        Each solver CV's distance to the driver curve.
+
+        Through MFnNurbsCurve rather than cmds: nearestPointOnCurve is a
+        node type, not a command, and building one per sample would put
+        the thing being measured into the graph that computes it.
+        '''
+        sel = om.MSelectionList()
+        sel.add(driver_shape)
+        fn = om.MFnNurbsCurve(sel.getDagPath(0))
+        out = list()
+        for i in range(num_cv):
+            cv = cmds.xform(f'{solver_shape}.cv[{i}]', q=1, ws=1, t=1)
+            point = om.MPoint(cv[0], cv[1], cv[2])
+            near = fn.closestPoint(point, space=om.MSpace.kWorld)
+            # Some Maya versions hand back (point, parameter) here and
+            # some just the point
+            if not isinstance(near, om.MPoint):
+                near = near[0]
+            out.append(point.distanceTo(near))
+        return out
+
+    def _flips(curve):
+        '''
+        Curvature sign changes along a curve, in its own bend plane.
+
+        Nearly straight stretches have a curvature vector that is mostly
+        rounding, and its sign flips at random - so the threshold is a
+        fraction of the biggest curvature on this curve rather than a
+        fixed epsilon, which counted noise as flips.
+        '''
+        pts = [cmds.pointOnCurve(curve, pr=p / 40.0, top=1, p=1)
+               for p in range(41)]
+        kurv = [[pts[j-1][k] - 2 * pts[j][k] + pts[j+1][k] for k in range(3)]
+                for j in range(1, len(pts) - 1)]
+        ref = max(kurv, key=_norm)
+        floor = _norm(ref) * 0.05
+        signs = [_dot(k, ref) for k in kurv if _norm(k) > floor]
+        return sum(1 for a, b in zip(signs, signs[1:]) if a * b < 0)
+
+    # mid_rot only has influence in SplineIK mode, which is position 0
+    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
+    has_switch = (cmds.objExists(cog_ctrl)
+                  and cmds.attributeQuery(ikfk_attr, n=cog_ctrl, ex=1))
+    saved_mode = cmds.getAttr(f'{cog_ctrl}.{ikfk_attr}') if has_switch else None
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', 0)
+
+    saved_rot = cmds.getAttr(plug)
+    cmds.setAttr(plug, 0)
+    _eval()
+    rest = _across()
+    rest_flips = (_flips(solver), _flips(driver))
+    cmds.setAttr(plug, amount)
+    _eval()
+    bent = _across()
+    bent_flips = (_flips(solver), _flips(driver))
+
+    cmds.setAttr(plug, saved_rot)
+    if has_switch:
+        cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', saved_mode)
+    _eval()
+
+    # Against the TAIL, not against the corrections. Dividing by the
+    # biggest rest distance reads a hair's movement off a hair-sized base
+    # and reports four figures of percent for a deviation nothing can see;
+    # what decides whether a shape is wrong is how big it is on the tail.
+    length = cmds.arclen(driver) or 1.0
+    drift = [(i, abs(b - r) / length)
+             for i, (r, b) in enumerate(zip(rest, bent))]
+
+    print(f'  mid_rot.rotate{axis.upper()} 0 -> {amount}, {num_cv} solver '
+          f'CVs, distances to {driver}')
+    print(f'  tail is {length:.3f} long\n')
+    print(f'  {"cv":>4s} {"rest":>9s} {"bent":>9s} {"drift":>9s}')
+    for i, d in drift:
+        mark = '' if d <= tolerance else '  x'
+        print(f'  {i:4d} {rest[i]:9.4f} {bent[i]:9.4f} {d * 100:8.3f}%{mark}')
+
+    worst_cv, worst = max(drift, key=lambda pair: pair[1])
+    ok = worst <= tolerance
+    print(f'\n  worst drift {worst * 100:.3f}% of the tail '
+          f'({worst * length:.4f} units) at CV {worst_cv} of {num_cv}  '
+          f'{"OK" if ok else "x CORRECTION IS NOT FOLLOWING THE CURVE"}')
+    print(f'  curvature flips  rest: solver {rest_flips[0]}, driver '
+          f'{rest_flips[1]}')
+    print(f'                   bent: solver {bent_flips[0]}, driver '
+          f'{bent_flips[1]}')
+    if bent_flips[0] > bent_flips[1]:
+        print(f'    the solver curve changes direction where the driver '
+              f'curve does not - that is the S')
+    if not ok:
+        print(f'\n  the correction is turning with something other than the '
+              f'curve. rig_tail_curve.wire_aim_frame is what aims it, and '
+              f'its ROLL about the tangent still comes from the base '
+              f'control (base_up_node) - which cannot see a local bend.')
+
+    print('RESULT:', 'PASS' if ok else 'FAIL')
+    return ok
+
+
 def bn_joints(rigname):
     '''
     The tail's BN chain, read from the scene when the cache is empty.
@@ -1827,17 +2162,16 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
     what 'the tail got longer' means whichever mode's network produced it.
 
     The dial is proved to reach the stretch remap before anything is
-    measured. A tail whose override flag is Off reads the cog's ALL value,
-    so sweeping its basectrl moves nothing at all - which looks exactly
-    like a rig that cannot stretch, and sends you hunting the wrong end.
+    measured. A tail whose override flag reads Cog takes the cog's ALL
+    value, so sweeping its basectrl moves nothing at all - which looks
+    exactly like a rig that cannot stretch, and sends you hunting the
+    wrong end.
 
-    Only IK and FK are held to it. FK adds the dial onto its ratio; IK
+    Every mode is held to it. FK adds the dial onto its ratio; each IK set
     spends it on spreading its own control row
-    (rt_stretch.connect_stretch_to_ik_controls), and the two should land in
-    the same place. SplineIK and Float drive the same clusters from
-    independent controls that no spread reaches yet, so their dial moves
-    nothing and they are reported rather than failed. Mode positions are
-    the contract here, not names: [0]=SplineIK, [1]=IK, [2]=Float, [3]=FK.
+    (rt_stretch.connect_stretch_to_ik_controls), and all of them should
+    land in the same place. Mode positions are the contract here, not
+    names: [0]=SplineIK, [1]=IK, [2]=Float, [3]=FK.
 
     Arguments
         rigname (str): Rig part to test
@@ -1895,7 +2229,7 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
         return False
 
     # With the dashboard active the tail follows the cog's ALL value until
-    # its own override flag is On, so the basectrl dial this sweeps is read
+    # its own override flag reads Basectrl, so the dial this sweeps is read
     # by nothing. Flip the flag for the duration and put it back.
     override_plug = None
     saved_override = None
@@ -1922,14 +2256,11 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
                 cmds.setAttr(override_plug, saved_override)
             return False
 
-    # Mode positions that own a stretch mechanism: IK spreads its control
-    # row, FK adds the dial onto its ratio. A build with no switch is
-    # FK-only, so its single mode stretches too.
-    spread_modes = (1, 3)
-
+    # Every mode owns a stretch mechanism: each IK set spreads its own
+    # controls, FK adds the dial onto its ratio. So none is exempt, and a
+    # mode that does not grow is a failure rather than a known gap.
     ok = True
     grew = dict()
-    unspread = list()
     for mode_name, mode_val in modes:
         if mode_val is not None:
             cmds.setAttr(f'{cog_ctrl}.{ikfk_attr}', mode_val)
@@ -1942,20 +2273,16 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
 
         delta = stretched - rest
         ratio = stretched / rest if rest > 1e-6 else 0.0
-        if mode_val is not None and mode_val not in spread_modes:
-            unspread.append(mode_name)
-            note = '- no spread of its own'
-        else:
-            good = delta > 1e-4
-            if not good:
-                ok = False
-            grew[mode_name] = delta
-            note = 'OK' if good else 'x DID NOT STRETCH'
+        good = delta > 1e-4
+        if not good:
+            ok = False
+        grew[mode_name] = delta
+        note = 'OK' if good else 'x DID NOT STRETCH'
         print(f'  {mode_name:12s} rest={rest:8.3f}  stretched={stretched:8.3f}'
               f'  x{ratio:5.3f}  {note}')
 
-    # The two that do stretch reach the same length by different routes, so
-    # a disagreement here is what pops the tail on a switch mid-dial
+    # Each mode reaches its length by a different route, so a disagreement
+    # here is what pops the tail on a switch mid-dial
     if len(grew) > 1 and ok:
         biggest = max(grew.values())
         smallest = min(grew.values())
@@ -1970,11 +2297,6 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
                   f'{smallest:.3f}')
         else:
             print(f'\n  modes agree within {spread * 100:.1f}%')
-
-    if unspread:
-        print(f'\n  dial does nothing in: {", ".join(unspread)} - their '
-              f'controls are independent, so each needs an offset summed '
-              f'from the controls before it')
 
     cmds.setAttr(plug, saved_stretch)
     if override_plug is not None:

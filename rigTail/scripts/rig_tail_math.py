@@ -10,6 +10,7 @@ Functions:
     cumulative_lengths / length_fractions: distance along a point chain
     nearest_index: index of the entry closest to a target value
     transform_vector: transform a displacement by a matrix (3x3 only)
+    invert_matrix: inverse of a 16-float matrix
     greville_fractions: normalised Greville abscissae of a clamped curve
     clamp_degree / clamped_uniform_knots: the curve create_curve builds
     bspline_point: evaluate a clamped uniform B-spline off-scene
@@ -206,6 +207,24 @@ def transform_vector(vec, matrix):
         list: [x, y, z] transformed displacement
     """
     return [sum(vec[k] * matrix[k*4 + c] for k in range(3)) for c in range(3)]
+
+
+def invert_matrix(matrix):
+    """
+    Inverse of a 16-float row-major matrix, in the same layout.
+
+    Goes through MMatrix rather than transposing the 3x3, which is only the
+    inverse when the matrix is a pure rotation. The frames this is used on
+    carry the rig's global scale as well.
+
+    Arguments:
+        matrix (list): 16 floats, row-major, as cmds.getAttr returns
+
+    Return:
+        list: 16 floats, row-major
+    """
+    inv = om.MMatrix(matrix).inverse()
+    return [inv.getElement(r, c) for r in range(4) for c in range(4)]
 
 
 def bspline_point(cvs, u, degree=3):

@@ -249,8 +249,14 @@ again by templated name.
   it so new features work in a stale session (see "How the modules get
   loaded").
 - **Global truth on the cog.** Per-tail IKFK switches and the optional
-  ALL/override dashboard live on the cog control; base controls carry
-  proxies (`rig_tail_ctrlall`).
+  ALL/override dashboard live on the cog control; every control carrying
+  those dials shows proxies of them (`rig_tail_ctrlall`). The override
+  flag reads `Cog` or `Basectrl` - it names which control wins rather
+  than reporting a state, since both sit in the same channel box.
+  Consumers reach the routed value through `resolved_plug()` and the
+  mode through `ikfk_driver()`. Reading the raw per-tail switch or the
+  plain basectrl attribute bypasses the flag silently — the controls
+  still obey it, so only the thing that skipped it misbehaves.
 
 ---
 
@@ -752,7 +758,8 @@ comes from its own SDK-layer network. `create_clusters_on_curve` carried
 an unreachable FK branch for a long time before it was removed.
 
 Key functions: `driver_curve_positions`, `solver_curve_cvs`,
-`create_curve`, `connect_driver_to_solver_curve`, `create_spline_handle`,
+`create_curve`, `connect_driver_to_solver_curve`, `wire_aim_frame`,
+`base_up_node`, `rest_aim_frames`, `create_spline_handle`,
 `get_spline_handle`, `create_clusters_on_curve`.
 
 ---
@@ -844,19 +851,40 @@ re-runs. The parent's squash would shear OPM children — `rig_tail_matrix`
 cancels it with a `squashInv` term.
 
 The `stretch` dial takes a different route per mode. FK adds it onto the
-ratio directly. IK's ratio is reactive only, so the dial spreads the IK
-control row instead (`connect_stretch_to_ik_controls`): each nested
-control group holds the segment vector to the control above it, scaling
-every segment grows the driver curve, and the reactive ratio follows the
-curve on its own. That keeps the controls sitting on the tail rather than
-stranded up its length, and it keeps the network acyclic — the controls
-are upstream of the curve that feeds the ratio, so a control may read the
-dial and its baked rest but never the curve, its length or the joints.
-Float and SplineIK modes have no spread of their own yet, so their dial
-does nothing.
+ratio directly. The IK ratio is reactive only, so the dial spreads the
+controls instead (`connect_stretch_to_ik_controls`): spreading them grows
+the driver curve, and the reactive ratio follows the curve on its own.
+That keeps the controls sitting on the tail rather than stranded up its
+length, and it keeps the network acyclic — the controls are upstream of
+the curve that feeds the ratio, so a control may read the dial and its
+baked rest but never the curve, its length or the joints.
+
+All three IK modes share one ratio and one spread factor, because they
+share one spline; a set that spread differently would move the tail on a
+mode switch rather than on the dial. Every set spreads about its own first
+control, which is what lets them agree. What differs is how each hierarchy
+carries the factor, and that is decided by a group's PARENT rather than by
+its place in the row:
+
+- **Nested** (`spread_nested`) — the group hangs off another control of
+  its set, so its translate is the segment to that control and scaling
+  every segment lets the DAG accumulate the spread. Covers the whole IK
+  row and SplineIK's `bot_sml`, `top` and `top_sml`.
+- **Flat** (`spread_flat`, `rest₁ + (restᵢ − rest₁) × factor`) — the group
+  hangs off the base control, so its translate is already a whole offset
+  and scaling it whole would centre the set on the base's origin instead
+  of on its anchor. Covers all of Float, whose groups are siblings, and
+  SplineIK's `mid_rot`, which is a sibling of `bot`.
+
+SplineIK's `bot` is its anchor. Its `mid` sits out of the spread entirely:
+it is parentConstrained to `bot`/`top`, and those weights carry it
+(`weight_mid_to_its_place`). All three sets spread at once with no mode
+gating — only the active mode's controls drive the clusters, and the rest
+are hidden.
 
 Key functions: `build_stretch`, `connect_stretch_to_joints`,
-`connect_stretch_to_ik_controls`, `add_stretch_attributes_to_basectrl`,
+`connect_stretch_to_ik_controls`, `spread_nested`, `spread_flat`,
+`spread_factor_node`, `add_stretch_attributes_to_basectrl`,
 `add_jntscale_attributes_to_basectrl`, `set_curveinfo_stretch`,
 `build_advanced_twist`.
 
@@ -876,6 +904,8 @@ the plain plugs. Caches `get_controls_ik` results per build.
 Key functions: `connect_rig_tail`, `connect_root`, `connect_cog`,
 `connect_basectrl`, `connect_fk`, `connect_ik`, `connect_spline_ik`,
 `connect_stretch`, `add_attributes_ikfk_switch`,
+`add_switch_proxies_to_control`, `add_proxy_attributes_to_controls`,
+`constrain_spline_controls`, `weight_mid_to_its_place`,
 `setup_switch_fk`/`_ik`/`_upvec`, `enforce_attr_order`.
 
 ---
@@ -935,8 +965,18 @@ Is the dashboard enabled for the current settings.
 #### `add_dashboard_to_cog(cog_ctrl, fk, ik)`
 Add the ALL and OVERRIDE sections to the cog control.
 
-#### `add_override_to_basectrl(rigname, basectrl)`
-Proxy a tail's override flag onto its base control.
+#### `order_all_section(cog_ctrl, specs)`
+Lay the ALL values down in `routed_attr_specs` order. The channel box
+orders dynamic attributes by creation and cannot move one, so an
+attribute a later build adds — Stretch on a rig first built with Stretchy
+off — otherwise sits under everything already there for good. Rebuilt
+only when already out of order, values preserved. ALL values only: the
+per-tail switches and override flags look reorderable and are not, since
+every control proxies them and deleting a proxy's master breaks it.
+
+#### `add_override_to_control(rigname, control)`
+Proxy a tail's override flag onto one of its controls. Added to every
+control carrying the routed dials, above the IKFK section.
 
 #### `build_override_conditions(rigname, fk, ik)`
 Create/rewire the per-tail condition nodes (local vs ALL).

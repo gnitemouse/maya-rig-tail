@@ -66,9 +66,11 @@ Functions:
         add_stretch_attributes_to_basectrl: stretch/squash/preserveVolume
         add_jntscale_attributes_to_basectrl: per-joint jntScaleYZ sliders
         connect_stretch_to_joints: Wire sliders and outputs to joints
-        connect_stretch_to_ik_controls: Spread the IK control row from
-            the dial, so IK stretches by growing its own curve
-        ik_control_groups / ik_rest_segment: the row, and its baked rest
+        connect_stretch_to_ik_controls: spread all three IK control sets
+            from the dial, so IK stretches by growing its own curve
+        spread_nested / spread_flat: the spread, by group parentage
+        spread_factor_node / spread_rest: the shared factor, the baked rest
+        ik_ / float_ / spline_control_groups: the sets to spread
     Spline IK:
         build_advanced_twist: Spline IK advanced twist setup
 '''
@@ -374,10 +376,12 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         # slot. Neither belongs in the length path - the blend pins the
         # ratio to 1.0 wherever preserveVolume reaches 0, and the sum is
         # where the slider term went in.
-        for stale in (f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr',
-                      f'{typ}_{rigname}_stretch_user_plusMinusAverage'):
-            if cmds.objExists(stale):
-                cmds.delete(stale)
+        # remove_nodes, not cmds.delete: both sit BETWEEN the reactive node
+        # and the clamp, so a delete that does not disconnect first can
+        # cascade into the length path it was meant to clear.
+        rt_maya.remove_nodes(
+            [f'{typ}_{rigname}_stretch_preservevol_blendTwoAttr',
+             f'{typ}_{rigname}_stretch_user_plusMinusAverage'])
 
         # (clamp) stretch_ratio - 0.1 to 2.0
         stretch_ratio = f'{typ}_{rigname}_stretch_ratio'
@@ -396,8 +400,7 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
         # A rebuild can meet a doubling node in this slot with nothing
         # reading it, which would sit in the graph as an orphan.
         stretch_double = f'{typ}_{rigname}_stretch_double_multiplyDivide'
-        if cmds.objExists(stretch_double):
-            cmds.delete(stretch_double)
+        rt_maya.remove_nodes([stretch_double])
 
         # The remap scales the -10..10 dial to -0.5..0.5, the same term IK
         # adds to its reactive ratio, so one dial value means one amount of
@@ -724,17 +727,45 @@ def connect_ik_stretch_to_joints(rigname, joints, stretch_ratio, typ):
         # Connect to joint translateX
         cmds.connectAttr(f'{jnt_mult}.outputX', f'{jnt}.translateX', f=1)
 
+# The SplineIK set, in rt_constants.SPLINE_CONTROLS order, and the subset
+# the spread drives. 'bot' is the anchor at the base of the tail, and 'mid'
+# is parentConstrained to bot and top (constrain_spline_controls) - it
+# follows them already, and its translate is not ours to drive.
+SPLINE_ROLES = ('bot', 'bot_sml', 'mid', 'top_sml', 'top', 'mid_rot')
+# Which rule a role spreads by is decided by its PARENT, not by where it
+# sits in the row. bot_sml hangs off bot, top off mid_rot and top_sml off
+# top, so each of those translates is a segment the DAG accumulates.
+# mid_rot hangs off the BASE CONTROL, like bot and mid do, so its translate
+# is a whole offset from the base and scaling it moves it about the base's
+# origin instead of about bot.
+SPLINE_NESTED_ROLES = ('bot_sml', 'top', 'top_sml')
+SPLINE_ANCHOR_ROLE = 'bot'
+SPLINE_FLAT_ROLES = ('mid_rot',)
+
+
 def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE_IK):
     '''
-    Spread the IK controls along the tail from the stretch dial.
+    Spread all three IK control sets along the tail from the stretch dial.
 
     The IK ratio is reactive only, so the dial cannot lengthen the tail on
     its own: it has to lengthen the CURVE, and the controls are what the
-    curve is made of. create_spline_controls_ik nests the row and
-    create_control puts a group under every control, so each group's
-    translate is the segment vector from the control above it. Scaling
-    every segment by one factor scales the whole row about its base, and
-    the hierarchy accumulates it - no control has to read another.
+    curve is made of. SplineIK, IK and Float share one ratio because they
+    share one spline, and they share one spread factor here for the same
+    reason. What differs between them is only how each set's hierarchy
+    carries that factor - see spread_nested and spread_flat.
+
+    All three spread at once, with no mode gating. Only the active mode's
+    controls drive the clusters (setup_switch_ik weights the constraints)
+    and the other two sets are hidden, so the inactive ones simply sit
+    where they would have been had they been active. That is what keeps a
+    switch mid-dial from popping.
+
+    Every set spreads about its own FIRST control, which is what lets the
+    modes agree. SplineIK needs both rules to manage it: mid_rot hangs off
+    the base control rather than off another spline control, so the nested
+    rule would scale it about the base's origin while the rest of the set
+    scales about bot - two centres, differing by bot's own offset from the
+    base.
 
     Nothing here reads the curve, its length or the joints: all three sit
     downstream of the controls, so a control reading them would feed its
@@ -745,50 +776,181 @@ def connect_stretch_to_ik_controls(rigname, stretch_remap, typ=rt_constants.TYPE
         stretch_remap (str): Stretch dial scaled to -0.5..0.5
         typ (str): Rig type identifier (TYPE_IK)
     '''
-    logger.trace(f'{rigname}: Spread IK controls from the stretch dial')
-    ctrlgrps = ik_control_groups(rigname, typ)
-    if len(ctrlgrps) < 2:
-        logger.warning(f'{rigname}: fewer than two IK control groups, so '
-                       'the stretch dial has no row to spread')
-        return
+    logger.trace(f'{rigname}: Spread the IK control sets from the stretch dial')
+    factor = spread_factor_node(rigname, stretch_remap, typ)
 
-    # (plusMinusAverage) spread factor: 1 + dial
-    spread_factor = f'{typ}_{rigname}_spread_factor_plusMinusAverage'
-    if not cmds.objExists(spread_factor):
-        cmds.createNode('plusMinusAverage', n=spread_factor, s=1, ss=1)
-    cmds.setAttr(f'{spread_factor}.operation', 1)  # sum
-    cmds.setAttr(f'{spread_factor}.input1D[0]', 1)
-    cmds.connectAttr(f'{stretch_remap}.outputX', f'{spread_factor}.input1D[1]', f=1)
+    built = set()
+    built |= spread_nested(rigname, 'ik', ik_control_groups(rigname, typ)[1:],
+                           factor, typ)
 
-    # The first group holds where the row STARTS rather than a segment, so
-    # scaling it would slide the whole tail off its own base.
-    for i, ctrlgrp in enumerate(ctrlgrps[1:], 1):
-        spread_mult = f'{typ}_{rigname}_spread_{i:02d}_multiplyDivide'
-        if not cmds.objExists(spread_mult):
-            cmds.createNode('multiplyDivide', n=spread_mult, s=1, ss=1)
-            cmds.setAttr(f'{spread_mult}.operation', 1)  # multiply
-        cmds.setAttr(f'{spread_mult}.input1', *ik_rest_segment(ctrlgrp),
-                     type='double3')
-        for axis in 'XYZ':
-            cmds.connectAttr(f'{spread_factor}.output1D',
-                             f'{spread_mult}.input2{axis}', f=1)
+    spline = spline_control_groups(rigname, typ)
+    if SPLINE_ANCHOR_ROLE in spline:
+        built |= spread_flat(
+            rigname, 'spline_base',
+            [spline[SPLINE_ANCHOR_ROLE]]
+            + [spline[role] for role in SPLINE_FLAT_ROLES if role in spline],
+            factor, typ)
+    built |= spread_nested(rigname, 'spline',
+                           [spline[role] for role in SPLINE_NESTED_ROLES
+                            if role in spline], factor, typ)
 
-        # Maya refuses a compound connection while a child plug is driven,
-        # and force does not cover it (see connect_fk_stretch_to_joints)
-        for axis in 'XYZ':
-            rt_maya.break_connection(f'{ctrlgrp}.translate{axis}')
+    built |= spread_flat(rigname, 'float',
+                         float_control_groups(rigname, typ), factor, typ)
 
-        cmds.connectAttr(f'{spread_mult}.output', f'{ctrlgrp}.translate', f=1)
+    # Which node drives which group is decided by the set's name and the
+    # group's place in it, so a set that gains or loses a role renames its
+    # whole row. Anything this pass did not write belongs to an older
+    # layout and would sit driving nothing.
+    stale = [node for node in cmds.ls(f'{typ}_{rigname}_spread_*') or []
+             if node not in built and node != factor]
+    if stale:
+        rt_maya.remove_nodes(stale)
 
-def ik_control_groups(rigname, typ=rt_constants.TYPE_IK):
+def spread_factor_node(rigname, stretch_remap, typ=rt_constants.TYPE_IK):
     '''
-    The IK control groups, base first, skipping any that are missing.
+    The one number every control set scales its rest offset by: 1 + dial.
+
+    Shared across the three sets deliberately. They drive the same clusters
+    on the same curve, so a set that spread by a different amount would
+    move the tail on a mode switch rather than on the dial.
+
+    Arguments
+        rigname (str): Name of rig component
+        stretch_remap (str): Stretch dial scaled to -0.5..0.5
+        typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        str: plusMinusAverage node name
+    '''
+    node = f'{typ}_{rigname}_spread_factor_plusMinusAverage'
+    if not cmds.objExists(node):
+        cmds.createNode('plusMinusAverage', n=node, s=1, ss=1)
+    cmds.setAttr(f'{node}.operation', 1)  # sum
+    cmds.setAttr(f'{node}.input1D[0]', 1)
+    cmds.connectAttr(f'{stretch_remap}.outputX', f'{node}.input1D[1]', f=1)
+    return node
+
+def spread_nested(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
+    '''
+    Scale each group's rest SEGMENT by the factor.
+
+    For the sets whose controls nest - IK's single row, SplineIK's two
+    chains (bot -> bot_sml, and mid_rot -> top -> top_sml). create_control
+    puts a group under every control, so each group's translate is the
+    offset from the control above it. Scaling every segment scales the
+    chain about its base and the DAG accumulates it, so no control has to
+    read another: acyclic by construction rather than by careful wiring.
+
+    The caller drops the anchor group. It holds where the chain STARTS
+    rather than a segment, so scaling it would slide the tail off its base.
+
+    Arguments
+        rigname (str): Name of rig component
+        setname (str): Control set tag for node names ('ik', 'spline')
+        ctrlgrps (list): Control groups to drive, anchor already dropped
+        factor (str): Spread factor node
+        typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        set: Nodes this wrote, for the caller's stale sweep
+    '''
+    built = set()
+    for i, ctrlgrp in enumerate(ctrlgrps, 1):
+        mult = f'{typ}_{rigname}_spread_{setname}_{i:02d}_multiplyDivide'
+        if not cmds.objExists(mult):
+            cmds.createNode('multiplyDivide', n=mult, s=1, ss=1)
+            cmds.setAttr(f'{mult}.operation', 1)  # multiply
+        cmds.setAttr(f'{mult}.input1', *spread_rest(ctrlgrp), type='double3')
+        for axis in 'XYZ':
+            cmds.connectAttr(f'{factor}.output1D', f'{mult}.input2{axis}', f=1)
+        drive_group_translate(ctrlgrp, f'{mult}.output')
+        built.add(mult)
+    return built
+
+def spread_flat(rigname, setname, ctrlgrps, factor, typ=rt_constants.TYPE_IK):
+    '''
+    Scale each group's rest offset FROM THE FIRST CONTROL by the factor.
+
+    Float is the only set whose controls do not nest: connect_spline_ik
+    parents every one of its groups straight to the base control. So each
+    translate is already measured from the base and is therefore CUMULATIVE
+    - there is no hierarchy to accumulate through, and no segment to scale.
+
+    Scaling that offset whole would move the first control too, which the
+    nested sets leave pinned. Subtracting the anchor out and adding it back
+    pins the same control, so the two agree on a mode switch::
+
+        translate = rest_1 + (rest_i - rest_1) * factor
+
+    Still no live reads: the nested sets get their acyclicity from the DAG,
+    this one from having nothing to read in the first place.
+
+    Arguments
+        rigname (str): Name of rig component
+        setname (str): Control set tag for node names ('float')
+        ctrlgrps (list): Control groups, base first, anchor included
+        factor (str): Spread factor node
+        typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        set: Nodes this wrote, for the caller's stale sweep
+    '''
+    built = set()
+    if len(ctrlgrps) < 2:
+        logger.warning(f'{rigname}: fewer than two {setname} control groups, '
+                       'so the stretch dial has no row to spread')
+        return built
+
+    anchor = spread_rest(ctrlgrps[0])
+    for i, ctrlgrp in enumerate(ctrlgrps[1:], 1):
+        rest = spread_rest(ctrlgrp)
+        span = [rest[k] - anchor[k] for k in range(3)]
+
+        mult = f'{typ}_{rigname}_spread_{setname}_{i:02d}_multiplyDivide'
+        if not cmds.objExists(mult):
+            cmds.createNode('multiplyDivide', n=mult, s=1, ss=1)
+            cmds.setAttr(f'{mult}.operation', 1)  # multiply
+        cmds.setAttr(f'{mult}.input1', *span, type='double3')
+        for axis in 'XYZ':
+            cmds.connectAttr(f'{factor}.output1D', f'{mult}.input2{axis}', f=1)
+
+        pma = f'{typ}_{rigname}_spread_{setname}_{i:02d}_plusMinusAverage'
+        if not cmds.objExists(pma):
+            cmds.createNode('plusMinusAverage', n=pma, s=1, ss=1)
+        cmds.setAttr(f'{pma}.operation', 1)  # sum
+        cmds.connectAttr(f'{mult}.output', f'{pma}.input3D[0]', f=1)
+        cmds.setAttr(f'{pma}.input3D[1]', *anchor, type='double3')
+
+        drive_group_translate(ctrlgrp, f'{pma}.output3D')
+        built |= {mult, pma}
+    return built
+
+def drive_group_translate(ctrlgrp, plug):
+    '''
+    Connect a double3 plug onto a control group's translate.
+
+    Maya refuses a compound connection while a child plug is driven, and
+    force does not cover it (see connect_fk_stretch_to_joints), so the
+    channels come apart first.
+
+    Arguments
+        ctrlgrp (str): Control group
+        plug (str): double3 output plug to drive it with
+    '''
+    for axis in 'XYZ':
+        rt_maya.break_connection(f'{ctrlgrp}.translate{axis}')
+    cmds.connectAttr(plug, f'{ctrlgrp}.translate', f=1)
+
+def numbered_control_groups(rigname, template, typ=rt_constants.TYPE_IK):
+    '''
+    The groups of a NUM_CTRL_IK-long control set, base first.
 
     Named here rather than read back through rig_tail_control, which would
     import the control module into this one for two f-strings.
 
     Arguments
         rigname (str): Name of rig component
+        template (str): Control naming template
         typ (str): Rig type identifier (TYPE_IK)
 
     Return
@@ -796,25 +958,60 @@ def ik_control_groups(rigname, typ=rt_constants.TYPE_IK):
     '''
     ctrlgrps = list()
     for NN in range(1, rt_constants.NUM_CTRL_IK+1):
-        ctrl = rt_naming.fstr(rigname, rt_constants.SPLINE_IK_CTRL, typ, NN)
+        ctrl = rt_naming.fstr(rigname, template, typ, NN)
         ctrlgrp = f'{ctrl}_{rt_constants.GRP}'
         if cmds.objExists(ctrlgrp):
             ctrlgrps.append(ctrlgrp)
         else:
-            logger.warning(f"IK control group '{ctrlgrp}' does not exist")
+            logger.warning(f"Control group '{ctrlgrp}' does not exist")
     return ctrlgrps
 
-def ik_rest_segment(ctrlgrp):
+def ik_control_groups(rigname, typ=rt_constants.TYPE_IK):
+    return numbered_control_groups(rigname, rt_constants.SPLINE_IK_CTRL, typ)
+
+def float_control_groups(rigname, typ=rt_constants.TYPE_IK):
+    return numbered_control_groups(rigname, rt_constants.SPLINE_FLOAT_CTRL, typ)
+
+def spline_control_groups(rigname, typ=rt_constants.TYPE_IK):
     '''
-    A control group's rest segment vector, cached on the group itself.
+    The SplineIK control groups by role, skipping any that are missing.
+
+    Keyed rather than indexed: this set is a fixed six with its own
+    hierarchy, and which rule a group spreads by depends on which one it
+    is, not on where it sits in a list (see SPLINE_NESTED_ROLES).
+
+    Arguments
+        rigname (str): Name of rig component
+        typ (str): Rig type identifier (TYPE_IK)
+
+    Return
+        groups (dict): role -> control group name
+    '''
+    groups = dict()
+    for role, template in zip(SPLINE_ROLES, rt_constants.SPLINE_CONTROLS):
+        ctrl = rt_naming.fstr(rigname, template, typ)
+        ctrlgrp = f'{ctrl}_{rt_constants.GRP}'
+        if cmds.objExists(ctrlgrp):
+            groups[role] = ctrlgrp
+        else:
+            logger.warning(f"Spline control group '{ctrlgrp}' does not exist")
+    return groups
+
+def spread_rest(ctrlgrp):
+    '''
+    A control group's rest translate, cached on the group itself.
 
     Once the spread network drives the group its translate reads the
     CURRENT spread, so a rebuild that re-baked it would fold the dial into
     the rest and compound it every time. Cached once on first build, the
     same guard set_curveinfo_stretch puts on initial_length.
 
+    What the value MEANS depends on the set: a segment from the control
+    above for the nested sets, an offset from the base control for Float.
+    Both are just the group's own translate at rest.
+
     Arguments
-        ctrlgrp (str): IK control group
+        ctrlgrp (str): Control group
 
     Return
         rest (tuple): Rest translate in the group's parent frame

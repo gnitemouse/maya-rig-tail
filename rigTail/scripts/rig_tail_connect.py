@@ -379,7 +379,7 @@ def connect_basectrl(rigname, fk, ik):
     # TWIST, ANIMATION, JNT SCALE
     # (STRETCH attributes always come before TWIST attributes)
     if rt_ctrlall.active():
-        rt_ctrlall.add_override_to_basectrl(rigname, basectrl)
+        rt_ctrlall.add_override_to_control(rigname, basectrl)
     if ik:
         add_ikfk_attributes_to_basectrl(rigname, basectrl)
     rt_stretch.add_stretch_attributes_to_basectrl(rigname, basectrl)
@@ -498,6 +498,11 @@ def connect_ik(rigname, fk, ik):
         add_proxy_attributes_to_controls(rigname, ik_controls['float'][i], rt_constants.TYPE_IK)
     for spline_ctrl in ik_controls['spline']:
         add_proxy_attributes_to_controls(rigname, spline_ctrl, rt_constants.TYPE_IK)
+    # The up-vector pair takes the mode and the flag but not the dials
+    for tag in ('base', 'end'):
+        upvec = rt_naming.fstr(rigname, rt_constants.UPV_CTRL, TAG=tag)
+        if cmds.objExists(upvec):
+            add_switch_proxies_to_control(rigname, upvec)
 
 def connect_spline_ik(rigname):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
@@ -670,9 +675,27 @@ def add_attributes_ikfk_switch(control, fk, ik):
         if rigname in rebuilt:
             rt_maya.set_attr_value(f'{control}.{ln_ikfk}', dv)
 
-def add_proxy_attributes_to_controls(rigname, control, typ):
-    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+def add_switch_proxies_to_control(rigname, control):
+    '''
+    The two proxies every control of a tail carries: which control set is
+    live (Override All) and which mode it is in (IKFK Switch).
+
+    Split out from the dial proxies so the up-vector controls can take
+    these without the STRETCH and TWIST sections - they shape the spline's
+    up reference rather than the tail, so those dials would mean nothing
+    on them, but the mode and the flag still govern them.
+
+    Channel box order: OVERRIDE ALL, then IKFK. The flag comes first
+    because it decides whether the dials under it are the live ones -
+    reading them without it says nothing - and it governs the switch too.
+
+    Arguments
+        rigname (str): Name of rig component
+        control (str): Control to add the proxies to
+    '''
     cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
+    if rt_ctrlall.active():
+        rt_ctrlall.add_override_to_control(rigname, control)
 
     # The switch lives on the cog and only exists when IK is built. An
     # FK-only rig has no mode to switch to, so proxying it would point at
@@ -684,6 +707,11 @@ def add_proxy_attributes_to_controls(rigname, control, typ):
         rt_maya.add_attribute_enum(control, rt_constants.IKFK_DIVIDER[0], rt_constants.IKFK_DIVIDER[1], rt_constants.IKFK_DIVIDER[2])
         rt_maya.add_attribute_enum(control, rt_constants.IKFK_SWITCH[0], rt_constants.IKFK_SWITCH[1],
                            pxy=f'{cog_ctrl}.{ikfk_switch}')
+
+def add_proxy_attributes_to_controls(rigname, control, typ):
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+
+    add_switch_proxies_to_control(rigname, control)
 
     # STRETCH proxies always come before TWIST proxies
     if rt_constants.EFFECTS['stretchy']:
@@ -727,9 +755,64 @@ def constrain_spline_controls(rigname, typ=rt_constants.TYPE_IK):
         spline_constraints.append(cluster_constr)
     logger.trace(f'constraints {spline_constraints}')
 
-    cmds.parentConstraint(ik_controls['spline'][0], ik_controls['spline'][4], ik_ctrlgrps['spline'][2], mo=1)
+    mid_constraint = cmds.parentConstraint(
+        ik_controls['spline'][0], ik_controls['spline'][4],
+        ik_ctrlgrps['spline'][2], mo=1)[0]
+    weight_mid_to_its_place(mid_constraint, ik_controls['spline'][0],
+                            ik_controls['spline'][4], ik_ctrlgrps['spline'][2])
 
     return spline_constraints
+
+def weight_mid_to_its_place(constraint, bot, top, mid_grp):
+    '''
+    Weight the spline mid control's constraint by where it actually sits
+    between bot and top.
+
+    Even weights move mid halfway through any disagreement between the
+    pair, which is only right if it sits halfway - and it does not.
+    match_target places it on the middle JOINT, and a chain whose joints
+    bunch toward the base puts that joint well past the midpoint of the
+    line bot to top (66% of it on the squid's L_sidetail). The two ends
+    moving together hides the difference; the stretch spread pins bot and
+    moves top, which is exactly when it shows, as mid falling behind
+    mid_rot - its neighbour at the same position, spreading by its own
+    rest fraction.
+
+    maintainOffset is what makes the weights safe to set here rather than
+    at creation: each target reproduces mid's rest pose alone, so at rest
+    every weighting averages the same value and the rest pose cannot move.
+    The weights only decide how mid interpolates once the ends disagree.
+
+    Arguments
+        constraint (str): The mid group's parentConstraint
+        bot (str): Bottom spline control, constraint target 0
+        top (str): Top spline control, constraint target 1
+        mid_grp (str): The constrained group
+    '''
+    aliases = cmds.parentConstraint(constraint, q=1, weightAliasList=1) or []
+    if len(aliases) != 2:
+        logger.warning(f"'{constraint}' has {len(aliases)} targets, expected "
+                       f'bot and top; leaving its weights even')
+        return
+
+    b = cmds.xform(bot, q=1, ws=1, rp=1)
+    t = cmds.xform(top, q=1, ws=1, rp=1)
+    m = cmds.xform(mid_grp, q=1, ws=1, rp=1)
+    row = [t[i] - b[i] for i in range(3)]
+    span = sum(v * v for v in row)
+    if span < 1e-9:
+        logger.warning(f'{bot} and {top} are in the same place, so there is '
+                       f'no row to place the mid control along')
+        return
+
+    # Projected onto the row, so a mid control sitting off the line between
+    # them still lands on the right fraction ALONG it
+    frac = sum((m[i] - b[i]) * row[i] for i in range(3)) / span
+    frac = max(0.0, min(1.0, frac))
+    cmds.setAttr(f'{constraint}.{aliases[0]}', 1.0 - frac)
+    cmds.setAttr(f'{constraint}.{aliases[1]}', frac)
+    logger.trace(f"'{constraint}': mid sits {frac:.3f} of the way from "
+                 f'{bot} to {top}')
 
 
 # IKFK MODE SWITCH =====================================================

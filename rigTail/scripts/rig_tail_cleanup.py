@@ -78,7 +78,7 @@ _CONVERSION_SWEEP_PENDING = False
 UTILITY_NODE_TYPES = ['condition', 'multiplyDivide', 'plusMinusAverage',
                       'multDoubleLinear', 'pointMatrixMult', 'blendTwoAttr',
                       'clamp', 'setRange', 'choice', 'curveInfo',
-                      'pointOnCurveInfo', 'remapValue']
+                      'pointOnCurveInfo', 'remapValue', 'aimMatrix']
 
 # Node types Maya has RENAMED, in the build's spelling -> the current one.
 # createNode still accepts the old spelling (it warns and substitutes), but
@@ -644,7 +644,7 @@ _SWEEP_TYPES = [
     'clamp', 'setRange', 'choice', 'curveInfo', 'pointOnCurveInfo',
     'remapValue', 'reverse', 'expression', 'composeMatrix',
     'decomposeMatrix', 'multMatrix', 'inverseMatrix', 'addMatrix',
-    'wtAddMatrix', 'pickMatrix', 'quatToEuler', 'eulerToQuat',
+    'wtAddMatrix', 'pickMatrix', 'aimMatrix', 'quatToEuler', 'eulerToQuat',
     'angleBetween', 'distanceBetween', 'cluster', 'ikHandle', 'ikEffector',
     'animCurveUU', 'animCurveUL', 'animCurveUA', 'animCurveTT',
 ]

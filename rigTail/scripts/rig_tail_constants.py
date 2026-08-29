@@ -367,14 +367,19 @@ SCALE_DIVIDER = ('scale_divider', '----------', 'JNT SCALE')
 # its own override flag.
 ALL_DIVIDER = ('all_divider', '----------', 'ALL')
 # OVERRIDE labels the per-tail flag section on the cog; OVERRIDE ALL
-# labels the flag's proxy on each basectrl ('Override All' = override
+# labels the flag's proxy on each control ('Override All' = override
 # the ALL section with this tail's own values)
 OVERRIDE_DIVIDER = ('override_divider', '----------', 'OVERRIDE')
 OVERRIDE_ALL_DIVIDER = ('override_all_divider', '----------', 'OVERRIDE ALL')
-# Per-tail override flag on the cog: Off (0, default) = the tail follows
-# the ALL section directly; On (1) = the tail uses its own basectrl values
+# Per-tail override flag on the cog: Cog (0, default) = the tail follows
+# the ALL section, Basectrl (1) = it uses its own values. The enum names
+# the control that wins rather than the flag's state, because both dials
+# sit in the same channel box and a bare Off/On does not say which of the
+# two an animator is reading. The positions are the contract - the
+# override conditions test == 1 - so the labels can be renamed but not
+# reordered.
 OVERRIDE = '{rigname}_override'
-OVERRIDE_ENUM = 'Off:On'
+OVERRIDE_ENUM = 'Cog:Basectrl'
 # Hidden resolved IKFK driver on the cog (all_ikfk vs the tail's own
 # switch, picked by its override condition); the mode SDKs are driven
 # from this when the dashboard is active

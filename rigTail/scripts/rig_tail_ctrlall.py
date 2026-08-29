@@ -9,11 +9,12 @@ and RIGPARTS has two or more parts. The cog control becomes a dashboard:
 
   ALL section: one 'all_*' copy on the cog of every routed attribute
     (IKFK mode, STRETCH, TWIST, ANIMATION). JNT SCALE stays per-tail.
-  OVERRIDE section: one '{rigname}_override' flag per tail. Off (default)
-    makes the tail follow the ALL values; On makes it use its own base
-    control values. Each basectrl shows the flag as an 'Override All'
-    proxy of the cog master, matching the convention that global truth
-    lives on the cog (like the per-tail IKFK switches).
+  OVERRIDE section: one '{rigname}_override' flag per tail, naming the
+    control that wins. Cog (default) makes the tail follow the ALL
+    values; Basectrl makes it use its own base control values. Every
+    control carrying the routed dials shows the flag as an 'Override
+    All' proxy of the cog master, matching the convention that global
+    truth lives on the cog (like the per-tail IKFK switches).
 
 Routing is one condition node per tail per attribute
 ('{rigname}_{attr}_override_condition'): firstTerm reads the override
@@ -35,7 +36,8 @@ Functions:
     active: is the dashboard enabled for the current settings
     routed_attr_specs: the attributes routed through the dashboard
     add_dashboard_to_cog: add the ALL and OVERRIDE sections to the cog
-    add_override_to_basectrl: proxy a tail's override flag onto its basectrl
+    order_all_section: keep the ALL values in their intended order
+    add_override_to_control: proxy a tail's override flag onto a control
     build_override_conditions: create/rewire a tail's override conditions
     resolved_plug: source plug a consumer reads for a routed attribute
     ikfk_driver: driver plug for a tail's IKFK mode SDKs
@@ -66,7 +68,7 @@ _CST_DEFAULTS = {
     'OVERRIDE_ALL_DIVIDER': ('override_all_divider', '----------', 'OVERRIDE ALL'),
     'OVERRIDE_DIVIDER': ('override_divider', '----------', 'OVERRIDE'),
     'OVERRIDE': '{rigname}_override',
-    'OVERRIDE_ENUM': 'Off:On',
+    'OVERRIDE_ENUM': 'Cog:Basectrl',
     'IKFK_RESOLVED': '{rigname}_ikfk_resolved',
     'ALL_PREFIX': 'all_',
 }
@@ -204,10 +206,7 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
     # are left to Maya ('all_wave_frequency' -> 'All Wave Frequency').
     rt_maya.add_attribute_enum(cog_ctrl, rt_constants.ALL_DIVIDER[0],
                               rt_constants.ALL_DIVIDER[1], rt_constants.ALL_DIVIDER[2])
-    for attr, kwargs in routed_attr_specs(fk, ik):
-        ln = all_attr(attr)
-        if not cmds.attributeQuery(ln, n=cog_ctrl, ex=1):
-            cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+    order_all_section(cog_ctrl, routed_attr_specs(fk, ik))
 
     # OVERRIDE section: per-tail flags. Off (default) follows the
     # ALL values; On uses the tail's own basectrl values.
@@ -219,21 +218,71 @@ def add_dashboard_to_cog(cog_ctrl, fk, ik):
         nn = re.sub(r'[-_\s]+', ' ', ln).title()
         rt_maya.add_attribute_enum(cog_ctrl, ln, nn, rt_constants.OVERRIDE_ENUM, 0)
 
-def add_override_to_basectrl(rigname, basectrl):
+def order_all_section(cog_ctrl, specs):
     '''
-    Show the tail's override flag on its basectrl as a proxy of the
-    real flag on the cog (same direction as the IKFK switch proxy).
+    Put the ALL values in routed_attr_specs order, whatever order an
+    earlier build left them in.
+
+    The channel box orders dynamic attributes by CREATION, and there is no
+    command to move one. So an attribute a later build adds - Stretch on a
+    rig first built with Stretchy off, say - lands under everything already
+    there, and stays under it for good. Adding the missing ones is not
+    enough; the section has to be laid down again in one pass.
+
+    Safe to delete and re-add because the ALL values are read by the
+    override conditions alone, which build_override_conditions rewires
+    afterwards in the same phase. The per-tail switches and override flags
+    look reorderable too and are NOT: every control proxies them, and
+    deleting a proxy's master breaks the proxy rather than moving it.
+
+    Arguments
+        cog_ctrl (str): Cog control
+        specs (list): [(attr, addAttr kwargs), ...] in the wanted order
+    '''
+    wanted = [(all_attr(attr), kwargs) for attr, kwargs in specs]
+    names = [ln for ln, _ in wanted]
+    present = [a for a in cmds.listAttr(cog_ctrl, ud=1) or [] if a in names]
+
+    # Every one of them there, in order, is the only case that needs no
+    # work. A missing one cannot simply be added: it would land at the
+    # bottom whatever its place in the section, which is the disorder
+    # this exists to undo.
+    if present == names:
+        return
+
+    logger.debug(f"'{cog_ctrl}': laying the ALL section down in order")
+    # The animator's values are the point of keeping these across a
+    # rebuild, so they come back on the far side of the delete
+    saved = {ln: cmds.getAttr(f'{cog_ctrl}.{ln}') for ln in present}
+    for ln in present:
+        rt_maya.remove_attribute(cog_ctrl, ln)
+    for ln, kwargs in wanted:
+        cmds.addAttr(cog_ctrl, ln=ln, k=1, **kwargs)
+        if ln in saved:
+            rt_maya.set_attr_value(f'{cog_ctrl}.{ln}', saved[ln])
+
+
+def add_override_to_control(rigname, control):
+    '''
+    Show the tail's override flag on one of its controls as a proxy of
+    the real flag on the cog (same direction as the IKFK switch proxy).
+
+    Added to every control that carries the routed dials, not just the
+    basectrl: the flag decides whether those dials are live, and an
+    animator holding an IK control could not see it from there.
+    It leads the channel box, above the IKFK section, because it governs
+    the mode switch below it as well.
 
     Arguments
         rigname (str): Name of rig component
-        basectrl (str): Base control
+        control (str): Control to show the flag on
     '''
     cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
     override = rt_naming.fstr(rigname, rt_constants.OVERRIDE)
-    rt_maya.add_attribute_enum(basectrl, rt_constants.OVERRIDE_ALL_DIVIDER[0],
+    rt_maya.add_attribute_enum(control, rt_constants.OVERRIDE_ALL_DIVIDER[0],
                               rt_constants.OVERRIDE_ALL_DIVIDER[1],
                               rt_constants.OVERRIDE_ALL_DIVIDER[2])
-    rt_maya.add_attribute_enum(basectrl, override, 'Override All',
+    rt_maya.add_attribute_enum(control, override, 'Override All',
                               pxy=f'{cog_ctrl}.{override}')
 
 def build_override_conditions(rigname, fk, ik):
@@ -391,23 +440,28 @@ def cleanup_ctrlall(fk, ik):
                                     type='condition') or []
                          if node not in expected_nodes])
 
-    # Basectrl override attrs (before their cog masters, so a proxy is
+    # Control override attrs (before their cog masters, so a proxy is
     # not left pointing at a deleted master). When the dashboard is off
     # everything goes; when it is on, only the stale divider from the
     # old naming goes ('override_divider' now labels the cog section,
-    # basectrls carry 'override_all_divider').
-    for rigname in rt_constants.RIGPARTS:
-        basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
-        if not cmds.objExists(basectrl):
+    # controls carry 'override_all_divider').
+    # Every control carries the flag, not just the basectrl, and an
+    # excluded part is not torn down and rebuilt - so the controls are
+    # found by asking which of them holds the attribute rather than by
+    # rebuilding the name of each set.
+    for control in cmds.ls(f'*_{rt_constants.CTRL}', type='transform') or []:
+        held = set(cmds.listAttr(control, ud=1) or [])
+        # Which tail's flag this control carries is what identifies it,
+        # so a control named outside the templates is still swept
+        flags = {rt_naming.fstr(rigname, rt_constants.OVERRIDE)
+                 for rigname in rt_constants.RIGPARTS} & held
+        if not flags:
             continue
-        stale = [rt_constants.OVERRIDE_DIVIDER[0]]
+        stale = {rt_constants.OVERRIDE_DIVIDER[0]}
         if not act:
-            stale = [rt_naming.fstr(rigname, rt_constants.OVERRIDE),
-                     rt_constants.OVERRIDE_ALL_DIVIDER[0],
-                     rt_constants.OVERRIDE_DIVIDER[0]]
-        for attr in stale:
-            if cmds.attributeQuery(attr, n=basectrl, ex=1):
-                rt_maya.remove_attribute(basectrl, attr)
+            stale |= flags | {rt_constants.OVERRIDE_ALL_DIVIDER[0]}
+        for attr in stale & held:
+            rt_maya.remove_attribute(control, attr)
 
     if not cmds.objExists(cog_ctrl):
         return

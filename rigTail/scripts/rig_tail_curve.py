@@ -26,6 +26,8 @@ Functions:
     driver_curve_positions: the driver curve's rest CVs, from joint rest
     solver_curve_cvs: solve the solver curve's CVs so the joints land right
     create_curve: NURBS curve from joint positions, FK or IK flavour
+    wire_aim_frame / base_up_node / rest_aim_frames: the frame the rest
+        correction is measured in, aimed down the driver curve
     connect_driver_to_solver_curve: wire the driver curve into the solver
         as an offset from rest
     create_spline_handle: spline ikHandle on the chain, reusing existing
@@ -221,6 +223,122 @@ def create_curve(rigname, jnt_pos, typ, tag=''):
     logger.trace(f"Created curve '{curve}' with {num_cv} CVs, degree {degree}")
     return curve
 
+# The rest correction's frame: +X follows the driver curve, +Z rolls toward
+# the base control. Which axes these are does not matter to the result - the
+# correction is baked against whatever frame the node produces (see
+# rest_aim_frames) - but they must be the same on both sides of that bake.
+AIM_PRIMARY_AXIS = (1, 0, 0)
+AIM_SECONDARY_AXIS = (0, 0, 1)
+
+
+def wire_aim_frame(node, tangent_plug, up_plug, base_plug):
+    '''
+    Wire one aimMatrix into the frame the rest correction rides.
+
+    Called for the runtime nodes AND for the throwaway one that reads the
+    rest frames, so the two cannot drift apart: the bake is only correct
+    while it inverts the same frame the rig will evaluate.
+
+    inputMatrix is the base control, so the frame keeps the rig's global
+    scale and a stable roll; only its aim axis is overridden, by the
+    curve's own direction at this parameter.
+
+    Arguments
+        node (str): aimMatrix node name
+        tangent_plug (str): Plug supplying the curve tangent (double3)
+        up_plug (str): Plug supplying the roll reference (double3)
+        base_plug (str): Base control worldMatrix plug
+
+    Return
+        str: the node name
+    '''
+    cmds.setAttr(f'{node}.primaryMode', 2) # align to a vector, not a point
+    cmds.setAttr(f'{node}.secondaryMode', 2)
+    cmds.setAttr(f'{node}.primaryInputAxis', *AIM_PRIMARY_AXIS, type='double3')
+    cmds.setAttr(f'{node}.secondaryInputAxis', *AIM_SECONDARY_AXIS, type='double3')
+    rt_maya.ensure_connect(base_plug, f'{node}.inputMatrix')
+    rt_maya.ensure_connect(tangent_plug, f'{node}.primaryTargetVector')
+    rt_maya.ensure_connect(up_plug, f'{node}.secondaryTargetVector')
+    return node
+
+
+def base_up_node(rigname, typ, basectrl):
+    '''
+    The roll reference for every rest frame: the base control's +Z in world.
+
+    One per rig part, shared by all the CVs. A tangent alone leaves the roll
+    about it undetermined, and the curve's own normal cannot supply it -
+    that flips where the curve runs straight, which is most of a tail.
+
+    Arguments
+        rigname (str): Name of rig component
+        typ (str): Type identifier (TYPE_IK)
+        basectrl (str): Base control
+
+    Return
+        str: pointMatrixMult node name
+    '''
+    node = f'{typ}_{rigname}_restup_pointMatrixMult'
+    if not cmds.objExists(node):
+        cmds.createNode('pointMatrixMult', n=node, s=1, ss=1)
+    cmds.setAttr(f'{node}.vectorMultiply', 1)
+    cmds.setAttr(f'{node}.inPoint', *AIM_SECONDARY_AXIS, type='double3')
+    rt_maya.ensure_connect(f'{basectrl}.worldMatrix[0]', f'{node}.inMatrix')
+    return node
+
+
+def rest_aim_frames(rest_cvs, params, basectrl, up_plug):
+    '''
+    The frame each CV's correction is measured in, at REST.
+
+    Read off a throwaway curve holding the rest CVs rather than computed in
+    Python. Two reasons, and the first is the load-bearing one:
+
+    - It cannot disagree with the rig. The bake divides the correction by
+      this frame and the rig multiplies it back by the live one, so the two
+      must be the same construction. Building both with the same node type
+      and the same wiring makes that true by construction rather than by my
+      reading of what aimMatrix does with primaryMode.
+    - It cannot bake a pose as rest. The live driver curve is already
+      cluster-driven on a rebuild, so sampling IT would pick up whatever the
+      animator left the controls doing - the same trap driver_rest exists to
+      avoid.
+
+    The base control is read live, exactly as the old world-space bake did.
+    That needs no rest assumption: whatever pose it is in gets inverted out
+    here and multiplied back in at evaluation.
+
+    Arguments
+        rest_cvs (list): Driver curve CV positions at rest, world space
+        params (list): Driver curve parameter per solver CV
+        basectrl (str): Base control
+        up_plug (str): Roll reference plug (base_up_node)
+
+    Return
+        list: One 16-float matrix per parameter
+    '''
+    degree = min(3, len(rest_cvs)-1)
+    tmp_curve = cmds.curve(d=degree, p=rest_cvs)
+    tmp_shape = cmds.listRelatives(tmp_curve, s=1, ni=1)[0]
+    tmp_poci = cmds.createNode('pointOnCurveInfo', ss=1)
+    tmp_aim = cmds.createNode('aimMatrix', ss=1)
+    cmds.connectAttr(f'{tmp_shape}.worldSpace[0]', f'{tmp_poci}.inputCurve')
+    wire_aim_frame(tmp_aim, f'{tmp_poci}.normalizedTangent', up_plug,
+                   f'{basectrl}.worldMatrix[0]')
+
+    frames = list()
+    for param in params:
+        cmds.setAttr(f'{tmp_poci}.parameter', param)
+        frames.append(cmds.getAttr(f'{tmp_aim}.outputMatrix'))
+
+    # remove_nodes, not cmds.delete: the up node is upstream of tmp_aim and
+    # this is the only thing reading it yet, so a bare delete cascades back
+    # through that connection and takes it with them - leaving the runtime
+    # frames below with no roll reference to wire.
+    rt_maya.remove_nodes([tmp_aim, tmp_poci, tmp_curve])
+    return frames
+
+
 def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
                                    jnt_pos=None):
     '''
@@ -260,10 +378,29 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
     character rotates the whole set of driver CVs in world space - and an
     offset that stayed put while they rotated would deform the tail by up to
     its own length the moment the rig faced a different way. So it is stored
-    in the base control's local space at build time and multiplied back out
-    through basectrl.worldMatrix each evaluation, by a pointMatrixMult in
-    vectorMultiply mode (3x3 only: this is a displacement, not a position).
-    Rotate, scale or translate the rig and the correction goes with it.
+    as a local displacement and multiplied back out through a live frame each
+    evaluation, by a pointMatrixMult in vectorMultiply mode (3x3 only: this
+    is a displacement, not a position).
+
+    That frame is the DRIVER CURVE's, not the base control's, and the
+    difference is the whole reason a bend used to put an S in the tail.
+    basectrl sits upstream of every IK control: nothing a control does can
+    reach it, so a correction riding it could only answer to the whole rig
+    moving. Bend the tail and the driver sample swung round to its new
+    position while the correction kept pointing where it pointed at rest -
+    a stale direction added to a moved sample, which bows the curve where
+    the driver curve is straight. Worst toward the tip, where the shape has
+    turned furthest from rest, and where a correction that used to point
+    ACROSS the curve ends up pointing along it.
+
+    An aimMatrix per CV fixes that by taking its aim from the tangent the
+    same pointOnCurveInfo already computes. The controls move the clusters,
+    the clusters move the CVs, and the tangent is derived from those CVs -
+    so the frame now sits DOWNSTREAM of the controls and turns with a local
+    bend. It still answers to the whole rig turning, because that rotates
+    the curve too: the curve's frame does everything the base control's did,
+    and the bend as well. inputMatrix is still basectrl, which is what keeps
+    the rig's global scale in the correction.
 
 Against a skinCluster on the same controls, this is not an approximation
     for anything the rig can currently do. Sampling a B-spline at a
@@ -326,10 +463,20 @@ Against a skinCluster on the same controls, this is not an approximation
     # must line up: the solver curve is one CV per joint (see create_curve),
     # so anything else means the two were built from different joint sets and
     # a correction would be guesswork.
-    # The correction rides the base control, so it turns with the rig (see
-    # the docstring). Without a basectrl there is nothing to ride and the
-    # correction would break the moment the character turned, so skip it
-    # rather than bake a world-locked offset.
+    # The correction rides a frame aimed down the driver curve (see the
+    # docstring), and that frame still takes its roll and the rig's global
+    # scale from the base control. Without a basectrl there is nothing to
+    # anchor either to, so skip the correction rather than bake a
+    # world-locked offset.
+    # Parameters first: the rest frames are read in one sweep of a throwaway
+    # curve rather than one per CV inside the loop.
+    if solver_num_cv == 1:
+        driver_params = [driver_min_param + (driver_param_range * 0.5)]
+    else:
+        driver_params = [driver_min_param + driver_param_range
+                         * (float(i) / (solver_num_cv - 1))
+                         for i in range(solver_num_cv)]
+
     rest_cv = None
     basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
     if jnt_pos and len(jnt_pos) == solver_num_cv and cmds.objExists(basectrl):
@@ -339,7 +486,9 @@ Against a skinCluster on the same controls, this is not an approximation
         # the joints where they belong (see there).
         rest_cv = solver_curve_cvs(jnt_pos, min(3, len(jnt_pos)-1))
         driver_rest_cv = driver_curve_positions(jnt_pos)
-        base_inv = cmds.getAttr(f'{basectrl}.worldInverseMatrix[0]')
+        up_node = base_up_node(rigname, typ, basectrl)
+        rest_frames = rest_aim_frames(driver_rest_cv, driver_params, basectrl,
+                                      f'{up_node}.output')
     elif jnt_pos and not cmds.objExists(basectrl):
         logger.warning(
             f"{rigname}: No base control '{basectrl}' to anchor the IK rest "
@@ -359,27 +508,28 @@ Against a skinCluster on the same controls, this is not an approximation
             cmds.createNode('pointOnCurveInfo', n=poci, s=1, ss=1)
         rt_maya.ensure_connect(f'{driver_shape}.worldSpace[0]', f'{poci}.inputCurve')
 
-        # Calculate parameter: Map solver CV position to driver curve parameter space
-        if solver_num_cv == 1:
-            # Single CV: Use middle of driver curve
-            driver_param = driver_min_param + (driver_param_range * 0.5)
-        else:
-            # Multiple CVs: Distribute evenly across driver curve
-            t = float(cv_i) / (solver_num_cv - 1) # 0 to 1
-            driver_param = driver_min_param + (driver_param_range * t)
-
+        # Solver CV position mapped evenly onto the driver curve's parameters
+        driver_param = driver_params[cv_i]
         cmds.setAttr(f'{poci}.parameter', driver_param)
         logger.trace(f'CV {cv_i}: parameter {driver_param:.3f}')
 
         src = poci
         src_attr = ('positionX', 'positionY', 'positionZ')
         if rest_cv is not None:
-            # rest correction: what the low-CV driver curve cannot express
-            # at this CV, held in the base control's local space so it turns
-            # with the rig
+            # rest correction: what the low-CV driver curve cannot express at
+            # this CV, held in the curve's own frame here so it turns with a
+            # local bend and not only with the rig
             sample = rt_math.bspline_point(driver_rest_cv, driver_param)
             offset = [rest_cv[cv_i][k] - sample[k] for k in range(3)]
-            local = rt_math.transform_vector(offset, base_inv)
+            local = rt_math.transform_vector(
+                offset, rt_math.invert_matrix(rest_frames[cv_i]))
+
+            # aimMatrix: the driver curve's frame at this parameter
+            restaim = f'{typ}_{rigname}_restaim_{cv_i:02d}_aimMatrix'
+            if not cmds.objExists(restaim):
+                cmds.createNode('aimMatrix', n=restaim, s=1, ss=1)
+            wire_aim_frame(restaim, f'{poci}.normalizedTangent',
+                           f'{up_node}.output', f'{basectrl}.worldMatrix[0]')
 
             # pointMatrixMult, vectorMultiply: local offset back out to world
             restvec = f'{typ}_{rigname}_restfix_{cv_i:02d}_pointMatrixMult'
@@ -387,7 +537,7 @@ Against a skinCluster on the same controls, this is not an approximation
                 cmds.createNode('pointMatrixMult', n=restvec, s=1, ss=1)
             cmds.setAttr(f'{restvec}.vectorMultiply', 1)
             cmds.setAttr(f'{restvec}.inPoint', *local, type='double3')
-            rt_maya.ensure_connect(f'{basectrl}.worldMatrix[0]',
+            rt_maya.ensure_connect(f'{restaim}.outputMatrix',
                                    f'{restvec}.inMatrix')
 
             restfix = f'{typ}_{rigname}_restfix_{cv_i:02d}_plusMinusAverage'

@@ -680,7 +680,9 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
 
     The spline set is fixed regardless of NUM_CTRL_IK: each main control
     is placed at a fixed fraction of the tail (bot=0, bot_sml=0.25,
-    mid=0.5, top_sml=0.75, top=1.0; mid_rot shares mid). Fractions are
+    mid=0.5, top_sml=0.75, top=1.0; mid_rot shares mid, position and
+    orientation both - SPLINE_CONTROLS lists it last for its own shape and
+    colour, which is a creation order and not a place in the row). Fractions are
     resolved to the nearest joint (joints are far denser than clusters),
     so bot_sml/top_sml no longer drift onto a different cluster when
     NUM_CTRL_IK changes. When no joints are supplied the nearest cluster
@@ -740,8 +742,17 @@ def create_spline_controls_spline(rigname, cluster_handles, orient_world,
                                             preserve=preserve)
         controls.append(control)
         groups.append(group)
-    orient_control_aims(groups, orient_world,
+    # The five main controls only. orient_aim_controls_nulls aims each
+    # entry at the NEXT in the list, so the list it gets has to BE the row -
+    # and SPLINE_CONTROLS is not one past the fifth, since it ends on
+    # mid_rot at 0.5 of the tail. All six would aim top back down at
+    # mid_rot, and mid_rot, as the last entry, away from top above it.
+    main = len(SPLINE_MAIN_FRACS)
+    orient_control_aims(groups[:main], orient_world,
                         flip_aim=rt_mirror.flip_control_aim(rigname))
+    # mid_rot shares mid's position by construction, so it has no row of
+    # its own to aim along and takes mid's frame outright
+    cmds.matchTransform(groups[5], groups[2], pos=1, rot=1, scl=0, piv=0)
 
     rt_maya.parent_to(groups[1], controls[0]) # Parent bot_sml to bot
     rt_maya.parent_to(groups[3], controls[4]) # Parent top_sml to top

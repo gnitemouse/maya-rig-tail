@@ -38,6 +38,8 @@ import maya.cmds as cmds
 from logger_config import logger_setup
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
+import rig_tail_maya as rt_maya
+import rig_tail_ctrlall as rt_ctrlall
 
 logger = logger_setup(__name__)
 
@@ -65,8 +67,11 @@ def build_matrix_offset_network(rigname, fk, ik):
         return
 
     joints = rt_constants.JOINTS_BN[rigname]
-    cog_ctrl = rt_naming.fstr('', rt_constants.COG_CTRL)
-    ikfk_attr = rt_naming.fstr(rigname, rt_constants.IKFK)
+    # The same resolved plug the mode SDKs read, not the tail's own switch.
+    # The joints are what 'the tail is in FK' means, so a raw switch here
+    # puts them in a mode the dashboard is holding every other consumer out
+    # of - and does it silently, since the controls still obey the flag.
+    ikfk_plug = rt_ctrlall.ikfk_driver(rigname)
 
     # Build FX list from constants
     fx_list = []
@@ -97,7 +102,7 @@ def build_matrix_offset_network(rigname, fk, ik):
         driver_jnt = _get_driver_joint(rigname, i, fk, ik)
         if driver_jnt:
             create_matrix_nodes_for_joint(
-                rigname, bn_jnt, driver_jnt, i, cog_ctrl, ikfk_attr, fx_list,
+                rigname, bn_jnt, driver_jnt, i, ikfk_plug, fx_list,
                 fk, ik
             )
         else:
@@ -210,7 +215,7 @@ def _get_parent_squash_inverse(rigname, parent_index):
 
 
 def create_matrix_nodes_for_joint(
-    rigname, bn_jnt, driver_jnt, index, cog_ctrl, ikfk_attr, fx_list,
+    rigname, bn_jnt, driver_jnt, index, ikfk_plug, fx_list,
     fk=True, ik=True):
     '''
     Create matrix network for a single BN joint.
@@ -231,8 +236,7 @@ def create_matrix_nodes_for_joint(
         bn_jnt (str): BN joint name
         driver_jnt (str): Driver joint name (IK or FK based on priority)
         index (int): Joint index
-        cog_ctrl (str): COG control name
-        ikfk_attr (str): IK/FK switch attribute name
+        ikfk_plug (str): Plug the FK blend weight is remapped from
         fx_list (list): List of FX effect names (e.g. ['curl', 'wave', 'noise'])
         fk (bool): FK components are being built
         ik (bool): IK components are being built
@@ -265,7 +269,10 @@ def create_matrix_nodes_for_joint(
             cmds.setAttr(f'{ikfk_remap}.operation', 2)
             cmds.setAttr(f'{ikfk_remap}.colorIfTrueR', 1)
             cmds.setAttr(f'{ikfk_remap}.colorIfFalseR', 0)
-            cmds.connectAttr(f'{cog_ctrl}.{ikfk_attr}', f'{ikfk_remap}.firstTerm', f=1)
+        # Outside the create guard: turning the dashboard on or off changes
+        # which plug this reads, and a surviving node would otherwise keep
+        # the old one
+        rt_maya.ensure_connect(ikfk_plug, f'{ikfk_remap}.firstTerm')
         # FK is not necessarily the last mode; re-derive threshold each build
         cmds.setAttr(f'{ikfk_remap}.secondTerm', fk_mode - 0.5)
 
