@@ -2031,6 +2031,10 @@ def test_solver_curve_shape(rigname='tail', amount=-45.0, axis='Z',
             cv = cmds.xform(f'{solver_shape}.cv[{i}]', q=1, ws=1, t=1)
             point = om.MPoint(cv[0], cv[1], cv[2])
             near = fn.closestPoint(point, space=om.MSpace.kWorld)
+            # Some Maya versions hand back (point, parameter) here and
+            # some just the point
+            if not isinstance(near, om.MPoint):
+                near = near[0]
             out.append(point.distanceTo(near))
         return out
 
