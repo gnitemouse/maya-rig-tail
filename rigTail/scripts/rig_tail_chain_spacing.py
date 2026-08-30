@@ -3,11 +3,11 @@ rig_tail_chain_spacing.py
 author: Daisy Jane @gnitemouse
 
 Pure-math joint spacing for Joint Chain Builder.
-No Maya imports — testable in plain Python.
+No Maya imports, so it is testable in plain Python.
 
 Shape and distribution are separate:
-    Shape — the Catmull–Rom curve through the chain's positions.
-    Distribution — where along that arclength each joint sits.
+    Shape: the Catmull–Rom curve through the chain's positions.
+    Distribution: where along that arclength each joint sits.
     Distribution modes are analytic functions of j/(n-1), which
     makes them count-independent and idempotent (zero drift).
 
@@ -20,7 +20,7 @@ Functions:
     pchip_tangents: Fritsch–Carlson monotone tangents
     pchip_eval: evaluate monotone cubic Hermite at query points
     snap_to_source: snap target u values to existing source indices
-    resample: full pipeline — knots, arclength, distribute, snap, eval
+    resample: full pipeline: knots, arclength, distribute, snap, eval
 """
 
 import math
@@ -34,8 +34,8 @@ EPS = 1e-9
 ALPHA = 0.5           # centripetal Catmull–Rom
 K_RANGE = (0.2, 5.0)  # power exponent clamping
 K_DEFAULT = 1.7       # power exponent when none is given
-# Power and Ratio taper the same way — long segments at the base, short ones
-# at the tip — so Invert is the only control that swaps the direction.
+# Power and Ratio taper the same way (long segments at the base, short ones
+# at the tip), so Invert is the only control that swaps the direction.
 # K_RANGE is symmetric about 1.0 in the 1/k sense; r == 1 is uniform, so the
 # useful ratio range is (0, 1]. The 0.5 floor is not cosmetic: smaller r
 # collapses the tip end (r = 0.7 over 30 joints ends on a segment 2e-5 of
@@ -241,10 +241,10 @@ def distribute(mode, n, param=None, invert=False, source=None):
     Generate n normalised positions along [0, 1] using a spacing profile.
 
     Modes:
-        uniform  — u = t
-        power    — u = t ** (1 / k)   (k K_DEFAULT, clamped to K_RANGE)
-        ratio    — geometric ratio r  (r R_DEFAULT, clamped to R_RANGE)
-        keep     — PCHIP resample of source distribution (source required)
+        uniform: u = t
+        power:   u = t ** (1 / k)   (k K_DEFAULT, clamped to K_RANGE)
+        ratio:   geometric ratio r  (r R_DEFAULT, clamped to R_RANGE)
+        keep:    PCHIP resample of source distribution (source required)
 
     Power and Ratio both taper base -> tip, so joints bunch at the tip; k
     above 1 and r below 1 strengthen it. Invert swaps the direction for

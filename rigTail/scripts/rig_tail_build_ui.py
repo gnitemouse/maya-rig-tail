@@ -2,9 +2,9 @@
 # rig_tail_build_ui.py
 author: Daisy Jane @gnitemouse
 
-PySide2 UI for Rig Tail
-Compatible with Maya 2024/2025.
-Maya 2024/2025 ships with Qt5, not Qt6.
+Tail Builder window.
+The Qt binding comes from rig_tail_qt, which picks PySide6 or PySide2
+to match the running Maya.
 
 Main window (RigTailUI) shows the current configuration, the build
 options, and buttons that open pop-up editors:
@@ -36,8 +36,7 @@ import os
 
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
-from shiboken2 import wrapInstance
-from PySide2 import QtWidgets, QtCore, QtGui
+from rig_tail_qt import QtWidgets, QtCore, wrapInstance
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
 
@@ -196,8 +195,8 @@ class RigTailUI(QtWidgets.QDialog):
         # deliberately not rig_tail_constants (it holds the session state),
         # so a constant added after this session started may be missing
         # from the cached module. Fall back rather than crash the window.
-        self.chk_fk.setChecked(getattr(rt_constants, 'BUILD_FK', True))
-        self.chk_ik.setChecked(getattr(rt_constants, 'BUILD_IK', True))
+        self.chk_fk.setChecked(rt_constants.BUILD_FK)
+        self.chk_ik.setChecked(rt_constants.BUILD_IK)
         self.chk_indiv_fk.setChecked(rt_constants.INDIV_FK)
         self.chk_stretchy.setChecked(True)
         # First-column boxes share a width so the second column aligns
@@ -541,17 +540,10 @@ class RigTailUI(QtWidgets.QDialog):
         self.chk_curl.setChecked(rt_constants.EFFECTS.get('curl', False))
         self.chk_noise.setChecked(rt_constants.EFFECTS.get('noise', False))
         self.chk_loop.setChecked(rt_constants.EFFECTS.get('loop', False))
-        self.chk_fk.setChecked(getattr(rt_constants, 'BUILD_FK', True))
-        self.chk_ik.setChecked(getattr(rt_constants, 'BUILD_IK', True))
-        # getattr: a session started before these existed has a stale
-        # constants module without them (constants are never reloaded).
-        # KEEP_WEIGHTS falls back through PRESERVE_SKIN, the single
-        # boolean it was split out of, so such a session keeps the answer
-        # its user actually gave.
-        self.chk_bind.setChecked(getattr(rt_constants, 'BIND_GEOMETRY', True))
-        self.chk_keep.setChecked(
-            getattr(rt_constants, 'KEEP_WEIGHTS',
-                    getattr(rt_constants, 'PRESERVE_SKIN', True)))
+        self.chk_fk.setChecked(rt_constants.BUILD_FK)
+        self.chk_ik.setChecked(rt_constants.BUILD_IK)
+        self.chk_bind.setChecked(rt_constants.BIND_GEOMETRY)
+        self.chk_keep.setChecked(rt_constants.KEEP_WEIGHTS)
         self.on_bind_geometry_changed(self.chk_bind.isChecked())
         self.chk_main.setChecked(rt_constants.MAIN_CONTROLLER)
         self.update_display()
@@ -617,7 +609,7 @@ class RigTailUI(QtWidgets.QDialog):
         # EXCLUDE, not RIGPARTS_EXCLUDE, to keep the value column near the
         # left edge.
         excluded = [p for p in parts
-                    if p in set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])]
+                    if p in set(rt_constants.RIGPARTS_EXCLUDE or [])]
         if excluded:
             lines.append(self._summary_line(
                 'EXCLUDE',
@@ -1053,7 +1045,7 @@ class RigPartsEditor(QtWidgets.QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        excluded = set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])
+        excluded = set(rt_constants.RIGPARTS_EXCLUDE or [])
         self.list_widget = self._make_list(
             [p for p in rt_constants.RIGPARTS if p not in excluded],
             f'Rig parts {self.phase} will process.')
@@ -1313,7 +1305,7 @@ class RigPartsEditor(QtWidgets.QDialog):
             # The scene rename is already committed, so keep the stored
             # exclusion in step even if the dialog is cancelled afterwards -
             # otherwise it would still name a part that no longer exists.
-            stored = getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or []
+            stored = rt_constants.RIGPARTS_EXCLUDE or []
             rt_constants.RIGPARTS_EXCLUDE = [new if p == old else p for p in stored]
             # Backend already updated RIGPARTS/ROOT/caches; refresh main UI
             if self.parent():

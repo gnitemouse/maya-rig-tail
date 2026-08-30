@@ -2,7 +2,7 @@
 rig_tail_setup_ui.py
 author: Daisy Jane @gnitemouse
 
-PySide2 UI for the Tail Setup phase, the optional skeleton-prep step
+UI for the Tail Setup phase, the optional skeleton-prep step
 that runs before the Tail Builder. Nothing here affects the build; it
 only re-orients the raw BN skeleton so tails move coherently.
 
@@ -45,7 +45,7 @@ is unbound for the build to rebind.
 Run Setup calls rig_tail_setup.setup_tails. Values live in
 rig_tail_constants and round-trip through the same JSON config as the
 Builder. The window is modeled on rig_tail_build_ui.RigTailUI and reuses its
-RIGPARTS editor. Compatible with Maya 2024/2025 (Qt5).
+RIGPARTS editor. The Qt binding comes from rig_tail_qt.
 
 Classes and functions:
     RigTailSetupUI: the Setup window
@@ -57,11 +57,9 @@ import os
 
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
-from shiboken2 import wrapInstance
-from PySide2 import QtWidgets, QtCore
+from rig_tail_qt import QtWidgets, QtCore, wrapInstance
 
 import rig_tail_constants as rt_constants
-import rig_tail_naming as rt_naming
 import rig_tail_mirror as rt_mirror
 import rig_tail_build_ui as rt_build_ui  # reuse RigPartsEditor
 
@@ -576,22 +574,21 @@ class RigTailSetupUI(QtWidgets.QDialog):
         combo.setCurrentIndex(idx if idx >= 0 else default_index)
 
     def load_current_values(self):
-        '''Refresh fields from rig_tail_constants (getattr for stale sessions).'''
-        self.chk_orient.setChecked(bool(getattr(rt_constants, 'ORIENT_JOINTS', True)))
-        self.chk_mirror_orient.setChecked(bool(getattr(rt_constants, 'MIRROR_ORIENT', False)))
-        self.chk_mirror_joints.setChecked(bool(getattr(rt_constants, 'MIRROR_JOINTS', False)))
-        self.chk_dryrun.setChecked(bool(getattr(rt_constants, 'MIRROR_DRYRUN', False)))
-        self._combo_set(self.cmb_source, getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R'))
+        '''Refresh every field from rig_tail_constants.'''
+        self.chk_orient.setChecked(bool(rt_constants.ORIENT_JOINTS))
+        self.chk_mirror_orient.setChecked(bool(rt_constants.MIRROR_ORIENT))
+        self.chk_mirror_joints.setChecked(bool(rt_constants.MIRROR_JOINTS))
+        self.chk_dryrun.setChecked(bool(rt_constants.MIRROR_DRYRUN))
+        self._combo_set(self.cmb_source, rt_constants.MIRROR_SOURCE_SIDE)
         self._combo_set(self.cmb_up_mode,
-            str(getattr(rt_constants, 'ORIENT_UP_MODE', 'cascade')).capitalize())
+            str(rt_constants.ORIENT_UP_MODE).capitalize())
         self._sync_up_mode_enabled(self.chk_orient.isChecked())
         self._combo_set(self.cmb_behavior,
-            str(getattr(rt_constants, 'MIRROR_BEHAVIOR',
-                        rt_mirror.BEHAVIOR_DEFAULT)).capitalize())
+            str(rt_constants.MIRROR_BEHAVIOR).capitalize())
         self._sync_behavior_enabled(self.chk_mirror_orient.isChecked())
-        self._combo_set(self.cmb_axis, getattr(rt_constants, 'MIRROR_AXIS', 'x'))
-        self._combo_set(self.cmb_aim, getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x'))
-        self._combo_set(self.cmb_up, getattr(rt_constants, 'ORIENT_UP_AXIS', 'z'))
+        self._combo_set(self.cmb_axis, rt_constants.MIRROR_AXIS)
+        self._combo_set(self.cmb_aim, rt_constants.ORIENT_AIM_AXIS)
+        self._combo_set(self.cmb_up, rt_constants.ORIENT_UP_AXIS)
         self.update_display()
 
     def save_current_values(self):
@@ -628,7 +625,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
 
     def _mirror_pairs(self):
         '''(pairs, unpaired-sided) preview using the selected source side.'''
-        prev = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
+        prev = rt_constants.MIRROR_SOURCE_SIDE
         rt_constants.MIRROR_SOURCE_SIDE = self.cmb_source.currentText()
         try:
             import rig_tail_setup as rt_setup
@@ -651,16 +648,16 @@ class RigTailSetupUI(QtWidgets.QDialog):
         return f'[{"x" if checked else " "}] {text}'
 
     def update_display(self):
-        self.txt_config.setText(getattr(rt_constants, 'LOADED_CONFIG', None) or '')
+        self.txt_config.setText(rt_constants.LOADED_CONFIG or '')
         parts = list(rt_constants.RIGPARTS)
         excluded = [p for p in parts
-                    if p in set(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])]
+                    if p in set(rt_constants.RIGPARTS_EXCLUDE or [])]
 
         # Same list form as the Builder's summary, so a part reads the same
         # in both windows. Labelled EXCLUDE, not RIGPARTS_EXCLUDE, to keep
         # the value column near the left edge.
         lines = [
-            self._summary_line('ROOT', f"'{getattr(rt_constants, 'ROOT', '')}'"),
+            self._summary_line('ROOT', f"'{rt_constants.ROOT}'"),
             self._summary_line('RIGPARTS', parts),
         ]
         if excluded:
@@ -717,7 +714,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
     def config_start_path(self):
         '''Config path to preselect in file dialogs: the textbox path if
         one is typed/displayed, otherwise the default CONFIG_FILE.'''
-        return self.txt_config.text().strip() or getattr(rt_constants, 'CONFIG_FILE', '')
+        return self.txt_config.text().strip() or rt_constants.CONFIG_FILE
 
     def load_config_path(self, filepath):
         '''Load the given config file and refresh the UI.'''

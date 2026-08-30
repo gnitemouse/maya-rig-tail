@@ -70,10 +70,13 @@ COMPONENT_ICONS = {
     RELOAD: SHELF_ICON_RELOAD,
 }
 
-# A black badge behind the overlay text. install_worktree.py uses amber
-# for the same icons, so the two installs stay distinguishable on a shelf
-# carrying both.
-OVERLAY_BACK_COLOR = (0.0, 0.0, 0.0, 1.0)
+# A light matcha badge behind the overlay text, so the shelf reads as part
+# of the tool rather than fading into the shelf background.
+# install_worktree.py uses amber for the same icons, so the two installs
+# stay distinguishable on a shelf carrying both. The two are held at the
+# same lightness - white sits on this at 3.5:1 and on the amber at 3.7:1 -
+# so neither badge shouts over the other.
+OVERLAY_BACK_COLOR = (0.494, 0.569, 0.314, 1.0)
 OVERLAY_TEXT_COLOR = (1.0, 1.0, 1.0)
 
 
@@ -207,6 +210,7 @@ import rig_tail_matrix as rt_matrix
 import rig_tail_maya as rt_maya
 import rig_tail_mirror as rt_mirror
 import rig_tail_naming as rt_naming
+import rig_tail_qt as rt_qt
 import rig_tail_restpose as rt_rest
 import rig_tail_stretch as rt_stretch
 import rig_tail_build_test as rt_build_test

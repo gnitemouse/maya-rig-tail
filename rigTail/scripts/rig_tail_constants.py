@@ -172,8 +172,7 @@ MIRROR_SOURCE_SIDE = 'R'
 #   the Setup UI's Roll Chain at 180 converts one into the other on a
 #   single chain; no roll reaches 'mirror', which reverses the aim.
 # The value set and this default are rig_tail_mirror.BEHAVIORS /
-# BEHAVIOR_DEFAULT; kept as a literal here so a stale constants module
-# still parses.
+# BEHAVIOR_DEFAULT; a literal here so this module imports nothing.
 MIRROR_BEHAVIOR = 'mirror'
 # Local axes for the aim-orient: ORIENT_AIM_AXIS runs down the chain,
 # ORIENT_UP_AXIS aligns to the up reference. The interactive roll rolls
@@ -387,11 +386,9 @@ IKFK_RESOLVED = '{rigname}_ikfk_resolved'
 # Prefix of the ALL attributes on the cog ('all_ikfk', 'all_stretch', ...)
 ALL_PREFIX = 'all_'
 # NOTE: whether the dashboard is active is computed by
-# rig_tail_ctrlall.active(), not here: this module is deliberately
-# never reloaded (see rig_tail.py), so build logic must not depend on
-# functions added here after a session started. For the same reason
-# rig_tail_ctrlall installs any of the above templates that are
-# missing from a stale session's copy of this module.
+# rig_tail_ctrlall.active(), not here. This module holds the session's
+# settings and the tool buttons leave it loaded, so it carries data and
+# config helpers only - build logic lives in the modules that reload.
 
 def ikfk_mode_index(name):
     '''
@@ -554,7 +551,7 @@ COLOR_OVERRIDE = {\
     'black':1, 'darkgrey':2, 'lightgrey':3, 'darkred':4, 'darkblue':5,
     'neonblue':6, 'darkgreen':7, 'blueblack':8, 'magenta':9, 'brown':10,
     'darkbrown':11, 'red':12, 'neonred':13, 'neongreen':14, 'blue':15,
-    'white':16, 'lightyellow':17, 'lightblue':18, 'lightgreen':19, 'lightpink':20,
+    'white':16, 'lightyellow':17, 'lightblue':18, 'mintgreen':19, 'lightpink':20,
     'lightorange':21, 'neonyellow':22, 'green':23, 'orange':24, 'yellow':25,
     'yellowgreen':26, 'lightgreen':27, 'cyan':28, 'darkcyan':29, 'purple':30,
     'pink':31 }
@@ -797,53 +794,26 @@ def load_config(filepath=None):
         BUILD_FK = config.get('BUILD_FK', BUILD_FK)
         BUILD_IK = config.get('BUILD_IK', BUILD_IK)
         INDIV_FK = config.get('INDIV_FK', INDIV_FK)
-        # 'MASTER_CONTROLLER' and 'GROUP_CONTROLS' are legacy keys
-        MAIN_CONTROLLER = config.get(
-            'MAIN_CONTROLLER', config.get(
-                'MASTER_CONTROLLER', config.get('GROUP_CONTROLS', MAIN_CONTROLLER)))
-        # Setup-phase keys were renamed. A new-format config has
-        # 'ORIENT_JOINTS'; read it straight. A legacy config predates the
-        # rename, where 'MIRROR_ORIENT' meant aim-orient and 'MIRROR_JOINTS'
-        # meant orient-mirror - migrate those to the new names (positions-
-        # mirror did not exist then, so new MIRROR_JOINTS stays default).
-        if 'ORIENT_JOINTS' in config:
-            ORIENT_JOINTS = config.get('ORIENT_JOINTS', ORIENT_JOINTS)
-            MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
-            MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
-        else:
-            ORIENT_JOINTS = config.get('MIRROR_ORIENT', ORIENT_JOINTS)
-            MIRROR_ORIENT = config.get('MIRROR_JOINTS', MIRROR_ORIENT)
-        # 'MIRROR_ORIENT_DRYRUN' is the legacy key name for MIRROR_DRYRUN
-        MIRROR_DRYRUN = config.get(
-            'MIRROR_DRYRUN', config.get('MIRROR_ORIENT_DRYRUN', MIRROR_DRYRUN))
+        MAIN_CONTROLLER = config.get('MAIN_CONTROLLER', MAIN_CONTROLLER)
+        ORIENT_JOINTS = config.get('ORIENT_JOINTS', ORIENT_JOINTS)
+        MIRROR_ORIENT = config.get('MIRROR_ORIENT', MIRROR_ORIENT)
+        MIRROR_JOINTS = config.get('MIRROR_JOINTS', MIRROR_JOINTS)
+        MIRROR_DRYRUN = config.get('MIRROR_DRYRUN', MIRROR_DRYRUN)
         MIRROR_AXIS = config.get('MIRROR_AXIS', MIRROR_AXIS)
         MIRROR_SOURCE_SIDE = config.get('MIRROR_SOURCE_SIDE', MIRROR_SOURCE_SIDE)
         # A stored value always wins, which keeps a rig on the convention
         # it was built with: changing it means re-orienting the skeleton,
         # which changes what every mirrored control does, so that has to be
         # a deliberate Mirror Orient rather than a side effect of a load.
-        # A missing key takes the module default rather than being migrated
-        # from the pre-MIRROR_BEHAVIOR maths, which produced 'parallel'
-        # frames at a time when MIRROR_ORIENT defaulted off - so such a
-        # config almost never carries a mirrored result worth preserving.
         MIRROR_BEHAVIOR = config.get('MIRROR_BEHAVIOR', MIRROR_BEHAVIOR)
         ORIENT_AIM_AXIS = config.get('ORIENT_AIM_AXIS', ORIENT_AIM_AXIS)
         ORIENT_UP_AXIS = config.get('ORIENT_UP_AXIS', ORIENT_UP_AXIS)
-        # A config saved before ORIENT_UP_MODE existed was written by code
-        # that always did 'best-fit', but it takes the module default
-        # ('cascade') anyway: the old maths is the destructive one, and a
-        # skeleton set up under it is exactly what cascade protects.
         ORIENT_UP_MODE = config.get('ORIENT_UP_MODE', ORIENT_UP_MODE)
         # FORCE_REBUILD is deliberately not loaded: forcing is a per-click
-        # action of the Build UI's button, and a config saved by an older
-        # version with it stuck on must not make every build a teardown.
-        # 'PRESERVE_SKIN' is the legacy key: one boolean over what are now
-        # two settings. It only ever meant the weight half - a config saved
-        # under it was written by code that always bound - so it migrates
-        # to KEEP_WEIGHTS and leaves BIND_GEOMETRY at its default (on).
+        # action of the Build UI's button, and a stored value would make
+        # every build a teardown.
         BIND_GEOMETRY = config.get('BIND_GEOMETRY', BIND_GEOMETRY)
-        KEEP_WEIGHTS = config.get(
-            'KEEP_WEIGHTS', config.get('PRESERVE_SKIN', KEEP_WEIGHTS))
+        KEEP_WEIGHTS = config.get('KEEP_WEIGHTS', KEEP_WEIGHTS)
         JOINT_POS_TOLERANCE = config.get('JOINT_POS_TOLERANCE', JOINT_POS_TOLERANCE)
         COLOR_SKELETON = config.get('COLOR_SKELETON', COLOR_SKELETON)
         BN_COLOR = config.get('BN_COLOR', BN_COLOR)

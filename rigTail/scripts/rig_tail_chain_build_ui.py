@@ -2,7 +2,7 @@
 rig_tail_chain_build_ui.py
 author: Daisy Jane @gnitemouse
 
-PySide2 UI for Joint Chain Builder.
+Joint Chain Builder window.
 Create and re-space BN joint chains before the Setup phase.
 
 Keeps its own create_group_box / style_button rather than touching the
@@ -21,8 +21,7 @@ Classes and functions:
 
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
-from shiboken2 import wrapInstance
-from PySide2 import QtWidgets, QtCore
+from rig_tail_qt import QtWidgets, QtCore, wrapInstance
 
 import rig_tail_constants as rt_constants
 import rig_tail_naming as rt_naming
@@ -430,7 +429,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         return group
 
     def style_button(self, button, style):
-        if style == 4:  # olive green (primary) — matches rig_tail_setup_ui
+        if style == 4:  # olive green (primary), matches rig_tail_setup_ui
             button.setStyleSheet('''
                 QPushButton {
                     background-color: #6B7A45; color: white; border: none;
@@ -439,7 +438,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
                 QPushButton:hover { background-color: #7C8C52; }
                 QPushButton:pressed { background-color: #525E33; }
             ''')
-        else:  # grey — matches rig_tail_setup_ui
+        else:  # grey, matches rig_tail_setup_ui
             button.setStyleSheet('''
                 QPushButton {
                     background-color: #3a3a3a; color: #cccccc;
@@ -483,7 +482,7 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         self.btn_select.setEnabled(not is_new)
         # Nothing is cached for a chain that does not exist yet.
         self.btn_reset.setEnabled(not is_new)
-        # A new chain has no base and no selected joint to build from — both
+        # A new chain has no base and no selected joint to build from, so both
         # of its ends are the objects that were picked.
         self.rad_from_base.setEnabled(not is_new)
         self.rad_from_selected.setEnabled(not is_new)
@@ -568,8 +567,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
         '''The joint a rebuild of this entry starts from.
 
         The chain's base joint, or the joint Select recorded when 'Build from
-        selected joint' is on. A typed name has no recorded joint — it names
-        a chain, not a joint of it — so it falls back to the base.
+        selected joint' is on. A typed name has no recorded joint: it names
+        a chain, not a joint of it, so it falls back to the base.
         '''
         root = self._resolve_root(name)
         if not root or not self.rad_from_selected.isChecked():

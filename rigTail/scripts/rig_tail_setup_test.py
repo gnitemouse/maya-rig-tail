@@ -394,7 +394,7 @@ def test_mirror_frames():
 def test_find_mirror_pairs():
     '''find_mirror_pairs pairs L/R by prefix and honours the source side.'''
     saved_parts = list(rt_constants.RIGPARTS)
-    saved_side = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
+    saved_side = rt_constants.MIRROR_SOURCE_SIDE
     try:
         rt_constants.RIGPARTS = ['R_fintail', 'L_fintail', 'C_tail',
                            'L_sidetail', 'R_sidetail', 'L_wing']
@@ -449,8 +449,8 @@ def test_mirror_index():
 def test_implied_mirror_pairs():
     '''A lone source side names its own target, and only its own target.'''
     saved_parts = list(rt_constants.RIGPARTS)
-    saved_side = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
-    saved_excl = list(getattr(rt_constants, 'RIGPARTS_EXCLUDE', []))
+    saved_side = rt_constants.MIRROR_SOURCE_SIDE
+    saved_excl = list(rt_constants.RIGPARTS_EXCLUDE)
     try:
         rt_constants.RIGPARTS = ['L_leg', 'L_rear_eye', 'R_fintail',
                                  'L_fintail', 'C_tail', 'L_nochain']
@@ -543,7 +543,7 @@ def _pair_joints(base):
     BN joints for the pair first.
     '''
     saved_parts = list(rt_constants.RIGPARTS)
-    saved_side = getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')
+    saved_side = rt_constants.MIRROR_SOURCE_SIDE
     try:
         parts = [f'{saved_side}_{base}',
                  f'{"L" if saved_side == "R" else "R"}_{base}']

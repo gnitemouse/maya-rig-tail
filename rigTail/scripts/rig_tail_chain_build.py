@@ -229,7 +229,7 @@ def _guard_chain(joints):
                                          destination=False, plugs=True) or []
             if conns:
                 abort_build(logger,
-                    f'Joint {name}.{attr} has incoming connections — it is '
+                    f'Joint {name}.{attr} has incoming connections, so it is '
                     'being driven by a built rig. Remove the rig first.')
         # Locked translates
         for attr in ('translateX', 'translateY', 'translateZ'):
@@ -853,7 +853,7 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
     """
     Create a new BN chain between two transforms.
 
-    The two transforms are left untouched — they mark the ends, they do not
+    The two transforms are left untouched: they mark the ends, they do not
     become part of the chain. The new root is parented under start's parent.
 
     Arguments:
@@ -861,7 +861,7 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
         end (str): end transform name
         n (int): number of BN joints (n >= 2)
         rigname (str): rig part name for naming, or None to take one from
-            start's own name. Nothing depends on getting this right — the
+            start's own name. Nothing depends on getting this right, since the
             joints can be renamed in Maya afterwards like any others.
         mode (str): spacing mode
         param (float): mode parameter
@@ -881,7 +881,7 @@ def build_new(start, end, n, rigname=None, mode='uniform', param=None,
     start_pos = cmds.xform(start, q=True, ws=True, t=True)
     end_pos = cmds.xform(end, q=True, ws=True, t=True)
     if _length_vec(_sub(end_pos, start_pos)) < rt_chain_spacing.EPS:
-        abort_build(logger, f'{start} and {end} are at the same position — '
+        abort_build(logger, f'{start} and {end} are at the same position: '
                            'a chain needs two distinct ends.')
 
     with rt_maya.build_performance_scope(name='Joint Chain Builder'):
@@ -955,8 +955,8 @@ def _orient_chain(joints, positions, ee=None, up_ref=None):
     '''
     import rig_tail_setup as rt_setup
 
-    aim_axis = getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')
-    up_axis = getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')
+    aim_axis = rt_constants.ORIENT_AIM_AXIS
+    up_axis = rt_constants.ORIENT_UP_AXIS
     frames = rt_setup.aim_frames(positions, aim_axis, up_axis, up_ref)
     # Read the _ee_ position BEFORE re-orienting. Nothing re-places the
     # _ee_, so it swings with its parent when the tip is re-aimed, and
@@ -1011,13 +1011,13 @@ def rebuild(root_joint, n, mode='power', param=None, invert=False, snap=True,
         invert (bool): invert distribution
         snap (bool): enable snap-to-existing
         orient (bool): aim-orient the chain after moving it. Off by default
-            — Setup owns orientation, and the surviving joints otherwise keep
+            (Setup owns orientation, and the surviving joints otherwise keep
             the aim they had toward their old neighbours. Uses Setup's
             'cascade' up so the chain's existing roll survives.
         start_joint (str): rebuild only the span from this joint down to the
             tip, leaving everything above it untouched. None (the default)
             rebuilds the whole chain, base to tip. The start joint itself
-            never moves — it is an endpoint of the resample — so the joint
+            never moves (it is an endpoint of the resample), so the joint
             above it keeps aiming at exactly where it was.
 
         add_ee (bool): give the chain an '_ee_' end joint if it has not got
@@ -1106,7 +1106,7 @@ def rebuild(root_joint, n, mode='power', param=None, invert=False, snap=True,
         # Read the cascade seed while the chain still stands as it was:
         # re-spacing moves the joints, so its own roll is unreadable after.
         up_ref = _up_axis_of(
-            chain[0], getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')) if orient else None
+            chain[0], rt_constants.ORIENT_UP_AXIS) if orient else None
 
         # Session original cache: resample from the first-seen positions
         # when the chain has not been hand-edited since the last write.

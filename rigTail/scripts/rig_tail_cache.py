@@ -60,7 +60,7 @@ def active_parts():
     Return:
         list: included rig part names, in RIGPARTS order
     """
-    getter = getattr(rt_constants, 'active_rigparts', None)
+    getter = rt_constants.active_rigparts
     return getter() if callable(getter) else list(rt_constants.RIGPARTS)
 
 
@@ -88,7 +88,7 @@ def include_parts(rignames):
     Arguments:
         rignames (list): Rig part names to include
     """
-    excluded = getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or []
+    excluded = rt_constants.RIGPARTS_EXCLUDE or []
     named = set(rignames)
     keep = [p for p in excluded if p not in named]
     if len(keep) != len(excluded):

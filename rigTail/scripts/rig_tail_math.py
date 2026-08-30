@@ -273,8 +273,9 @@ def bspline_arclength_table(cvs, degree=3, samples=0):
     """
     Sample a clamped uniform B-spline and accumulate arclength along it.
 
-    The B-spline counterpart of rig_tail_chain_spacing.arclength_table (which
-    is Catmull-Rom, an interpolating curve, and cannot describe this one).
+    Measures a B-spline specifically: an interpolating curve's arclength
+    table runs through its points and cannot describe this one, so the two
+    kinds of curve each need their own.
 
     Arguments:
         cvs (list): CV positions, each an [x, y, z]

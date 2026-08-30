@@ -34,7 +34,7 @@ Functions:
     run_scene: every scene test (MUTATING), with a PASS/FAIL summary
     run_all: run_math plus a pointer to the mutating scene tests
   Math tests (safe, no scene)
-    test_containment: no core module mentions rig_tail_chain
+    test_containment: no core module imports rig_tail_chain
     test_distribution_endpoints: every mode/param: f(0)=0, f(1)=1
     test_uniform_equivalence: power k=1 == ratio r=1 == uniform
     test_invert_symmetry: invert(invert(f)) == f
@@ -63,6 +63,7 @@ Functions:
 
 import math
 import os
+import re
 
 import rig_tail_chain_spacing as rt_chain_spacing
 
@@ -174,24 +175,31 @@ def _random_chain(n, seed=0):
 # MATH TESTS ============================================================
 
 def test_containment():
-    """No core module imports or mentions rig_tail_chain."""
+    """No core module imports rig_tail_chain."""
     scripts_dir = os.path.dirname(__file__)
+    # Only an import couples the core to the sub-tool. Comments and
+    # docstrings cross-reference it freely, so match the statement rather
+    # than the bare name.
+    imported = re.compile(r'^[ \t]*(?:import|from)[ \t]+rig_tail_chain', re.M)
     ok = True
-    for fname in os.listdir(scripts_dir):
-        if not fname.startswith("rig_tail_") or fname == os.path.basename(__file__):
+    checked = 0
+    for fname in sorted(os.listdir(scripts_dir)):
+        if not fname.endswith(".py") or fname == os.path.basename(__file__):
             continue
         if fname.startswith("rig_tail_chain"):
             continue
-        fpath = os.path.join(scripts_dir, fname)
-        if not fpath.endswith(".py"):
-            continue
         try:
-            with open(fpath, encoding="utf-8", errors="replace") as f:
+            with open(os.path.join(scripts_dir, fname),
+                      encoding="utf-8", errors="replace") as f:
                 content = f.read()
-            if "rig_tail_chain" in content:
-                ok &= _verdict(f"{fname} mentions rig_tail_chain", False)
         except (IOError, OSError):
-            pass
+            continue
+        checked += 1
+        if imported.search(content):
+            ok &= _verdict(f"{fname} imports rig_tail_chain", False)
+    if ok:
+        _verdict("no core module imports rig_tail_chain", True,
+                 f"{checked} module(s) checked")
     return ok
 
 
@@ -406,8 +414,8 @@ def test_resample_noop():
 
     # A chaotic zigzag is NOT a one-step fixed point: redistributing its
     # points defines a visibly different curve, so the next pass lands
-    # somewhere new. What must hold even there is contraction — successive
-    # passes move less, never more — so a stuck artist clicking Build
+    # somewhere new. What must hold even there is contraction (successive
+    # passes move less, never more), so a stuck artist clicking Build
     # repeatedly settles instead of wandering off.
     pts = _random_chain(10, seed=210)
     steps = [pts]
@@ -484,7 +492,7 @@ def test_param_defaults():
 
 def test_roundtrip_drift():
     """20->30->20 max deviation is bounded (not compounding)."""
-    # Straight line — the drift comes solely from the down-res pass.
+    # Straight line: the drift comes solely from the down-res pass.
     pts = [[float(i) * 0.5, 0.0, 0.0] for i in range(20)]
     mid, _ = rt_chain_spacing.resample(pts, 30, "uniform")
     back, _ = rt_chain_spacing.resample(mid, 20, "keep")
@@ -493,7 +501,7 @@ def test_roundtrip_drift():
     ok = _verdict("roundtrip 20->30->20 straight chain",
                   d < POS_TOL, f"max deviation={d}")
 
-    # Random chain — drift should still be bounded by one down-res pass.
+    # Random chain: drift should still be bounded by one down-res pass.
     pts = _random_chain(20, seed=42)
     mid, _ = rt_chain_spacing.resample(pts, 30, "uniform")
     back, _ = rt_chain_spacing.resample(mid, 20, "keep")

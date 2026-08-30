@@ -58,9 +58,8 @@ does not restore BN itself and does not stamp FK - it owns the record, not
 the writing - but the record now has a second reader, and clearing it is
 correspondingly heavier: the fallback is the CURRENT pose, so clearing
 while a rig is posed and then rebuilding anchors the setup to that pose.
-Both callers that clear are scoped to what they touched (rig_tail_setup
-clears the included parts it moved, rig_tail_chain_build the chain it
-writes).
+Every caller that clears scopes it to what that caller itself moved,
+never the whole store.
 
 Swap point: the build touches this module in two places. build_rig_tail
 calls capture_rest_pose once at build start, and rig_tail_ik calls

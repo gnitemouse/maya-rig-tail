@@ -80,10 +80,9 @@ def _same_rigpart(parent, child):
     '''
     Whether a child joint belongs to the same rig part as its parent.
 
-    The mirror of the rule _walk_to_root climbs by (rig_tail_chain_build):
-    an unreadable name on either side answers True, so a hand-named or
-    half-named chain still walks end to end exactly as it did before -
-    only two joints that BOTH parse, to different rig parts, part company.
+    An unreadable name on either side answers True, so a hand-named or
+    half-named chain still walks end to end - only two joints that BOTH
+    parse, to different rig parts, part company.
 
     Arguments:
         parent (str): the joint already in the chain

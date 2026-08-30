@@ -55,28 +55,6 @@ import re
 
 logger = logger_setup(__name__)
 
-# rig_tail_constants is deliberately never reloaded by rig_tail (it holds
-# session state), so a Maya session started before this feature existed
-# has a stale constants module without the dashboard templates. This
-# module IS reloaded every run: install anything missing onto rt_constants so
-# the build works without a Maya restart. Values must match
-# rig_tail_constants; existing attributes are never overwritten, so a
-# restarted session or a user-customized constants module wins.
-_CST_DEFAULTS = {
-    'TAIL_IKFK_DIVIDER': ('ikfk_divider', '----------', 'TAIL IKFK'),
-    'ALL_DIVIDER': ('all_divider', '----------', 'ALL'),
-    'OVERRIDE_ALL_DIVIDER': ('override_all_divider', '----------', 'OVERRIDE ALL'),
-    'OVERRIDE_DIVIDER': ('override_divider', '----------', 'OVERRIDE'),
-    'OVERRIDE': '{rigname}_override',
-    'OVERRIDE_ENUM': 'Cog:Basectrl',
-    'IKFK_RESOLVED': '{rigname}_ikfk_resolved',
-    'ALL_PREFIX': 'all_',
-}
-for _name, _value in _CST_DEFAULTS.items():
-    if not hasattr(rt_constants, _name):
-        setattr(rt_constants, _name, _value)
-
-
 # NAMES ================================================================
 
 def active():

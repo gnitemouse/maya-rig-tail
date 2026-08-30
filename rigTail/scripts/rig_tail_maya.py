@@ -1391,9 +1391,9 @@ def color_skeletons(bn_color=None, ik_color=None, fk_color=None):
     Return
         int: number of joints coloured.
     """
-    bn = bn_color or getattr(rt_constants, 'BN_COLOR', 'blue')
-    ik = ik_color or getattr(rt_constants, 'IK_COLOR', 'orange')
-    fk = fk_color or getattr(rt_constants, 'FK_COLOR', 'purple')
+    bn = bn_color or rt_constants.BN_COLOR
+    ik = ik_color or rt_constants.IK_COLOR
+    fk = fk_color or rt_constants.FK_COLOR
     mapping = [(rt_constants.JOINTS_BN, bn), (rt_constants.JOINTS_IK, ik),
                (rt_constants.JOINTS_FK, fk), (rt_constants.JOINTS_FX, ik)]
     count = 0
@@ -2045,32 +2045,25 @@ def _delete_orphan_bindposes(poses):
 
 def bind_enabled():
     '''
-    Read rt_constants.BIND_GEOMETRY, defaulting to on.
-
-    rig_tail_constants is never reloaded (it holds session state), so a
-    Maya session started before this setting existed does not have it;
-    fall back to the shipped default, which is the behaviour that session
-    has been getting all along.
+    Whether the build may bind (and unbind) geometry.
 
     Return:
-        bool: True when the build may bind (and unbind) geometry.
+        bool: rt_constants.BIND_GEOMETRY
     '''
-    return bool(getattr(rt_constants, 'BIND_GEOMETRY', True))
+    return bool(rt_constants.BIND_GEOMETRY)
 
 
 def keep_weights():
     '''
-    Read rt_constants.KEEP_WEIGHTS, defaulting to on.
+    Whether existing skinClusters and their painted weights are kept.
 
-    Falls back to the legacy PRESERVE_SKIN before the default: constants
-    are never reloaded, so a session started before the setting was split
-    still holds the old name, and a user who turned it OFF there means it.
+    Only consulted when bind_enabled() is on: unbinding with no rebind to
+    follow never happens.
 
     Return:
-        bool: True when existing skinClusters and their weights are kept.
+        bool: rt_constants.KEEP_WEIGHTS
     '''
-    return bool(getattr(rt_constants, 'KEEP_WEIGHTS',
-                        getattr(rt_constants, 'PRESERVE_SKIN', True)))
+    return bool(rt_constants.KEEP_WEIGHTS)
 
 
 def find_skincluster(node):
@@ -2277,7 +2270,7 @@ def rebaseline_skin(rigname, tolerance=None):
     if not joints:
         return 0
     if tolerance is None:
-        tolerance = getattr(rt_constants, 'JOINT_POS_TOLERANCE', 0.001)
+        tolerance = rt_constants.JOINT_POS_TOLERANCE
 
     total = 0
     for geo in find_geometry_for_rigname(rigname):

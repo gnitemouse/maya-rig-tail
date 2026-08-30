@@ -105,44 +105,6 @@ import re
 
 logger = logger_setup(__name__)
 
-# rig_tail_constants is never reloaded (it holds session state), so a
-# session started before this feature existed lacks these settings. This
-# module IS reloaded every run: install any missing default onto rt_constants so
-# Setup works without a Maya restart, never overwriting a value a
-# restarted or customized session already provides.
-_CST_DEFAULTS = {
-    'ORIENT_JOINTS': True,          # aim-orient chains (remove twist)
-    'MIRROR_ORIENT': False,         # reflect L/R pair ORIENTATION across plane
-    'MIRROR_JOINTS': False,         # reflect L/R pair POSITIONS across plane
-    'MIRROR_DRYRUN': False,         # only log intended changes; do not modify
-    'MIRROR_AXIS': 'x',             # symmetry-plane normal (x = YZ plane)
-    'MIRROR_SOURCE_SIDE': 'R',      # authored side; the other is overwritten
-    'MIRROR_BEHAVIOR': rt_mirror.BEHAVIOR_DEFAULT,  # see mirror_frames
-    'ORIENT_AIM_AXIS': 'x',         # local axis aimed down the chain
-    'ORIENT_UP_AXIS': 'z',          # local axis aligned to the up reference
-    'ORIENT_UP_MODE': 'cascade',    # up reference: 'cascade' | 'best-fit'
-    'BIND_GEOMETRY': True,          # the build may bind (and unbind) meshes
-    'KEEP_WEIGHTS': True,           # re-baseline skinned meshes, never unbind
-}
-# KEEP_WEIGHTS was split out of PRESERVE_SKIN. A session started before the
-# split holds only the old name, and letting the default below install over
-# the top would quietly flip a user who had turned it OFF back to
-# preserving - so carry their answer across first.
-#
-# The old name is then kept in step rather than deleted: a stale constants
-# module still names PRESERVE_SKIN as a global in its own load_config and
-# get_user_editable_config, so removing it would turn that session's Load
-# and Save Config into a NameError. Mirroring also stops this block, on the
-# next reload, copying a superseded value back over a newer answer.
-if hasattr(rt_constants, 'PRESERVE_SKIN'):
-    if not hasattr(rt_constants, 'KEEP_WEIGHTS'):
-        rt_constants.KEEP_WEIGHTS = bool(rt_constants.PRESERVE_SKIN)
-    rt_constants.PRESERVE_SKIN = bool(rt_constants.KEEP_WEIGHTS)
-
-for _name, _value in _CST_DEFAULTS.items():
-    if not hasattr(rt_constants, _name):
-        setattr(rt_constants, _name, _value)
-
 # Rig part prefix that marks a mirrored side, e.g. 'L_fintail'. Defined
 # with the pairing it serves, in rig_tail_naming.
 _SIDE_RE = rt_naming.SIDE_RE
@@ -150,8 +112,8 @@ _EPS = 1e-9
 
 
 def _cst(name):
-    ''' Read a Setup setting, falling back to the installed default. '''
-    return getattr(rt_constants, name, _CST_DEFAULTS.get(name))
+    ''' Read a Setup setting from the constants module. '''
+    return getattr(rt_constants, name)
 
 
 def _active():

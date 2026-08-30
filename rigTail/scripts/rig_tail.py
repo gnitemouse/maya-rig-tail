@@ -75,14 +75,13 @@ import rig_tail_fk as rt_fk
 import rig_tail_stretch as rt_stretch
 import rig_tail_anim as rt_anim
 import rig_tail_connect as rt_connect
-# rig_tail_cleanup: teardown + build-structure setup (former rig_tail_setup)
+# rig_tail_cleanup: teardown + build-structure setup
 import rig_tail_cleanup as rt_cleanup
-# rig_tail_setup (pre-build Setup phase, orient/mirror; former rig_tail_orient)
-# is NOT imported here. The build never calls it -- only the setup_tails
-# delegate below does -- so it is imported there instead, the same way
-# rig_tail_chain_build defers it. That keeps the Build tool importable when
-# the installer was run without the Setup shelf button, which leaves
-# rig_tail_setup off disk entirely.
+# rig_tail_setup (the pre-build Setup phase, orient/mirror) is NOT imported
+# here. The build never calls it -- only the setup_tails delegate below
+# does -- so it is imported there instead. That keeps the Build tool
+# importable when the installer was run without the Setup shelf button,
+# which leaves rig_tail_setup off disk entirely.
 import rig_tail_restpose as rt_rest
 
 # Plain imports, no importlib.reload sweep. Picking up edited code is the

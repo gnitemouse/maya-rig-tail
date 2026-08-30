@@ -463,7 +463,7 @@ def test_build_exclusion(rigname, root=None):
                                'animCurveUA', 'animCurveTT']) or []
         return set(rt_cleanup.excluded_sdk_curves(curves))
 
-    saved_exclude = list(getattr(rt_constants, 'RIGPARTS_EXCLUDE', None) or [])
+    saved_exclude = list(rt_constants.RIGPARTS_EXCLUDE or [])
     existing_root = rt_cleanup.find_existing_root_grp()
     root_arg = root or existing_root or rt_constants.ROOT
     try:
@@ -1648,7 +1648,7 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
         return False
 
     ai = {'x': 0, 'y': 1, 'z': 2}.get(
-        getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x'), 0)
+        rt_constants.ORIENT_AIM_AXIS, 0)
 
     def _state():
         '''Every BN joint's full world matrix.'''

@@ -152,7 +152,7 @@ def _axis_cosines(rigname):
         return None
 
     keep = {'x': 0, 'y': 1, 'z': 2}.get(
-        str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).lower(), 0)
+        str(rt_constants.MIRROR_AXIS).lower(), 0)
     cosines = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
     # Only joints both chains have and the scene still holds: a stale
     # JOINTS_BN entry must not take the build down over a sign
@@ -327,8 +327,8 @@ def spline_up_vector():
             (the caller then keeps the basectrl-derived reference)
     '''
     axes = {'x': [1.0, 0.0, 0.0], 'y': [0.0, 1.0, 0.0], 'z': [0.0, 0.0, 1.0]}
-    up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()
-    plane_normal = str(getattr(rt_constants, 'MIRROR_AXIS', 'x')).strip().lower()
+    up = str(rt_constants.ORIENT_UP_AXIS).strip().lower()
+    plane_normal = str(rt_constants.MIRROR_AXIS).strip().lower()
     if up not in axes:
         logger.warning(f"Mirror: unusable ORIENT_UP_AXIS '{up}' for the "
                        'spline control up reference')
@@ -383,7 +383,7 @@ def aim_axis():
     Return
         str or None: 'X' | 'Y' | 'Z', or None when the setting is unusable
     '''
-    axis = str(getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')).strip().lower()
+    axis = str(rt_constants.ORIENT_AIM_AXIS).strip().lower()
     return axis.upper() if axis in ('x', 'y', 'z') else None
 
 
@@ -398,7 +398,7 @@ def behavior():
     Return
         str: 'mirror', 'symmetric' or 'parallel'
     '''
-    value = str(getattr(rt_constants, 'MIRROR_BEHAVIOR', BEHAVIOR_DEFAULT))
+    value = str(rt_constants.MIRROR_BEHAVIOR)
     value = value.strip().lower()
     if value not in BEHAVIORS:
         logger.warning(f"Mirror: unknown MIRROR_BEHAVIOR '{value}', "

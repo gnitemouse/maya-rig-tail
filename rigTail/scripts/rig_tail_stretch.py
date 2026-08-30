@@ -1211,8 +1211,8 @@ def build_advanced_twist(ikhandle, start_obj, end_obj, start_vec, end_vec,
             than defaulted: a caller that forgets it should raise, not
             silently build a chain that twists along its length.
     '''
-    aim = str(getattr(rt_constants, 'ORIENT_AIM_AXIS', 'x')).strip().lower()
-    up = str(getattr(rt_constants, 'ORIENT_UP_AXIS', 'z')).strip().lower()
+    aim = str(rt_constants.ORIENT_AIM_AXIS).strip().lower()
+    up = str(rt_constants.ORIENT_UP_AXIS).strip().lower()
     forward_positive = not rt_mirror.aim_reversed(rigname)
     fwd_enum = FORWARD_AXIS_ENUM.get((aim, forward_positive))
     up_enum = UP_AXIS_ENUM.get((up, True))

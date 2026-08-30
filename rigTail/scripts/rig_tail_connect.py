@@ -124,7 +124,7 @@ def connect_rig_tail(fk, ik):
 
     # Colour the three skeletons by type (BN blue, IK orange, FK purple)
     # so they read apart in the viewport.
-    if getattr(rt_constants, 'COLOR_SKELETON', True):
+    if rt_constants.COLOR_SKELETON:
         with rt_maya.timed('connect.color'):
             rt_maya.color_skeletons()
 

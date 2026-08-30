@@ -500,7 +500,7 @@ def find_mirror_pairs(rigparts):
             pairs (list): [(source_rigname, target_rigname), ...].
             paired_names (set): every rigname that belongs to a pair.
     """
-    source_side = str(getattr(rt_constants, 'MIRROR_SOURCE_SIDE', 'R')).upper()
+    source_side = str(rt_constants.MIRROR_SOURCE_SIDE).upper()
     groups = {}
     for rp in rigparts:
         m = SIDE_RE.match(rp)
