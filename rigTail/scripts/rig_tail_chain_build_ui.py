@@ -460,8 +460,8 @@ class JointChainBuilderUI(QtWidgets.QDialog):
     # STATE =============================================================
 
     def _chain_names(self):
-        '''The names listed in the Joint Chain(s) box, in order,
-        de-duplicated.'''
+        '''The names listed in the Joint Chain(s) box, in order, with
+        duplicates dropped.'''
         names = []
         for name in self.txt_chain.text().replace(';', ',').split(','):
             name = name.strip()

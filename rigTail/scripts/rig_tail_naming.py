@@ -3,7 +3,18 @@ rig_tail_naming.py
 author: Daisy Jane @gnitemouse
 
 Naming templates and helpers for Rig Tail.
-Utilities for node naming, pattern matching, and name extraction.
+
+The single authority on what a node is called. Every name the toolkit
+writes is built through fstr from a template in rig_tail_constants, and
+every name it reads back is parsed by the regex compiled from that same
+template, so a template change moves both sides together. Nothing here
+touches the scene; these are string operations on names the caller
+supplies.
+
+Parsing is deliberately narrow. A TYPE prefix is always required, so
+genuinely hand-named chains are never swept into the convention; the
+index token is optional in both strict and lenient mode, and a caller
+needing a real index tests for one with get_index_from_name.
 
 Functions:
     fstr: Evaluate fstring template for naming convention
@@ -115,8 +126,8 @@ def fstr(rigname, template, TYPE='', NN='', nn='', TAG=''):
 
 def get_rigname(node, template, lenient=False):
     """
-    Get rigname from node, provided a naming template.
-    Node name must follow the naming convention from template.
+    The rigname a node's name resolves to under a naming template, or
+    None when it does not follow the convention.
 
     A DAG path is reduced to its leaf first: the template describes a node's
     OWN name, and the pattern is anchored at both ends, so a full path such
@@ -159,18 +170,18 @@ def get_rigname(node, template, lenient=False):
 
 def compile_template_to_regex(template, lenient=False):
     """
-    Compile naming template to regex pattern for matching.
-    Known placeholders (TYPE, NN/nn, type labels such as JNT/GRP/CTRL)
-    are resolved to their exact values; only {rigname} is captured.
+    Compile a naming template to a regex that captures the rigname.
 
-    The index token is OPTIONAL, together with the separator in front of
-    it: a one-joint chain is commonly authored unnumbered, and
-    'BN_L_leg_jnt' is plainly rig part 'L_leg' - refusing to read it left
-    the roster-from-selection button with nothing to offer but the joint's
-    own name. A present index still wins, because {rigname} is non-greedy:
-    'BN_L_tail3_00_jnt' is 'L_tail3' index 00, never 'L_tail3_00'. The
-    TYPE prefix and (in strict mode) the type label still bracket the
-    capture, so this does not widen the match to arbitrary node names.
+    Known placeholders (TYPE, NN/nn, type labels such as JNT/GRP/CTRL)
+    resolve to their exact values; only {rigname} is captured.
+
+    The index token is OPTIONAL, along with the separator in front of it,
+    because a one-joint chain is commonly authored unnumbered and
+    'BN_L_leg_jnt' is plainly rig part 'L_leg'. A present index still
+    wins, since {rigname} is non-greedy: 'BN_L_tail3_00_jnt' reads as
+    'L_tail3' index 00, never 'L_tail3_00'. The TYPE prefix and, in strict
+    mode, the type label still bracket the capture, so this does not
+    widen the match to arbitrary node names.
 
     Arguments:
         template (str): Naming template with placeholders
@@ -184,10 +195,7 @@ def compile_template_to_regex(template, lenient=False):
             that cannot read it cannot conform it either. The TYPE stays
             REQUIRED, which is what keeps the leniency narrow:
             'tentacle_bone_01' still does not match, so genuinely
-            hand-named chains are not swept into the convention. (The
-            index is optional in both modes, so it is no longer the second
-            guard it once was - callers that need a real index test for it
-            with get_index_from_name, as _index_targets does.)
+            hand-named chains are not swept into the convention.
 
     Return:
         re.Pattern: Compiled regex pattern
@@ -392,11 +400,11 @@ def replace_index_in_name(node, index, underscore=True):
     Rewrite a name's own numeric index token to `index`, keeping the rest of
     the name exactly as it is.
 
-    The inverse of get_index_from_name, and deliberately sharing its pattern
-    so the token read is the token written. Used to keep indices
-    incrementing down a chain whose joint names do NOT follow the configured
-    template: the artist's naming is theirs to keep, but the numbering still
-    has to run in order.
+    The inverse of get_index_from_name, sharing its pattern so the token
+    read is the token written. This is what keeps indices incrementing
+    down a chain whose joint names do NOT follow the configured template:
+    the artist's naming is theirs to keep, but the numbering still has to
+    run in order.
 
     The LAST numeric token is the one rewritten, matching
     get_index_from_name's default. An existing 'ee' token is not an index

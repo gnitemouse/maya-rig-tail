@@ -2,11 +2,12 @@
 rig_tail_cache.py
 author: Daisy Jane @gnitemouse
 
-Cache operations for Rig Tail.
-Centralized cache management using rig_tail_constants for persistent state.
+Cache operations for Rig Tail, over the persistent state in
+rig_tail_constants.
 
-Decide upon re-rig whether the previous rig can be reused
-or must be fully torn down. Rebuild is needed (joints changed) if any of:
+Answers one question for the build: can the previous rig be reused, or
+must it be fully torn down. A rebuild is needed (joints changed) if any
+of:
 
     1. There's no cached BN joint list for this rigname in rt_constants.JOINTS_BN
         (fresh session or first build)
@@ -100,8 +101,9 @@ def include_parts(rignames):
 
 def validate_cache():
     """
-    Clear cache if RIGPARTS or ROOT changed since last build.
-    Compares current values against LAST_BUILD state.
+    Clear the cache when RIGPARTS or ROOT differ from the LAST_BUILD
+    state, since neither cached joints nor cached controls survive a
+    change to which parts are built or where they live.
     """
     # Check if RIGPARTS changed
     if set(rt_constants.RIGPARTS) != set(rt_constants.LAST_BUILD['rigparts']):
@@ -125,20 +127,19 @@ def validate_cache():
 
 def validate_cache_structure(fk=None, ik=None):
     """
-    Check whether the rig structure changed since the last build.
-    Changing NUM_CTRL_FK / NUM_CTRL_IK alters the SDK group, curve CV and
-    cluster layout, and toggling INDIV_FK adds/removes the per-joint FK
-    controls, so reusing the previous nodes (light cleanup path) would
-    mix old and new layouts and corrupt the build; a change forces the
-    full teardown path instead.
+    Whether the rig structure changed since the last build, which forces
+    the full teardown path.
+
+    NUM_CTRL_FK and NUM_CTRL_IK set the SDK group, curve CV and cluster
+    layout, and INDIV_FK adds or removes the per-joint FK controls, so
+    reusing the previous nodes down the light path would mix two layouts.
 
     The BUILD MODE counts as structure too. cleanup_rigname only tears
-    down the modes it is asked to build, so switching FK+IK -> FK-only
-    down the light path left the previous run's IK curves, clusters and
-    spline handles behind; the next FK+IK build then met half an IK
-    system it had not created and aborted on the missing pieces. A mode
-    change forces the full teardown, which cleanup_rig runs across BOTH
-    modes.
+    down the modes it is asked to build, so switching FK+IK to FK-only
+    down the light path would leave the previous run's IK curves,
+    clusters and spline handles standing, and the next FK+IK build would
+    meet half an IK system it had not created. Forcing full teardown
+    sends it through cleanup_rig, which runs across BOTH modes.
 
     Stored values are refreshed on every call.
 
@@ -181,10 +182,12 @@ def validate_cache_structure(fk=None, ik=None):
 
 def validate_cache_joints(rigname, tol=None):
     """
-    Check if cached joints still exist and match scene.
-    Positions are compared per joint by Euclidean distance within tol,
-    not exact equality: building the rig drives the BN joints through the
-    OPM network, which perturbs world positions by float noise.
+    Whether a rig part's cached joints still exist in the scene and still
+    sit where the last build left them.
+
+    Positions are compared per joint by Euclidean distance within tol
+    rather than exactly: building the rig drives the BN joints through
+    the OPM network, which perturbs world positions by float noise.
 
     Arguments:
         rigname (str): Name of rig component
@@ -229,8 +232,10 @@ def validate_cache_joints(rigname, tol=None):
 
 def cache_controls_ik(rigname):
     """
-    Cache IK controls for a rigname.
-    Imports get_controls_ik dynamically to avoid circular imports.
+    Scan the scene for a rig part's IK controls and cache them.
+
+    rig_tail_control is imported inside the call, since it imports this
+    module in turn.
 
     Arguments:
         rigname (str): Name of rig component
@@ -247,8 +252,10 @@ def cache_controls_ik(rigname):
 
 def clear_control_cache():
     """
-    Clear all cached controls.
-    Call this before rig rebuild.
+    Drop every cached control, so the next read rescans the scene.
+
+    Called at the start of each build and cleanup: the cache must never
+    outlive the scene state it was read from.
     """
     global _CONTROL_CACHE
     _CONTROL_CACHE.clear()
@@ -256,8 +263,7 @@ def clear_control_cache():
 
 def get_cached_controls_ik(rigname):
     """
-    Get cached IK controls.
-    Wrapper for cache_controls_ik for clarity.
+    A rig part's IK controls, scanning the scene only on a cache miss.
 
     Arguments:
         rigname (str): Name of rig component

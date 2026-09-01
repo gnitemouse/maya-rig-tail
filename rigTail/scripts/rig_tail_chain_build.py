@@ -75,15 +75,15 @@ def resolve_selection():
     """
     Interpret the current viewport selection as one or more chain specs.
 
-    Returns:
-        list of ChainSpec: resolved chain operations.
-
     Selection rules:
         - Two joints, one ancestor of the other: rebuild the span.
         - Two unrelated transforms: build new chain between them.
         - One joint: walk up to chain root, rebuild.
         - Many joints: resolve each to its root, deduplicate.
         - Nothing / non-transforms: abort.
+
+    Returns:
+        list of ChainSpec: resolved chain operations.
     """
     # Full paths: the selection is the one place the tool learns which of
     # two identically named chains is meant.
@@ -209,9 +209,9 @@ def _guess_rigname(joint):
 
 def _guard_chain(joints):
     '''
-    Abort if any joint in the chain is unsafe to modify.
-    Checks: skinCluster influence, incoming translate/OPM connections,
-    branching children, locked translates.
+    Abort if any joint in the chain is unsafe to modify: bound as a
+    skinCluster influence, driven on translate or offsetParentMatrix,
+    branching, or locked on translate.
     '''
     for j in joints:
         # Messages name the leaf, which is what the Outliner shows; every
@@ -379,8 +379,8 @@ def _clear_rest_pose(joints):
 def _write_chain(joints, positions, rigname, start_index=0, ee_pos=None,
                  reserved=None):
     '''
-    Move existing joints to new positions. Handles count changes by
-    creating or deleting joints as needed, preserving the _ee_ end joint.
+    Move existing joints to new positions, creating or deleting joints
+    for a count change and keeping the _ee_ end joint.
 
     Every write ends with the span's indices running start_index,
     start_index+1, ... down the chain, whatever the count did. The
@@ -839,7 +839,7 @@ def _norm_vec(v):
 
 
 def _world_matrix(rows, pos):
-    ''' 16-float row-major world matrix from axis rows and a position. '''
+    '''16-float row-major world matrix from axis rows and a position.'''
     return [rows[0][0], rows[0][1], rows[0][2], 0.0,
             rows[1][0], rows[1][1], rows[1][2], 0.0,
             rows[2][0], rows[2][1], rows[2][2], 0.0,
@@ -993,9 +993,9 @@ def _write_frame(joint, frame, pos):
 def rebuild(root_joint, n, mode='power', param=None, invert=False, snap=True,
             orient=False, start_joint=None, add_ee=False):
     """
-    Re-space an existing BN chain at a different joint count.
-
-    Uses the session original cache to avoid compounding distortion.
+    Re-space an existing BN chain at a different joint count, resampling
+    from the session original cache so repeated count changes do not
+    compound distortion.
 
     Where the chain ends depends on whether it has an _ee_ end joint. With
     one, the _ee_ is the end: it stays put at every count and the BN joints
@@ -1010,10 +1010,10 @@ def rebuild(root_joint, n, mode='power', param=None, invert=False, snap=True,
         param (float): mode parameter
         invert (bool): invert distribution
         snap (bool): enable snap-to-existing
-        orient (bool): aim-orient the chain after moving it. Off by default
-            (Setup owns orientation, and the surviving joints otherwise keep
-            the aim they had toward their old neighbours. Uses Setup's
-            'cascade' up so the chain's existing roll survives.
+        orient (bool): aim-orient the chain after moving it. Off by default,
+            since Setup owns orientation and the surviving joints otherwise
+            keep the aim they had toward their old neighbours. Uses Setup's
+            'cascade' up, so the chain's existing roll survives.
         start_joint (str): rebuild only the span from this joint down to the
             tip, leaving everything above it untouched. None (the default)
             rebuilds the whole chain, base to tip. The start joint itself

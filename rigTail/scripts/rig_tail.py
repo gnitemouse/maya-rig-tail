@@ -2,17 +2,24 @@
 # rig_tail.py
 author: Daisy Jane @gnitemouse
 
-Main entry point: rig a stretchy tail with IK FK modes.
-Switch modes include SplineIK, IK, Float, and FK.
-IK mode combines ikHandle with clusters on spline curve.
-FK mode provides variable FK sliding controls for joint rotations with falloff.
-Option to build squash/stretch.
+Main entry point: rig a stretchy tail with switchable IK and FK modes.
 
-Each build runs the same pipeline per rig part: cleanup (tear down or
-reuse the previous rig, from the joint cache), joints (detect or rebuild
-the BN/FK/IK chains), curves + clusters + controls, then connect (wire
-switches, matrix network, stretch, FX, bind geometry). The optional
-Setup phase (rig_tail_setup) runs separately, BEFORE a build.
+Takes a BN joint chain per rig part and leaves a rigged tail bound to
+it. Four switch modes share one skeleton: SplineIK, IK and Float drive
+an ikHandle through clusters on a spline curve, while FK gives variable
+FK controls that slide along the chain and bend the joints near them.
+Squash and stretch are optional.
+
+Every build is a rebuild. The pipeline runs per rig part and is safe to
+re-run over a live rig: cleanup tears down or reuses the previous one
+from the joint cache, joints detects or rebuilds the BN/FK/IK chains,
+then curves, clusters and controls, then connect wires the switches,
+matrix network, stretch and FX and binds the geometry. The BN skeleton
+is restored to plain joints first, so a rebuild starts from the same
+precondition a first build does.
+
+The Setup phase (rig_tail_setup) is optional, runs separately and never
+during a build.
 
 Run in Maya Script Editor (Python):
 # Build a single tail from a single joint chain
@@ -254,17 +261,17 @@ def restore_bn_for_build(rignames=None):
     Put the BN skeleton back to plain joints before the build touches it.
 
     THE PRECONDITION EVERY BUILD ASSUMES. A first-ever build gets a plain
-    posed skeleton and works from it; a rebuild used to get a skeleton whose
-    shape lived only in the previous build's offsetParentMatrix network, and
-    the first thing the pipeline does is delete the FK/IK chains that
-    network reads (rig_tail_cleanup.create_rename_joints), which collapsed
-    the whole chain onto its parent before cleanup had even run.
+    posed skeleton and works from it. On a rebuild the skeleton's shape
+    lives only in the previous build's offsetParentMatrix network, and the
+    first thing the pipeline does is delete the FK/IK chains that network
+    reads (rig_tail_cleanup.create_rename_joints), which would collapse the
+    whole chain onto its parent before cleanup had even run.
 
     Establishing the precondition up front is deliberately not the same fix
-    as reordering the pipeline so chains are rebuilt after teardown. The
+    as reordering the pipeline to rebuild chains after teardown. That
     reorder only holds if disconnecting a joint leaves its
-    offsetParentMatrix on its last value; this holds no matter what
-    disconnect does, because afterwards nothing drives BN at all.
+    offsetParentMatrix on its last value; this holds whatever disconnect
+    does, because afterwards nothing drives BN at all.
 
     Restores to the stored REST pose where there is one, so a rebuild fired
     on a posed rig re-anchors to rest rather than freezing the pose into the

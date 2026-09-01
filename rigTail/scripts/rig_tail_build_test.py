@@ -1210,7 +1210,13 @@ def test_matrix(rigname='tail'):
 def test_local_trs(rigname='tail'):
     '''
     Check every BN joint has identity local TRS ([0,0,0]/[0,0,0]/[1,1,1]).
-    Returns True if all joints pass, False otherwise.
+
+    The whole pose arrives through offsetParentMatrix, so anything left
+    on a local channel is added on top of it and moves the joint off
+    where the rig put it.
+
+    Return:
+        bool: True when every joint passes
     '''
     print('\n=== LOCAL TRS CHECK ===\n')
 
@@ -1252,9 +1258,10 @@ def test_local_trs(rigname='tail'):
 
 def fix_bn_local_trs(rigname='tail'):
     '''
-    Emergency fix: zero all BN joint local TRS.
-    WARNING: This will break existing offsetParentMatrix connections.
-    Only use if rebuilding the matrix network.
+    Zero every BN joint's local TRS.
+
+    MUTATES, and breaks the existing offsetParentMatrix connections.
+    Only worth running when the matrix network is about to be rebuilt.
     '''
     print('\n=== FIXING BN LOCAL TRS ===\n')
 
@@ -2358,8 +2365,11 @@ def test_matrix_opm(rigname='tail', count=0):
 def test_alignment(rigname='tail', count=0):
     '''
     Compare BN world positions against their IK (or FK) reference joints.
-    Returns True when the worst misalignment is under 0.1 units, False when
-    it exceeds that, or None when there is nothing to compare.
+
+    Return:
+        bool or None: True when the worst misalignment is within
+            tolerance, False when it is not, None when there is nothing
+            to compare against
     '''
     print(f'\n=== ALIGNMENT CHECK (COUNT: {count}) ===\n')
 
@@ -2670,19 +2680,14 @@ def print_matrix(data, name=''):
 
 def print_chain(rigname='tail', joint_idx=6, count=0):
     '''
-    Deep matrix-level diagnostic for a contiguous section of the BN / IK chain.
-    Prints detailed information for joints 0 through joint_idx:
-      - offsetParentMatrix (fully decomposed)
-      - parent.worldMatrix
-      - BN.worldMatrix and IK.worldMatrix
-      - Incoming matrix connections
-      - Local TRS, jointOrient, and inheritsTransform
+    Deep matrix-level diagnostic for joints 0 through joint_idx of the
+    BN/IK chain.
 
-    Intended use:
-      - Debugging incorrect offsetParentMatrix math
-      - Verifying parent-space conversion and matrix order
-      - Tracing where rotation, scale, or shear is introduced
-      - Validating matrix architecture during rig development
+    Prints the fully decomposed offsetParentMatrix, the parent's world
+    matrix, both BN and IK world matrices, the incoming matrix
+    connections, and local TRS, jointOrient and inheritsTransform. Enough
+    to trace where a rotation, scale or shear enters and to check
+    parent-space conversion and matrix order.
 
     Use dump_chain or print_chain_ends for quick checks.
     '''
@@ -2862,23 +2867,14 @@ def dump_chain(rigname='tail'):
     '''
     Lightweight joint-orientation and bind-pose sanity dump.
 
-    Prints per-joint:
-      - BN and IK jointOrient
-      - BN and IK local rotation (object space)
-      - A small raw slice of offsetParentMatrix
+    Prints per joint: BN and IK jointOrient, BN and IK local rotation in
+    object space, and a small raw slice of offsetParentMatrix. Enough to
+    confirm BN was duplicated correctly from IK/FK and to spot unexpected
+    local rotations or jointOrient mismatches.
 
-    Intended use:
-      - Verifying BN joints were duplicated correctly from IK/FK
-      - Spotting unexpected local rotations or jointOrient mismatches
-      - Quick validation before deeper matrix debugging
-
-    This function does NOT inspect:
-      - Full world matrices
-      - Parent-space math
-      - Matrix wiring or connections
-      - Local translate, scale, or inheritsTransform
-
-    Use print_chain when matrix math or OPM wiring is suspect.
+    It reads none of the matrix wiring: no world matrices, parent-space
+    math, connections, or local translate/scale/inheritsTransform. Use
+    print_chain when any of those is suspect.
     '''
     bn_joints = rt_constants.JOINTS_BN[rigname]
     ik_joints = rt_constants.JOINTS_IK[rigname]
@@ -2893,8 +2889,8 @@ def dump_chain(rigname='tail'):
 
 def test_time_evaluation(rigname='tail'):
     '''
-    Comprehensive test for time-dependent expression evaluation.
-    Tests wave, noise, and loop modulo system.
+    Check that the time-driven FX actually change across frames: wave,
+    noise, and the loop modulo that feeds them.
     '''
     header = '''
 ================================================================================
@@ -3154,8 +3150,11 @@ def test_time_evaluation(rigname='tail'):
 
 def fix_expression_time_dependency(rigname='tail'):
     '''
-    Emergency fix: Delete and recreate all time-dependent expressions.
-    This ensures clean time dependency flags.
+    Delete and recreate every time-dependent expression, so Maya
+    recomputes their time dependency flags.
+
+    MUTATES. For an FX network that has stopped animating with the
+    timeline.
     '''
     print('\n=== FIXING EXPRESSION TIME DEPENDENCIES ===\n')
 

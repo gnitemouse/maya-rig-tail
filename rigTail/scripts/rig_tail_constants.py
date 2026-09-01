@@ -2,18 +2,23 @@
 # rig_tail_constants.py
 author: Daisy Jane @gnitemouse
 
-User Variables and Constants for Rig Tail
+User variables and constants for Rig Tail.
 
-All user-editable values live in this module: rig parts, build options,
+The single home for every user-editable value: rig parts, build options,
 naming templates (type labels, controls/joints, groups, curves/clusters,
-spline, ikfk attributes) and control constants. The UI (rig_tail_ui.py)
-edits these globals in place, and save_config()/load_config() round-trip
-them through a JSON config file so setups can be exported and shared.
+spline, ikfk attributes) and control constants. It imports no other
+rig_tail module, so every other module can read it. The tool windows edit
+these globals in place, and save_config/load_config round-trip them
+through a JSON config file so setups can be exported and shared.
 
-Some values are derived from others (e.g. IKFK_SWITCH embeds the enum
-string joined from IKFK_MODES). After editing globals directly, call
-rebuild_derived() to keep those in sync; load_config() does this
-automatically.
+This module also carries the session caches the build writes back to
+(JOINTS_BN, LAST_BUILD and the rest), which is why a value read here is
+current state rather than a fixed setting.
+
+Some values are derived from others: IKFK_SWITCH embeds the enum string
+joined from IKFK_MODES, for one. After editing globals directly, call
+rebuild_derived() to bring those back in step; load_config does it
+already.
 '''
 
 # CACHE ================================================================
@@ -590,8 +595,10 @@ def rebuild_derived():
 
 def get_user_editable_config():
     '''
-    Get dictionary of user-editable variables and constants.
-    These are the values that can be modified in the UI.
+    The variables the tool windows may edit, as a dict.
+
+    This is also what save_config writes, so a value absent here does
+    not round-trip through a config file.
     '''
     return {
         # Rig Components

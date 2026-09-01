@@ -46,13 +46,10 @@ logger = logger_setup(__name__)
 
 def build_matrix_offset_network(rigname, fk, ik):
     '''
-    Build matrix offsetParentMatrix network for BN chain.
-    Driver's jointOrient is already in worldMatrix, no cancellation needed.
+    Zero the BN chain and build each joint's offsetParentMatrix network.
 
-    Architecture:
-        baseLocal = bn_parent.worldInverseMatrix * driver.worldMatrix
-        finalLocal = baseLocal * fxCurl * fxWave * fxNoise
-        finalLocal → bn.offsetParentMatrix
+    The driver's jointOrient is already folded into its worldMatrix, so
+    nothing has to cancel it here.
 
     Arguments:
         rigname (str): Name of rig part
@@ -218,18 +215,12 @@ def create_matrix_nodes_for_joint(
     rigname, bn_jnt, driver_jnt, index, ikfk_plug, fx_list,
     fk=True, ik=True):
     '''
-    Create matrix network for a single BN joint.
+    Create the offsetParentMatrix network for a single BN joint, in the
+    layers the module docstring gives.
 
-    Network structure:
-        1. IK/FK blend: fk_driver.world + ik_driver.world → blendMatrix
-           (only when both chains are built; single-chain builds drive
-           the blendMatrix input directly, no switch attribute needed)
-        2. baseLocal: bn_parent.worldInverseMatrix * blended_driver
-        3. FX layers: composeMatrix nodes (rotation-only, T=0, S=1)
-        4. squashInv: cancels the parent BN joint's squash scale so the
-           OPM translation is not sheared by volume preservation
-        5. Final: fxCurl * fxWave * ... * baseLocal * squashInv
-           → bn.offsetParentMatrix
+    The FK/IK blendMatrix is only weighted by the switch attribute when
+    both chains are built; a single-chain build drives the blendMatrix
+    input directly and needs no switch.
 
     Arguments:
         rigname (str): Rig component name

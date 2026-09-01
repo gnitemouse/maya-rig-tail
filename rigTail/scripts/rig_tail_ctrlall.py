@@ -27,7 +27,8 @@ that cannot be re-pointed, so the condition output lands on a hidden
 
 Consumers read resolved_plug() and ikfk_driver(), which return the plain
 basectrl or cog plug when the dashboard is off, so a single-tail build
-wires exactly as before. cleanup_ctrlall (from cleanup_rig) removes
+wires as though this module did not exist. cleanup_ctrlall (from
+cleanup_rig) removes
 stale pieces every build and strips all dashboard attributes when the
 option is off, while keeping ALL values and override choices across
 rebuilds.
@@ -59,20 +60,19 @@ logger = logger_setup(__name__)
 
 def active():
     '''
-    Whether the dashboard should be built: the MAIN_CONTROLLER option is
-    on and RIGPARTS has 2+ parts (a single tail has nothing to
-    centralize; the UI disables the checkbox too). Computed here rather
-    than in rig_tail_constants so a stale (never-reloaded) constants
-    module cannot break the build.
+    Whether the dashboard should be built: MAIN_CONTROLLER is on and
+    RIGPARTS holds two or more parts, since a single tail has nothing to
+    centralize. Computed here rather than in rig_tail_constants so a
+    never-reloaded constants module cannot break the build.
     '''
     return rt_constants.MAIN_CONTROLLER and len(rt_constants.RIGPARTS) >= 2
 
 def all_attr(attr):
-    ''' Name of the ALL copy of a routed attribute on the cog. '''
+    '''Name of the ALL copy of a routed attribute on the cog.'''
     return f'{rt_constants.ALL_PREFIX}{attr}'
 
 def condition_node(rigname, attr):
-    ''' Name of the override condition for one tail's routed attribute. '''
+    '''Name of the override condition for one tail's routed attribute.'''
     return f'{rigname}_{attr}_override_{rt_constants.COND}'
 
 
@@ -326,7 +326,7 @@ def resolved_plug(rigname, attr):
     condition's output when the dashboard built one, otherwise the
     plain basectrl attribute. Self-gating, so every consumer (stretch
     remaps, spline handle, FX expressions) calls it unconditionally and
-    a dashboard-off build wires exactly as before.
+    a dashboard-off build wires straight to the basectrl.
 
     Arguments
         rigname (str): Name of rig component

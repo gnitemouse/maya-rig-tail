@@ -987,12 +987,12 @@ def test_radius_consistent(rigname=DEFAULT_CHAIN):
     """
     Every joint in a rebuilt chain draws at ONE radius, sized to the spacing.
 
-    A grown chain used to mix the artist's radius with Maya's default 1.0 on
-    the joints that were just created, which on a tail is the difference
-    between a chain and a string of beads. Two claims, and the second is the
-    one that stops a dense chain reading as a single blob: the radius is
-    capped at half the new mean segment, so joints that end up closer
-    together get smaller with the spacing rather than swallowing it.
+    A grown chain must not mix the artist's radius with Maya's default 1.0
+    on the joints it just created, which on a tail is the difference
+    between a chain and a string of beads. The second claim is the one that
+    stops a dense chain reading as a single blob: the radius is capped at
+    half the new mean segment, so joints that end up closer together get
+    smaller with the spacing rather than swallowing it.
 
     The lower count is rebuilt afterwards on purpose: the cap comes from
     the session original cache, so it has to lift again when the joints

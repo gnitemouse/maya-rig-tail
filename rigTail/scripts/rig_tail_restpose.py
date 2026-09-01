@@ -4,69 +4,39 @@ author: Daisy Jane @gnitemouse
 
 The REST ANCHOR: the canonical rest pose the IK curve is built from.
 
-Not a cache. A cache may be discarded and recomputed at will; recomputing
-this is precisely the failure mode it exists to prevent - a second capture
-would record the pose the last build left the joints in, which is the
-feedback loop, not the fix. It is captured once and then treated as the
-definition of rest.
+Owns the record of rest, not the writing of it. Each BN joint's rest world
+matrix is captured once, while BN is still at true rest, stored on the
+joint and read back on every rebuild. Restoring BN and stamping FK belong
+elsewhere; rig_tail_cleanup.capture_bn_poses is the record's second
+reader, which is what Remove Rig and every rebuild restore BN to.
 
-The problem: rig_tail_ik builds the IK driver curve from the joints'
-current world positions, and the spline solves the joints back onto that
-low-CV curve. Every rebuild then traces the previous rebuild's smoothed
-output, so a curved chain flattens a little more each time (measured on
-the squid fintails: total bend 22.5, then 14.9, then 9.8 deg over
-successive rebuilds).
+Not a cache. A cache may be discarded and recomputed at will, and
+recomputing this is the failure mode it exists to prevent. rig_tail_ik
+builds the IK driver curve from joint world positions and the spline
+solves the joints back onto that curve, so a second capture would record
+the previous build's smoothed output and a curved chain would flatten
+further on every rebuild. Building from the stored rest makes rebuilds
+reproduce one setup rather than compound.
 
-The anchor breaks the loop on its input. It captures each BN joint's rest
-world matrix once, on the first build while BN is still at true rest,
-stores it on the joint, and builds the IK curve from that stored rest on
-every rebuild, so rebuilds reproduce the same setup instead of
-compounding.
+The anchor makes that smoothing reproducible; it does not remove it.
+rig_tail_curve.connect_driver_to_solver_curve is what makes the rest shape
+exact, by driving the solver curve as an offset from rest. Even so the
+loop is only slowed, not closed: a curve whose CVs sit at the joints does
+not pass through them, so the spline settles them slightly off what it was
+built from, and reading that back would compound without bound toward a
+straight line.
 
-The anchor only ever made the smoothing REPRODUCIBLE, not smaller: a
-one-time loss remained, and on the squid C_fintail it was severe (the base
-joint's aim 22.3 deg off, 8% of the base bend surviving, the curve 0.48
-units shorter than the joint chain). Most of that is now gone -
-rig_tail_curve.connect_driver_to_solver_curve drives the solver curve as
-an offset from rest, so at rest it is the joint chain exactly.
+The stored positions also define what rest MEANS, since the correction is
+measured against them. Clearing the store is therefore heavier than it
+looks: the fallback is the CURRENT pose, so clearing while a rig is posed
+and then rebuilding anchors the setup to that pose. Callers scope a clear
+to what they moved themselves, never the whole store.
 
-STILL NECESSARY, for two reasons.
-
-The loop is not closed, only slowed. A curve with CVs AT the joints does
-not pass through them, so the spline still settles the joints a little off
-what it was built from, and reading that back on the next rebuild still
-compounds. Measured on the squid C_fintail without this module: total turn
-angle 60.2 deg, then 56.9, 55.0, 53.6, 52.4 over successive rebuilds, and
-the base aim drifting 1.7, 2.8, 3.7, 4.4, reaching 7.1 by the tenth. With
-it, rebuild 1's figures repeat forever. The per-rebuild loss is far
-smaller than the old 22.5 -> 14.9 -> 9.8, but it accumulates without bound
-toward a straight line either way.
-
-And the correction itself is measured against these stored positions, so
-they now define what 'rest' MEANS rather than merely seeding it.
-
-That second point is a migration hazard. A scene carrying a restMatrix
-captured before the curve fix stored an already-degraded pose; the rig will
-now reproduce that degraded shape faithfully, as rest, and look correct
-doing it. On such a scene call clear_rest_pose() and rebuild once from a
-clean setup skeleton so the capture is the pose you actually want.
-
-Scope is no longer only the curve input. rig_tail_cleanup.capture_bn_poses
-reads the stored rest first and falls back to live, so this is also what
-Remove Rig and every rebuild restore the BN skeleton TO. The module still
-does not restore BN itself and does not stamp FK - it owns the record, not
-the writing - but the record now has a second reader, and clearing it is
-correspondingly heavier: the fallback is the CURRENT pose, so clearing
-while a rig is posed and then rebuilding anchors the setup to that pose.
-Every caller that clears scopes it to what that caller itself moved,
-never the whole store.
-
-Swap point: the build touches this module in two places. build_rig_tail
-calls capture_rest_pose once at build start, and rig_tail_ik calls
-curve_source_positions to decide what the IK curve is built from. To
-change the strategy, change the functions here; the call sites do not
-move, and curve_source_positions always falls back to live positions so a
-no-op version reproduces the original behavior.
+Swap point: build_rig_tail calls capture_rest_pose once at build start,
+and rig_tail_ik calls curve_source_positions to decide what the IK curve
+is built from. Change the strategy by changing these two functions;
+curve_source_positions always falls back to live positions, so a no-op
+version builds from the live chain.
 
 Functions:
     capture_rest_pose: store each BN joint's rest world matrix once
@@ -96,14 +66,12 @@ def capture_rest_pose(rignames=None):
 
     Call while BN is at true rest, at the start of the build, before the IK
     curve and spline smooth anything. Guarded per joint on the attribute's
-    absence, so it records the rest pose on the first build only and never
-    re-captures from a later, smoothed BN.
+    absence, so a joint that already carries one is left alone rather than
+    re-captured from a smoothed BN.
 
     Arguments
-        rignames (list): Parts to capture, or None for all of rt_constants.RIGPARTS.
-
-    Return
-        None.
+        rignames (list): Parts to capture, or None for all of
+            rt_constants.RIGPARTS.
     '''
     for rigname in (rignames if rignames is not None else rt_constants.RIGPARTS):
         for jnt in rt_constants.JOINTS_BN.get(rigname, []):
@@ -154,10 +122,9 @@ def curve_source_positions(rigname, joints):
     '''
     Positions the IK curve should be built from (the anchor's swap point).
 
-    Returns the stored rest pose when available, so every rebuild traces the
-    same source and cannot compound. Falls back to the joints' live world
-    positions otherwise (nothing captured yet, or an incomplete store),
-    which reproduces the original behavior.
+    Returns the stored rest pose when one is complete, so every rebuild
+    traces the same source. Falls back to the joints' live world positions
+    when nothing is captured yet or the store is incomplete.
 
     Arguments
         rigname (str): Rig part name.

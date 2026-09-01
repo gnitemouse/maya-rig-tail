@@ -621,9 +621,9 @@ def test_end_joint(rigname=DEFAULT_CHAIN):
 
     The end joint is a child excluded from the chain, so it is not re-placed
     by the orient: it swings with its parent. Its world position must be
-    preserved, and it must end up on the FAR side of the last joint - down
-    the chain, not back up it. A chain whose last bone ran along the negative
-    aim axis used to swing to the wrong side and stay there.
+    preserved, and it must end up on the FAR side of the last joint, down
+    the chain rather than back up it. A chain whose last bone runs along
+    the negative aim axis is the case that can swing it to the wrong side.
     '''
     joints = _chain_joints(rigname)
     if not joints or len(joints) < 2:
@@ -821,8 +821,8 @@ def test_skin_rebaseline(rigname=DEFAULT_CHAIN):
     of its painted weights, runs a real orient over the bound skeleton, and
     checks the mesh landed back on its modelled shape with the same
     skinCluster and the same weights. Without the re-baseline the mesh is
-    dragged by however far the joints turned; with the old behaviour the
-    cluster is deleted and the weights are gone.
+    dragged by however far the joints turned; with KEEP_WEIGHTS off the
+    cluster is deleted and the weights go with it.
 
     Skips (returns None) when the part has no skinned geometry - bind the
     mesh first, or run this on a part that is bound.

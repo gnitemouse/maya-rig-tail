@@ -3,7 +3,13 @@ rig_tail_math.py
 author: Daisy Jane @gnitemouse
 
 Math helpers for Rig Tail.
-Vector operations, position calculations, and orientation utilities.
+
+Two groups. The B-spline evaluators reproduce, off-scene, the curve
+rig_tail_curve.create_curve builds (clamped, uniform, one CV per joint),
+so a rest reference can be computed without reading a live curve. The
+scene queries read node positions and orientations and write nothing.
+Degree is clamped everywhere the way create_curve clamps it, so a short
+chain cannot make the two disagree.
 
 Functions:
     linspace: Generate evenly spaced values
@@ -77,8 +83,8 @@ def length_fractions(points):
     cumulative_lengths normalised to 0..1, base to tip.
 
     This is the metric an animator reads as 'how far along the tail': it is
-    evenly spaced in space, unlike joint INDEX, which on a tapered chain
-    (8:1 bone ratio on the squid fintails) bunches badly toward the tip.
+    evenly spaced in space, unlike joint INDEX, which bunches toward the tip
+    on a tapered chain.
 
     Arguments:
         points (list): List of [x, y, z] positions
@@ -121,23 +127,21 @@ def greville_fractions(num, degree=3):
     This is the metric that makes a control's DRAWN position agree with the
     joints it actually rotates. The FK curve carries one CV per joint, so
     feeding a joint's Greville fraction to a pointOnCurveInfo (with
-    turnOnPercentage on, i.e. a fraction of the PARAMETER range) lands
-    exactly on that joint - no lookup table needed. Measured on the squid
-    C_fintail the error is under 0.05% of tail length from joint 3 down;
-    joints 1-2 sit up to 0.55 units off because the first bone is 8x the
-    last against a clamped start knot, which no control is placed near.
+    turnOnPercentage on, so a fraction of the PARAMETER range) lands on that
+    joint without a lookup table. The first two joints sit furthest off,
+    where a long first bone meets a clamped start knot, and no control is
+    placed near them.
 
-    Computed analytically rather than by closest-point query: it is exact
-    for the curve create_curve builds (clamped, uniform, one CV per joint)
-    and strictly increasing by construction - and joint_pos MUST be
-    monotonic or falloff_rotation's ramp hands one control's rotation to
-    two separate stretches of tail. A closest-point query is more accurate
-    at joints 1-2 but carries no such guarantee.
+    Computed analytically rather than by closest-point query. It is exact
+    for the curve create_curve builds and strictly increasing by
+    construction, and joint_pos MUST be monotonic or falloff_rotation's ramp
+    hands one control's rotation to two separate stretches of tail. A
+    closest-point query is more accurate at the first joints but carries no
+    such guarantee.
 
     Arguments:
         num (int): Number of CVs
-        degree (int): Curve degree; clamped to num-1 the way create_curve
-            clamps it, so the two cannot disagree on a short chain
+        degree (int): Curve degree, clamped against num
 
     Return:
         list: num fractions from 0.0 at the base to 1.0 at the tip
@@ -231,11 +235,9 @@ def bspline_point(cvs, u, degree=3):
     """
     Evaluate a clamped uniform B-spline at parameter u, by de Boor.
 
-    Used to work out, in Python, where the low-CV IK driver curve sits at a
-    given parameter WITHOUT reading the scene. That matters because the
-    figure is needed as a rest reference: reading it off the live curve
-    would pick up whatever the animator has the controls doing on a
-    rebuild, and bake a posed shape in as rest.
+    Answers where the low-CV IK driver curve sits at a given parameter
+    without reading the scene, which is what lets the figure serve as a rest
+    reference on a rebuild over a posed rig.
 
     Arguments:
         cvs (list): CV positions, each an [x, y, z]
@@ -273,15 +275,14 @@ def bspline_arclength_table(cvs, degree=3, samples=0):
     """
     Sample a clamped uniform B-spline and accumulate arclength along it.
 
-    Measures a B-spline specifically: an interpolating curve's arclength
+    Measures a B-spline specifically. An interpolating curve's arclength
     table runs through its points and cannot describe this one, so the two
     kinds of curve each need their own.
 
     Arguments:
         cvs (list): CV positions, each an [x, y, z]
         degree (int): Curve degree (clamped against the CV count)
-        samples (int): Sample count; 0 picks 8 per CV, floor 200, which
-            measures length to well under a thousandth of a unit on a tail
+        samples (int): Sample count; 0 picks 8 per CV, floor 200
 
     Return:
         (list, list): (points, cumulative) - cumulative[i] is the arclength
@@ -311,8 +312,8 @@ def bspline_at_arclength(points, cumulative, target):
 
     Interpolates INSIDE the sample interval rather than snapping to the
     nearest sample. Snapping quantises the result to the table spacing,
-    which is enough to stop solver_curve_cvs' iteration converging - it
-    ends up chasing the quantisation instead of the shape.
+    which is enough to stop solver_curve_cvs' iteration converging: it ends
+    up chasing the quantisation instead of the shape.
 
     Clamps to the curve's end when target runs past it.
 

@@ -174,12 +174,10 @@ ensure_connect = rt_maya.ensure_connect
 
 def build_anim_effects(rigname, fk, ik):
     '''
-    Build all animation effects.
-    Effects connect to per-FX composeMatrix nodes created
-    by build_matrix_offset_network() in rig_tail_matrix.py.
-    Each FX writes to its own composeMatrix.
+    Build every enabled animation effect for one rig part.
 
-    The mirror signs are measured once here and handed to every effect, so
+    Each effect writes into its own composeMatrix, pre-created by
+    rig_tail_matrix.build_matrix_offset_network. The mirror signs are measured once here and handed to every effect, so
     all three read the pair the same way (see rt_mirror).
 
     Arguments
@@ -257,8 +255,8 @@ def add_anim_attributes_to_basectrl(rigname, basectrl):
 
 def build_loop(rigname, basectrl):
     '''
-    Create a single loop expression node that outputs loop_time in seconds.
-    Uses time1.outTime as continuous time source.
+    Create the one expression node that outputs loop_time in seconds,
+    from time1.outTime.
 
     Returns:
         str: Output attr plug for loop time (e.g.'node.loop_time')
@@ -298,9 +296,8 @@ if ($loop_enabled > 0.5) {{
 
 def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
-    Build wave animation effect with adjustable falloff.
-    Creates one expression per joint per axis that writes directly to composeMatrix.
-    ComposeMatrix nodes are pre-created by build_matrix_offset_network().
+    Build the wave effect: a sinusoidal traveling wave with adjustable
+    falloff, one expression per joint per axis.
 
     Wave = sin(u*frequency + time*speed) * amplitude * (u^falloff) * sign
 
@@ -389,9 +386,8 @@ float $out = $val * $amp * $w;
 
 def build_curl(rigname, basectrl, joints, signs=None):
     '''
-    Build curl animation effect with adjustable falloff.
-    Uses DG node graph per joint for clean connections.
-    Connects to curl_composeMatrix nodes pre-created by build_matrix_offset_network().
+    Build the curl effect: a progressive static bend with adjustable
+    falloff, as a node graph per joint rather than an expression.
 
     Math, for joint i of n (u = i / (n - 1), 0 at the base, 1 at the tip):
 
@@ -521,19 +517,17 @@ def build_curl(rigname, basectrl, joints, signs=None):
 
 def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
-    Build procedural noise for waving/tentacle motion.
-    Creates one expression per joint per axis that writes directly to composeMatrix.
-    ComposeMatrix nodes are pre-created by build_matrix_offset_network().
+    Build the noise effect: procedural jitter for kelp and tentacle
+    motion, one expression per joint per axis.
 
-    Behavior:
-    - Dominant traveling low-frequency wave along the chain for kelp/tentacle motion
-    - Small, higher-frequency jitter added on top for natural variation
-    - Per-joint falloff so root stays near straight axis and tip is looser
-    - Deterministic per-joint/axis seed for stable but different motion per joint/axis
-    - When loop_time is provided, uses integer harmonic counts so the animation loops exactly
-    - The seed is per joint index and axis, so an L/R pair already jitters
-      to the same numbers; the mirror signs (rt_mirror) are what turn
-      that into the two sides jittering as mirror images
+    A dominant low-frequency wave travels along the chain, with a smaller
+    higher-frequency jitter on top, under a per-joint falloff that keeps
+    the root near its axis and leaves the tip loose. Given loop_time the
+    harmonic counts are integers, so the animation loops exactly.
+
+    The seed is per joint index and axis, so an L/R pair already jitters
+    to the same numbers; the mirror signs (rt_mirror) are what turn that
+    into the two sides jittering as mirror images.
 
     Arguments:
         rigname (str): Name of rig component

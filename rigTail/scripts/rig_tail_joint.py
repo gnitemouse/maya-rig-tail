@@ -3,7 +3,15 @@ rig_tail_joint.py
 author: Daisy Jane @gnitemouse
 
 Joint traversal and joint-specific helpers for Rig Tail.
-Functions for navigating joint hierarchies, comparing joints, and setting attributes.
+
+Walks read the scene and never write to it, except set_joint_attributes,
+which stamps the joint_pos label. Joints come back as full DAG paths: a
+scene may legitimately hold two chains with the same joint names (a
+replacement tail built alongside the one it replaces, an imported second
+skeleton), and a short name is only usable while it is unique. Paths also
+let a caller tell those two chains apart, which is the point of allowing
+both. A walk stops where the chain stops being this rig part's, so it
+never crosses a branch point into another part.
 
 Functions:
     get_joint_chain: Get joint chain from start to optional end
@@ -26,16 +34,9 @@ logger = logger_setup(__name__)
 def get_joint_chain(start, end=None):
     """
     Get joint chain from start joint to optional end joint.
-    Follows first child at each level, stopping where the chain stops
-    being this rig part's (see _same_rigpart).
 
-    Joints are returned as full DAG paths. A scene may legitimately hold two
-    chains with the same joint names - a replacement tail built alongside the
-    one it will replace, an imported second skeleton - and a short name is
-    only usable while it is unique: walking down with cmds.listRelatives()
-    default (short) names hands Maya 'BN_R_fintail_01_jnt' and gets 'More
-    than one object matches name' back. Paths also mean a caller can tell
-    the two chains apart, which is the whole point of allowing both.
+    Follows the first child at each level, stopping at an end joint or
+    where the chain stops being this rig part's (see _same_rigpart).
 
     Arguments:
         start (str): Starting joint name or DAG path
@@ -99,9 +100,6 @@ def _same_rigpart(parent, child):
 def get_joint_hierarchy(start_jnt, end_jnt=None):
     """
     Return joints in deterministic DAG order (parent before child).
-
-    Joints are returned as full DAG paths, for the reasons in
-    get_joint_chain.
 
     Arguments:
         start_jnt (str): Starting joint name or DAG path
@@ -182,28 +180,23 @@ def is_equal_joint(joint1, joint2, tolerance=0.1):
 
 def set_joint_attributes(joints):
     """
-    Label joint positions with custom 'joint_pos' attribute.
-    Adds attribute to each joint with V value (0 to 1) along chain,
-    0 at the BASE and 1 at the tip.
+    Label each joint with a locked 'joint_pos' attribute running 0 at the
+    base to 1 at the tip.
 
     The value is the joint's normalised Greville abscissa on the FK curve,
-    NOT a distance. The FK curve carries one CV per joint, so joint j's
-    Greville fraction is the parameter fraction that lands on joint j - and
-    since the variable-FK controls are placed by feeding this same number to
-    a pointOnCurveInfo (see rig_tail_fk.set_curveinfo_fk), control and
-    joints end up in one metric. It previously measured straight-line
-    distance to the TIP, which is a third metric again: the control was
-    drawn ~17% of the tail away from the joints it actually rotated.
+    not a distance. The FK curve carries one CV per joint, so joint j's
+    Greville fraction is the parameter fraction that lands on joint j, and
+    the variable-FK controls are placed by feeding this same number to a
+    pointOnCurveInfo (rig_tail_fk.set_curveinfo_fk). Control and joints
+    therefore share one metric. The degree is clamped as
+    rig_tail_curve.create_curve clamps it, so a short chain cannot make the
+    two disagree.
 
-    Two consequences worth knowing:
-    - joint_pos is a fraction of JOINT COUNT, not of tail length. That is
-      what makes falloff_rotation's num_joints setRange (which maps falloff
-      onto a joint count) self-consistent.
+    Two consequences:
+    - joint_pos is a fraction of JOINT COUNT, not of tail length, which is
+      what makes falloff_rotation's num_joints setRange self-consistent.
     - the animator-facing `position` dial stays in tail-length units; a
       remapValue converts it into this space. See set_curveinfo_fk.
-
-    The degree is clamped exactly as rig_tail_curve.create_curve clamps it,
-    so a short chain cannot make the two disagree.
 
     Arguments:
         joints (list): List of joint names

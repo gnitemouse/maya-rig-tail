@@ -4,27 +4,31 @@ author: Daisy Jane @gnitemouse
 
 Curves, spline IK handles and clusters for Rig Tail.
 
-The FK curve follows the joint positions exactly (the variable-FK
-controls read their position from it). The IK side is a pair: a DRIVER
-curve carrying one CV per cluster control plus two for the up-vector
-ends, and a SOLVER curve with one CV per joint, which is what the
-ikHandle reads. Construction history is deleted at creation so curve
-length never re-evaluates through stale history. Handles and clusters are
-found and renamed rather than duplicated on rebuild.
+Takes joint rest positions, base to tip. Every rest SHAPE is derived from
+those positions in Python and never sampled off a curve in the scene, so
+a rebuild over a posed rig cannot bake the pose in as rest; only
+parameter ranges and CV counts are read live. Curves are left with no
+construction history, so curve length never re-evaluates through stale
+history, and the solver curve reproduces the joint chain at rest.
+Existing handles and clusters are found and renamed rather than
+duplicated, so a rebuild keeps its connections. Clusters are IK only.
 
-The driver curve is deliberately low-resolution - one CV per control is
-what gives each control a single CV to move - so it cannot describe the
-chain's real shape. It therefore drives the solver curve as an OFFSET
-FROM REST, not as an absolute position: at rest the solver curve is the
-joint chain exactly, and the clusters deform it from there. Driving
-absolute positions is what used to flatten the base of a tail (8% of the
-bend surviving on the squid fintails) and shorten the curve below the
-chain length, kinking the last joints. See
-connect_driver_to_solver_curve.
+Constraining clusters to controls belongs to rig_tail_connect and the
+spline's twist to build_advanced_twist; neither is wired here.
+
+The IK side is a pair. The DRIVER curve carries one CV per cluster
+control plus two for the up-vector ends, few enough that each control
+owns exactly one CV and too few to describe the chain's real shape. It
+therefore drives the SOLVER curve, one CV per joint, as an OFFSET FROM
+REST rather than as an absolute position: at rest the solver curve is the
+joint chain and the clusters deform it from there. See
+connect_driver_to_solver_curve. The FK curve follows the joint positions
+exactly and is only read from, never deformed.
 
 Functions:
     driver_curve_positions: the driver curve's rest CVs, from joint rest
-    solver_curve_cvs: solve the solver curve's CVs so the joints land right
+    solver_curve_cvs: the solver CVs that land the joints on their rest
+        positions
     create_curve: NURBS curve from joint positions, FK or IK flavour
     wire_aim_frame / base_up_node / rest_aim_frames: the frame the rest
         correction is measured in, aimed down the driver curve
@@ -56,12 +60,9 @@ def driver_curve_positions(jnt_pos):
     CV positions of the IK driver curve: NUM_CTRL_IK joints sampled evenly
     by index, with the first and last duplicated for the upvec clusters.
 
-    Factored out so create_curve and connect_driver_to_solver_curve derive
-    the same rest CVs from the same joint positions. The second needs them
-    to know where the driver curve sits AT REST, and must not read that off
-    the live curve: on a rebuild the clusters are already constrained to the
-    controls, so a live read picks up the current pose and bakes it in as
-    rest.
+    create_curve and connect_driver_to_solver_curve both call this, so both
+    derive the same rest CVs from the same joint positions rather than one
+    of them reading the live curve.
 
     Arguments
         jnt_pos (list): Joint world positions, base to tip
@@ -80,36 +81,25 @@ def solver_curve_cvs(jnt_pos, degree=3, passes=SOLVER_CV_PASSES):
     '''
     CV positions whose curve puts the joints back where they belong.
 
-    A degree-3 curve does not pass through its own CVs, so putting CVs AT
-    the joints leaves the spline settling them somewhere else - 1.7 degrees
-    off at the base of the squid C_fintail, and 0.014 units short overall,
-    enough to drop the last joint off the end. It also leaves the rebuild
+    A degree-3 curve does not pass through its own CVs, so CVs placed at the
+    joints leave the spline settling them somewhere else, short enough
+    overall to drop the last joint off the end. It also leaves the rebuild
     loop open: each build reads joints that are slightly off the last
-    build's input, and that compounds (base aim drifting 1.7, 2.9, 3.8 deg
-    over successive rebuilds without a rest anchor).
+    build's input, and that compounds.
 
-    So solve for the CVs instead. This is an interpolation problem, but not
-    the usual one: the ikSpline places joints by ARCLENGTH, not at a
-    parameter, so 'the curve passes through the joints' is not the
-    condition - 'the joints, placed by their own bone lengths, land on the
-    joints' is. Fixed-point iteration on exactly that::
+    The condition to solve for is not 'the curve passes through the joints'.
+    The ikSpline places joints by ARCLENGTH rather than at a parameter, so
+    it is 'the joints, placed by their own bone lengths, land on the
+    joints'. Fixed-point iteration on exactly that::
 
         P = joints
         repeat:  P += joints - place_by_arclength(curve(P))
 
-    The smoothing is a contraction, so this converges; measured on the
-    C_fintail the base error roughly halves per pass (0.51, 0.23, 0.12,
-    0.07, and 0.028 by six). SOLVER_CV_PASSES=4 is where it stops paying:
-    0.07 deg against 1.68 unsolved, worst joint 0.005 units, and the curve
-    lands at 24.040 against a 24.025 chain - comfortably long enough that
-    no joint runs off the end, without over-lengthening. Costs ~0.03s per
-    rig part, all at build time, and NO extra nodes: the offset network in
-    connect_driver_to_solver_curve already writes an arbitrary constant per
-    CV, so this only changes what that constant aims at.
-
-    Iterating cannot make the shape worse: pass 1 already beats the
-    unsolved CVs on every measure, and each pass strictly reduces the
-    residual it is correcting.
+    The smoothing is a contraction, so this converges, and each pass
+    strictly reduces the residual it corrects. It runs at build time and
+    adds no nodes: the offset network in connect_driver_to_solver_curve
+    already writes an arbitrary constant per CV, so this only changes what
+    that constant aims at.
 
     Arguments
         jnt_pos (list): Joint rest positions, base to tip
@@ -139,27 +129,27 @@ def solver_curve_cvs(jnt_pos, degree=3, passes=SOLVER_CV_PASSES):
 
 def create_curve(rigname, jnt_pos, typ, tag=''):
     '''
-    Create NURBS curve from joint positions with proper parameterization.
+    Create a NURBS curve from joint positions.
 
     Three flavours, by typ and tag:
     - FK (no tag): one CV per joint, for the skinCluster and for the varFK
       controls to read their position from
     - IK driver (no tag): NUM_CTRL_IK CVs plus two duplicated ends for the
-      upvec clusters - one CV per cluster, so each control owns exactly one
-    - IK solver (tag='spline'): one CV per joint, ends NOT duplicated, this
-      is what the ikHandle reads
+      upvec clusters, so each control owns exactly one CV
+    - IK solver (tag='spline'): one CV per joint, ends NOT duplicated, read
+      by the ikHandle
 
-    Construction history is deleted so curve length never re-evaluates
-    through stale history.
+    An existing curve of the same name is reused untouched.
 
     Arguments
         rigname (str): Name of rig component for curve naming
         jnt_pos (list): List of joint world positions (tuples)
         typ (str): Rig type identifier (TYPE_FK or TYPE_IK)
-        tag (str): Additional tag for curve name (e.g. 'spline' for IK solver curve)
+        tag (str): Additional tag for curve name ('spline' for the IK solver)
 
     Return
-        curve (str): Name of created curve, or None if creation failed
+        curve (str): Name of the curve, or None if given fewer than 2
+            positions
     '''
     curve = rt_naming.fstr(rigname, rt_constants.CURVE, typ, TAG=tag)
     logger.debug(f"{rigname}: Create curve '{curve}'")
@@ -235,13 +225,11 @@ def wire_aim_frame(node, tangent_plug, up_plug, base_plug):
     '''
     Wire one aimMatrix into the frame the rest correction rides.
 
-    Called for the runtime nodes AND for the throwaway one that reads the
+    Called for the runtime nodes and for the throwaway one that reads the
     rest frames, so the two cannot drift apart: the bake is only correct
-    while it inverts the same frame the rig will evaluate.
-
-    inputMatrix is the base control, so the frame keeps the rig's global
-    scale and a stable roll; only its aim axis is overridden, by the
-    curve's own direction at this parameter.
+    while it inverts the same frame the rig evaluates. inputMatrix is the
+    base control, which keeps the rig's global scale and a stable roll; only
+    the aim axis is overridden, by the curve's direction at this parameter.
 
     Arguments
         node (str): aimMatrix node name
@@ -266,9 +254,9 @@ def base_up_node(rigname, typ, basectrl):
     '''
     The roll reference for every rest frame: the base control's +Z in world.
 
-    One per rig part, shared by all the CVs. A tangent alone leaves the roll
-    about it undetermined, and the curve's own normal cannot supply it -
-    that flips where the curve runs straight, which is most of a tail.
+    One per rig part, shared by all its CVs. A tangent alone leaves the roll
+    about it undetermined, and the curve's own normal cannot supply it: that
+    flips where the curve runs straight, which is most of a tail.
 
     Arguments
         rigname (str): Name of rig component
@@ -292,21 +280,13 @@ def rest_aim_frames(rest_cvs, params, basectrl, up_plug):
     The frame each CV's correction is measured in, at REST.
 
     Read off a throwaway curve holding the rest CVs rather than computed in
-    Python. Two reasons, and the first is the load-bearing one:
+    Python. The bake divides the correction by this frame and the rig
+    multiplies it back by the live one, so the two must be the same
+    construction; sharing wire_aim_frame makes that true by construction
+    rather than by a reading of what aimMatrix does with primaryMode.
 
-    - It cannot disagree with the rig. The bake divides the correction by
-      this frame and the rig multiplies it back by the live one, so the two
-      must be the same construction. Building both with the same node type
-      and the same wiring makes that true by construction rather than by my
-      reading of what aimMatrix does with primaryMode.
-    - It cannot bake a pose as rest. The live driver curve is already
-      cluster-driven on a rebuild, so sampling IT would pick up whatever the
-      animator left the controls doing - the same trap driver_rest exists to
-      avoid.
-
-    The base control is read live, exactly as the old world-space bake did.
-    That needs no rest assumption: whatever pose it is in gets inverted out
-    here and multiplied back in at evaluation.
+    The base control is read live. That needs no rest assumption: whatever
+    pose it is in is inverted out here and multiplied back in at evaluation.
 
     Arguments
         rest_cvs (list): Driver curve CV positions at rest, world space
@@ -346,93 +326,46 @@ def connect_driver_to_solver_curve(rigname, driver_curve, solver_curve, typ,
     OFFSET FROM REST rather than an absolute position.
 
     Each solver CV gets a pointOnCurveInfo sampling the driver curve at a
-    fixed parameter, exactly as before. What changed is what that sample
-    means. It used to be written straight onto the CV, which made the tail's
-    rest shape 'whatever a NUM_CTRL_IK+2 CV curve can express' - and it
-    cannot express much. On the squid C_fintail, 50 joints collapsed to 7
-    CVs, of which the first two and last two are coincident: the base bend
-    (joints 1-5 carry 28.5 of the tail's 38.2 degrees) is spanned by a
-    single CV interval, so the curve simply cut the corner. Only 8% of that
-    bend survived, the base joint's aim was 22.3 degrees off, and cutting
-    the corner made the curve 0.48 units SHORTER than the joint chain, which
-    pushed the last joints clean off the end of it.
-
-    Now each CV is driven as::
+    fixed parameter, and is driven as::
 
         solver_cv[i] = driver_sample(t_i) + (rest_cv[i] - driver_rest(t_i))
 
-    The bracketed term is a constant worked out at build time: how far the
-    low-CV driver curve falls short of the real shape at that CV. At rest
-    the two cancel and the solver curve IS the joint chain, so there is no
-    flattening and its length matches the chain. Move a cluster and the
-    falloff is unchanged from before - sampling a B-spline at a parameter is
-    a weighted sum of its CVs, so this is the same blend it always was, just
-    measured from the right place.
+    The bracketed term is a build-time constant: how far the low-CV driver
+    curve falls short of the real shape at that CV. Driving absolute
+    positions instead cuts the corner on a base bend and leaves the curve
+    shorter than the joint chain, pushing the last joints off the end of it.
 
-    driver_rest is computed in Python (rt_math.bspline_point over
-    driver_curve_positions) rather than read off the live curve, so a
-    rebuild over a posed rig cannot bake the pose in as rest.
+    The constant is stored as a local displacement, never a fixed world
+    vector. Every cluster handle is parentConstrained to controls under the
+    cog, so turning the character rotates the whole set of driver CVs in
+    world space, and an offset that stayed put while they rotated would
+    deform the tail by up to its own length. A pointMatrixMult in
+    vectorMultiply mode multiplies it back out through a live frame each
+    evaluation (3x3 only: this is a displacement, not a position).
 
-    The correction CANNOT be a fixed world vector. Every cluster handle is
-    parentConstrained to controls that live under the cog, so turning the
-    character rotates the whole set of driver CVs in world space - and an
-    offset that stayed put while they rotated would deform the tail by up to
-    its own length the moment the rig faced a different way. So it is stored
-    as a local displacement and multiplied back out through a live frame each
-    evaluation, by a pointMatrixMult in vectorMultiply mode (3x3 only: this
-    is a displacement, not a position).
+    That frame is the DRIVER CURVE's, not the base control's. basectrl sits
+    upstream of every IK control, so a correction riding it answers only to
+    the whole rig moving: bend the tail and the driver sample swings to its
+    new position while the correction still points where it pointed at rest,
+    bowing an S into the curve. An aimMatrix per CV takes its aim from the
+    tangent the same pointOnCurveInfo computes, putting the frame downstream
+    of the controls so it turns with a local bend too. inputMatrix stays
+    basectrl, which keeps the rig's global scale in the correction.
 
-    That frame is the DRIVER CURVE's, not the base control's, and the
-    difference is the whole reason a bend used to put an S in the tail.
-    basectrl sits upstream of every IK control: nothing a control does can
-    reach it, so a correction riding it could only answer to the whole rig
-    moving. Bend the tail and the driver sample swung round to its new
-    position while the correction kept pointing where it pointed at rest -
-    a stale direction added to a moved sample, which bows the curve where
-    the driver curve is straight. Worst toward the tip, where the shape has
-    turned furthest from rest, and where a correction that used to point
-    ACROSS the curve ends up pointing along it.
-
-    An aimMatrix per CV fixes that by taking its aim from the tangent the
-    same pointOnCurveInfo already computes. The controls move the clusters,
-    the clusters move the CVs, and the tangent is derived from those CVs -
-    so the frame now sits DOWNSTREAM of the controls and turns with a local
-    bend. It still answers to the whole rig turning, because that rotates
-    the curve too: the curve's frame does everything the base control's did,
-    and the bend as well. inputMatrix is still basectrl, which is what keeps
-    the rig's global scale in the correction.
-
-Against a skinCluster on the same controls, this is not an approximation
-    for anything the rig can currently do. Sampling a B-spline at a
-    parameter is a weighted sum of its CVs whose weights total 1, so with
-    the rest term restored the network computes::
-
-        cv[i] = rest[i] + SUM_j w_ij * (control j's translation)
-
-    which is exactly what linear blend skinning reduces to when influences
-    translate. The two differ only when an influence ROTATES or SCALES -
-    and here rotating an IK control moves nothing at all, because a cluster
-    owns a single CV and the handle's rotate pivot sits on it (verified in
-    the scene: IK_C_fintail_02_clusterHandle.rp is its own CV). Rotating a
-    point about itself is a no-op, so the deformation is translation-only
-    and the two agree everywhere.
-
-    A weighted deformer (weighted clusters, or a skinCluster on
-    NUM_CTRL_IK+2 influences) would therefore not correct anything here; it
-    would ADD the ability for a control to twist the curve, which no
-    control has today. It also needs maintainOffset on the
-    control-to-deformer constraints in rig_tail_connect first - those are
-    only safe because of that same one-CV-on-the-pivot property, and a
-    weighted deformer loses it.
+    A weighted deformer would not sharpen any of this: a cluster owns a
+    single CV with the handle's rotate pivot on it, so rotating an IK
+    control is a no-op and the deformation is translation-only. That same
+    property is why the control-to-cluster constraints in rig_tail_connect
+    are safe without maintainOffset.
 
     Arguments
         rigname (str): Name of rig component
         driver_curve (str): Curve with clusters (low CV set)
         solver_curve (str): Curve used by ikHandle (one CV per joint)
         typ (str): Type identifier (TYPE_IK)
-        jnt_pos (list): Joint rest positions the curves were built from. The
-            rest correction needs them; without them this falls back to
-            driving absolute positions, i.e. the old flattening behaviour.
+        jnt_pos (list): Joint rest positions the curves were built from.
+            The rest correction needs them, and is skipped without them,
+            leaving the CVs driven by absolute position.
     '''
     logger.trace(f"Connect driver curve '{driver_curve}' to solver curve '{solver_curve}'")
 
@@ -569,22 +502,19 @@ Against a skinCluster on the same controls, this is not an approximation
 
 def create_spline_handle(rigname, joints, curve, typ=rt_constants.TYPE_IK):
     '''
-    Create spline IK handle reading our own solver curve.
+    Create a spline IK handle reading the given solver curve.
 
-    Left to itself, cmds.ikHandle builds its OWN curve and simplifies it
-    down to a handful of CVs. That is the thing people mean by "the spline
-    solver reduces the curve" - it is the curve-creation step, not the
-    solver, and it is avoided here rather than lived with:
-    1. Creates ikHandle with its temporary curve
-    2. Disconnects that and connects our solver curve to .inCurve instead
-    3. Deletes the temporary curve, renames the rest
+    Left to itself, cmds.ikHandle builds its own curve and simplifies it to
+    a handful of CVs. That simplification is the curve-creation step rather
+    than the solver, so it is sidestepped: the handle is created with its
+    temporary curve, that curve is disconnected and the solver curve
+    connected to .inCurve in its place, and the temporary one is deleted.
+    The solver then works against one CV per joint, and any smoothing left
+    in the result comes from the low-CV driver curve upstream.
 
-    So the solver happily solves against one CV per joint. Any smoothing
-    left in the result comes from the low-CV DRIVER curve upstream, which
-    connect_driver_to_solver_curve corrects for - not from the solver.
-
-    Note: Driver curve (with clusters) connects to solver curve (with ikHandle)
-          via pointOnCurveInfo nodes in connect_driver_to_solver_curve()
+    Any handle and effector already carrying these names are removed first,
+    so a rebuild that keeps them cannot leave a same-named duplicate for a
+    later short-name lookup to trip on.
 
     Arguments
         rigname (str): Name of rig component
@@ -643,7 +573,8 @@ def create_spline_handle(rigname, joints, curve, typ=rt_constants.TYPE_IK):
 
 def rename_spline_handle(rigname, spline_list, curve, typ):
     '''
-    Rename spline IK handle components to match naming convention.
+    Bring a handle and effector onto the naming template, parent them under
+    the spline group and delete the temporary curve.
 
     Arguments
         rigname (str): Name of rig component
@@ -671,13 +602,16 @@ def rename_spline_handle(rigname, spline_list, curve, typ):
 
 def get_spline_handle(rigname, joints=None):
     '''
-    Get existing spline handle information.
+    Find the existing spline handle by name, and its effector and curve.
+
     Arguments
         rigname (str): Name of rig component
-        joints (list): List of joints to find ikHandle
+        joints (list): Joints the handle must span; checked when given
 
     Return
-        spline_list (list): [ikhandle, effector, curve]
+        tuple: (ikhandle, effector, curve), or [] when the handle is
+            missing, is not an ikHandle, has no joint list, or spans
+            joints other than the ones given
     '''
     spline_handle = rt_naming.fstr(rigname, rt_constants.SPLINE_HANDLE, rt_constants.TYPE_IK)
 
@@ -717,15 +651,15 @@ def get_spline_handle(rigname, joints=None):
 
 def create_cluster(cluster_names, curve, cv_i):
     '''
-    Create a cluster on specific CV(s) of a curve.
+    Create a cluster on given CVs of a curve, reusing one that exists.
 
     Arguments
         cluster_names (list): [cluster_node_name, cluster_handle_name]
         curve (str): Target curve name
-        cv_i (int or str): CV index (int) or CV range string (e.g. 'curve.cv[1:5]')
+        cv_i (int or str): CV index, or a CV range string ('curve.cv[1:5]')
 
     Return
-        cluster (list): [cluster_node, cluster_handle] from Maya command
+        cluster (list): [cluster_node, cluster_handle]
     '''
     cluster_node, cluster_handle = cluster_names
 
@@ -743,33 +677,29 @@ def create_cluster(cluster_names, curve, cv_i):
 
 def create_clusters_on_curve(rigname, curve, typ, show_handle=False):
     '''
-    Create clusters on NURBS curve CVs for deformation control.
+    Create the full cluster row on a curve: the upvec pair on the first and
+    last CV, then one control cluster per interior CV.
 
-    IK ONLY. The FK curve carries no clusters: nothing deforms it, the varFK
-    controls only READ positions off it (set_curveinfo_fk), and FK twist and
-    roll come from their own SDK-layer network (connect_twist_roll), not from
-    up-vector clusters. The up-vector pair is IK machinery specifically - its
-    controls are created by create_controls_ik, hidden in FK mode by
-    setup_switch_ik, and consumed by build_advanced_twist as the spline
-    handle's world-up objects, which needs an ikHandle to exist at all. So an
-    FK-only build has no up-vectors by design, and this function had an
-    unreachable FK branch (clusters on the first and last CV) for a long time
-    before it was removed.
+    IK only, and errors on any other typ. Nothing deforms the FK curve: the
+    varFK controls only read positions off it (set_curveinfo_fk), and FK
+    twist and roll come from their own SDK-layer network
+    (connect_twist_roll). The upvec pair is IK machinery specifically,
+    consumed by build_advanced_twist as the spline handle's world-up
+    objects, which needs an ikHandle to exist at all.
 
-    Cluster placement strategy:
-    - IK: Clusters for each control CV + upvec clusters at ends
-      - First two CVs (0, 1): Upvec clusters for twist control at base
-      - Interior CVs: NUM_CTRL_IK control clusters for main deformation
-      - Last CV (N-1): Already counted in upvec clusters
+    Clusters already on the curve are deleted first, handles included, since
+    an orphaned handle name-clashes with the recreated cluster's.
 
     Arguments
         rigname (str): Name of rig component
         curve (str): NURBS curve name
-        typ (str): TYPE_FK or TYPE_IK
+        typ (str): Must be TYPE_IK
         show_handle (bool): Show Maya clusterHandles in viewport
 
     Return
-        clusters (list): List of (cluster_node, cluster_handle) tuples
+        clusters (list): (cluster_node, cluster_handle) pairs, upvec base
+            and end first, then the control clusters in CV order.
+            create_controls_ik relies on that split.
     '''
     if typ != rt_constants.TYPE_IK:
         logger.error(f'Invalid TYPE {typ}. Clusters are IK only.')

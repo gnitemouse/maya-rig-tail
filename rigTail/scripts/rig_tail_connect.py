@@ -3,31 +3,65 @@
 author: Daisy Jane @gnitemouse
 
 Final wiring phase of the build. rig_tail creates the pieces (joints,
-curves, clusters, controls, node networks); connect_rig_tail() then
-assembles them into one working rig. For each rig part it:
+curves, clusters, controls, node networks); connect_rig_tail assembles
+them into one working rig and creates nothing new of its own beyond
+attributes and constraints.
 
-    - Parents the FK/IK systems into the rig hierarchy and constrains
-      them to the base control.
-    - Creates the switch and channel-box attributes: the per-tail IKFK
-      switch lives on the cog control, and stretch/twist/animation
-      attributes live on the base control, mirrored onto every control
-      as proxy attributes. With the Main Controller dashboard active
-      (rig_tail_ctrlall) the cog also carries ALL values and per-tail
-      override flags, and consumers read rt_ctrlall.resolved_plug() /
-      rt_ctrlall.ikfk_driver() instead of the basectrl/cog plug directly.
-    - Wires the IKFK mode switching. Each curve cluster is parent-
-      constrained to one control per mode (spline/ik/float), and set
-      driven keys on the switch attribute fade constraint weights and
-      control/joint visibility so only the active mode has influence.
-      The spline set is fixed (bot/mid/top); spline_control_index maps
-      its 5 main controls onto however many clusters NUM_CTRL_IK made.
-      The FK mode index comes from rt_constants.ikfk_fk_mode_index().
-    - Hands off to rig_tail_matrix (BN offsetParentMatrix network),
-      rig_tail_anim (FX) and rig_tail_stretch (squash/stretch wiring),
-      then binds the geometry to the BN joints.
+Per rig part it parents the FK/IK systems into the hierarchy and
+constrains them to the base control; creates the switch and channel-box
+attributes; wires IKFK mode switching; then hands off to rig_tail_matrix
+for the BN offsetParentMatrix network, rig_tail_anim for FX and
+rig_tail_stretch for squash and stretch, and binds the geometry to the
+BN joints last.
 
-The control cache avoids repeated rt_control.get_controls_ik() scene scans within
-one build; it is cleared at the start of every build and cleanup.
+Attributes have fixed homes. The per-tail IKFK switch lives on the cog
+control and the stretch, twist and animation dials on the base control,
+mirrored onto every control as proxies. With the Main Controller
+dashboard active (rig_tail_ctrlall) the cog also carries ALL values and
+per-tail override flags, so consumers must read
+rt_ctrlall.resolved_plug() and rt_ctrlall.ikfk_driver() rather than the
+basectrl or cog plug directly.
+
+Mode switching is constraint weights, not rebuilding. Each curve cluster
+is parent-constrained to one control per mode (spline/ik/float), and set
+driven keys on the switch attribute fade those weights along with control
+and joint visibility, so only the active mode has influence. The spline
+set is fixed at bot/mid/top, and spline_control_index maps its five main
+controls onto however many clusters NUM_CTRL_IK made.
+
+The control cache spares repeated rt_control.get_controls_ik() scene
+scans within one build. It is cleared at the start of every build and
+cleanup, so it never outlives the scene state it was read from.
+
+Functions:
+    Entry:
+        connect_rig_tail: assemble one built rig part into a working rig
+        match_fk_to_ik_rest: snap FK onto the IK-solved rest, last
+    Hierarchy:
+        connect_root / connect_cog / connect_basectrl: parent and
+            constrain the control hierarchy
+        connect_fk / connect_ik: parent a mode's system into the rig
+        connect_spline_fk / connect_spline_ik: wire a mode's curve,
+            clusters and handle
+        connect_effects / connect_stretch: hand off to rig_tail_anim
+            and rig_tail_stretch
+    Attributes:
+        rootctrl_attr_specs: the root control's visibility/display set,
+            in channel-box order
+        enforce_attr_order: rebuild a node's attributes into that order
+        add_ikfk_attributes_to_basectrl / add_twist_attributes_to_basectrl
+        add_attributes_ikfk_switch: the cog's per-tail switch
+        add_switch_proxies_to_control / add_proxy_attributes_to_controls
+        connect_twist_roll_ik: the twist dials onto the spline handle,
+            carrying the mirror sign
+    Switching:
+        constrain_spline_controls: one constraint per cluster, three
+            targets
+        weight_mid_to_its_place: weight mid by where it actually sits
+        setup_switch_fk / setup_switch_ik / setup_switch_upvec: the
+            driven keys that fade each mode
+    Cache:
+        cache_controls_ik / get_cached_controls_ik / clear_control_cache
 '''
 
 import maya.cmds as cmds
@@ -136,28 +170,25 @@ def match_fk_to_ik_rest(fk, ik):
     Snap each FK joint onto its IK-solved counterpart so FK and IK share one
     rest pose and the tail does not pop when the ikfk switch moves between them.
 
-    Runs at the END of the build (called from connect_rig_tail). The IK spline
-    only settles onto its final shape once the IK system is fully connected --
-    in particular once connect_driver_to_solver_curve's rest correction is
-    wired, without which the solver curve is still the low-CV driver's
-    smoothed shape -- so this is the first point the IK joints reliably read
-    their true rest. An earlier read, even after a forced eval, catches the
-    raw-solver pose the joints briefly sit on.
+    Runs at the END of the build, from connect_rig_tail. The IK spline only
+    settles onto its final shape once the IK system is fully connected, in
+    particular once connect_driver_to_solver_curve's rest correction is
+    wired, so this is the first point the IK joints reliably read their true
+    rest. An earlier read, even after a forced eval, catches the raw-solver
+    pose the joints briefly sit on.
 
-    Still needed, and by a smaller margin than it used to be. The IK rest is
-    now the joint chain rather than a badly smoothed version of it, but a
-    curve with CVs AT the joints approximates rather than interpolates them,
-    so the IK joints still settle about 1.7 degrees off at the base of the
-    squid C_fintail (it was 21.2). FK sits on the joints exactly, so that
-    difference is what would pop on a mode switch without this. It becomes a
-    true no-op only if the solver curve is built to interpolate.
+    The two rests still differ slightly: a curve with CVs at the joints
+    approximates rather than interpolates them, so the IK joints settle a
+    little off while FK sits on them exactly. That difference is what would
+    pop. This becomes a no-op only if the solver curve is built to
+    interpolate.
 
-    The FK joint sits at the bottom of the variable-FK SDK stack, and the
-    controls drive the groups ABOVE it, so moving the joint itself shifts only
-    the rest -- the controls still animate from there. Matched base-to-tip.
+    The FK joint sits at the bottom of the variable-FK SDK stack and the
+    controls drive the groups ABOVE it, so moving the joint shifts only the
+    rest and the controls still animate from there. Matched base to tip.
 
-    Only runs when both systems are built. FK-only / IK-only builds keep their
-    own rest (there is no other mode to pop against).
+    Only runs when both systems are built; a single-mode build has no other
+    mode to pop against.
 
     Arguments
         fk (bool): FK was built
@@ -246,10 +277,9 @@ def enforce_attr_order(node, wanted):
     Make a node's dynamic attributes appear in the wanted order.
 
     Maya appends each new attribute to the end of the channel box and offers
-    no reorder command, so an attribute introduced by a later version of the
-    build keeps whatever position it was first created at - which is how
-    'Clusters' ended up under DISPLAY on rigs built before it existed.
-    Deleting and re-adding is the only way to move one.
+    no reorder command, so an attribute keeps whatever position it was first
+    created at, however far that is from where it belongs on a rig built
+    before it existed. Deleting and re-adding is the only way to move one.
 
     Only acts when the order is actually wrong, so a rebuild of an
     up-to-date rig neither churns attributes nor drops their values. When it
@@ -550,10 +580,10 @@ def connect_twist_roll_ik(rigname, spline_handle):
     sign; offset re-samples the joints ALONG the curve, which is a slide,
     so it takes the translation sign (see rig_tail_mirror).
 
-    A sign of +1 wires the dial straight to the handle, so an unmirrored
-    rig gains no nodes; only a negated axis pays for one. A node left over
-    from when this side WAS signed is removed, so flipping the behavior or
-    the source side cannot leave one feeding the handle.
+    A sign of +1 wires the dial straight to the handle, so only a negated
+    axis pays for a node. Any negation node already on this side is removed
+    first, so flipping the behavior or the source side cannot leave a stale
+    one feeding the handle.
 
     Arguments
         rigname (str): Name of rig component
@@ -769,14 +799,13 @@ def weight_mid_to_its_place(constraint, bot, top, mid_grp):
     between bot and top.
 
     Even weights move mid halfway through any disagreement between the
-    pair, which is only right if it sits halfway - and it does not.
+    pair, which is only right if it sits halfway, and it does not:
     match_target places it on the middle JOINT, and a chain whose joints
     bunch toward the base puts that joint well past the midpoint of the
-    line bot to top (66% of it on the squid's L_sidetail). The two ends
-    moving together hides the difference; the stretch spread pins bot and
-    moves top, which is exactly when it shows, as mid falling behind
-    mid_rot - its neighbour at the same position, spreading by its own
-    rest fraction.
+    line bot to top. Both ends moving together hides the difference. The
+    stretch spread pins bot and moves top, which is when it shows, as mid
+    falling behind mid_rot: its neighbour at the same position, spreading
+    by its own rest fraction.
 
     maintainOffset is what makes the weights safe to set here rather than
     at creation: each target reproduces mid's rest pose alone, so at rest

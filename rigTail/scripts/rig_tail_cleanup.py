@@ -3,9 +3,9 @@ rig_tail_cleanup.py
 author: Daisy Jane @gnitemouse
 
 Teardown of a previous rig and preparation of the scene structure, run at
-the start of every build (before rig_tail builds the components). Formerly
-named rig_tail_setup; the Setup PHASE (joint orient/mirror) is now a
-separate module, rig_tail_setup.
+the start of every build, before rig_tail builds the components. Not to
+be confused with rig_tail_setup, which owns the optional Setup phase
+(joint orient and mirror) and does not run during a build.
 
 Cleanup picks one of two paths per rig part, chosen from the joint cache:
     full teardown (cleanup_rigname): joints changed or a forced rebuild;
@@ -274,9 +274,9 @@ def remove_rig():
        rig_tail_setup._apply_frames).
     4. Move skeleton and geometry out of the rig hierarchy BEFORE deleting
        the root group, or Maya deletes them along with it. A node that
-       could NOT be moved out aborts the deletion instead of being taken
-       down with the group - a failed rescue used to be a warning, and the
-       geometry went with the root.
+       could NOT be moved out aborts the deletion rather than being taken
+       down with the group: leaving a root group standing costs less than
+       losing the geometry inside it.
     5. Sweep the DG leftovers the per-part teardown does not reach:
        orphaned set-driven-key curves (cleanup_rig deletes those in one
        scene-wide call, which this is not) and any utility/anim node still
@@ -289,7 +289,7 @@ def remove_rig():
     Every scene node is addressed by its full DAG path. Short names are
     ambiguous the moment a scene holds two nodes with the same name under
     different parents (a duplicated 'rivets' group), and Maya answers an
-    ambiguous name with 'More than one object matches name', which used to
+    ambiguous name with 'More than one object matches name', which would
     abort the whole removal.
 
     Return
@@ -431,9 +431,9 @@ def _rigid(matrix):
     store on a joint.
 
     Gram-Schmidt off X, which is the axis the chain aims down: X keeps its
-    direction exactly, Z is made perpendicular to X and the old Y, and Y is
-    rebuilt from those. Translation is copied untouched, so world positions
-    come back exact; only the scale and the skew go.
+    direction exactly, Z is made perpendicular to X and the incoming Y, and
+    Y is rebuilt from those. Translation is copied untouched, so world
+    positions come back exact; only the scale and the skew go.
 
     Arguments
         matrix (list): 16 floats, row-major
@@ -468,8 +468,8 @@ def capture_bn_poses(parts, rest=True):
     Remove Rig clicked on a posed rig hands back a skeleton frozen in that
     pose - correct-looking and wrong - and a rebuild re-anchors the whole
     setup to it. Falls back to the live matrix per joint when nothing is
-    stored (a chain that has never been built, or one Joint Chain Builder
-    just re-spaced and cleared), which is the old behaviour.
+    stored: a chain that has never been built, or one Joint Chain Builder
+    just re-spaced and cleared.
 
     Every matrix is made rigid on the way out (see _rigid).
 
@@ -1262,10 +1262,13 @@ def cleanup_dangling_curveinfo():
 
 def setup_rig(fk, ik):
     '''
-    Create groups, root control, cog control.
-    Connect root and cog.
-    Rename components for IK if necessary.
-    Make sure that RIGPARTS are set.
+    Create the rig hierarchy groups and the root and cog controls, and
+    connect them.
+
+    Runs after cleanup and before any rig part is built, so every later
+    phase can assume the hierarchy is there to parent into. Legacy IK
+    component names are migrated here (rename_components), and RIGPARTS
+    is checked before anything is created.
 
     Arguments
         fk (bool): Setup FK components
@@ -1405,8 +1408,11 @@ def find_existing_root_grp():
 
 def set_joints_auto():
     '''
-    Auto-detect joints for all RIGPARTS.
-    Search scene for joints matching naming convention.
+    Detect or rebuild the BN/FK/IK chains for every active rig part, by
+    matching scene joints against the naming template.
+
+    One scene scan serves the whole roster (_bn_start_finder), so cost
+    does not grow with the number of tails.
     '''
     logger.debug('Auto-detect joints for all RIGPARTS')
 
@@ -1426,13 +1432,13 @@ def _bn_start_finder():
     '''
     Build a BN start-joint lookup that shares one scene scan across parts.
 
-    One scene scan answers the whole roster: resolving every joint's rigname
-    through the naming template used to run per rig part, so N tails cost N
-    joint listings and N x (joints) template matches.
+    One scene scan answers the whole roster. Resolving every joint's rigname
+    through the naming template per rig part instead costs N joint listings
+    and N x (joints) template matches for N tails.
 
-    The scan is no longer optional. Building the start joint's name from the
-    template and testing cmds.objExists was cheaper still, but it answers
-    True for an ambiguous name and hands back a short one - and it cannot
+    The scan is not optional. Building the start joint's name from the
+    template and testing cmds.objExists is cheaper still, but it answers
+    True for an ambiguous name and hands back a short one, and it cannot
     see a SECOND chain carrying the same rig part name, which is the thing
     the caller most needs told about.
 
@@ -1661,11 +1667,13 @@ def fk_ik_match_bn(rigname, tol=None):
 
 def set_joints(rigname, start_jnt=None, end_jnt=None):
     '''
-    Create FK, IK, and BN joint chains.
-    Set start and end joints. Store joint names in dict.
-    Detect joints and decide whether to rename or duplicate.
-    Assume that joints follow Naming Template.
-    Rebuild-safe: reuses cached joints if they still exist and are valid.
+    Detect one rig part's BN chain and duplicate the FK and IK chains
+    from it, storing all three in the joint caches.
+
+    The BN chain is renamed in place and FK/IK duplicated from it, so the
+    modeller's joints stay the ones the geometry is bound to. Joints are
+    expected to follow the naming template. Cached joints that still
+    exist and still validate are reused rather than rebuilt.
 
     Arguments
         rigname (str): Name of rig component
@@ -1822,11 +1830,12 @@ def rename(source, target):
 
 def rigpart_has_joints(rigname):
     '''
-    True if the scene contains BN joints for `rigname`, using the same
-    detection as set_joints_auto (exact BN start joint, or any BN joint
-    whose name resolves to exactly this rigname via the naming
-    template). Used to validate/warn about RIGPARTS entries that would
-    have nothing to build.
+    True if the scene contains BN joints for `rigname`, by the same
+    detection set_joints_auto uses: an exact BN start joint, or any BN
+    joint whose name resolves to exactly this rigname through the naming
+    template.
+
+    Callers warn on a RIGPARTS entry that would have nothing to build.
 
     Arguments
         rigname (str): Rig part name to check
@@ -1930,8 +1939,8 @@ def _migrate_rigpart_state(old, new, old_token):
 
 def rename_components():
     '''
-    Rename IK related controls and attributes from old naming convention.
-    Handles legacy rig component names for compatibility.
+    Migrate IK controls and attributes carrying legacy names onto the
+    current convention, so a rig built by an earlier version rebuilds.
 
     Only nodes whose names carry a legacy marker are touched: several
     replacements ('Handle' -> 'handle', 'Sml' -> '_sml', ...) would

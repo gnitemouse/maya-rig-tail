@@ -336,9 +336,8 @@ def create_control(control, group=None, match_to=None, parent=None,
 
     An existing control is reshaped in place rather than deleted and
     rebuilt, so its children stay parented throughout (see
-    build_control_shapes). Its transform values are still reset, matching
-    what deleting the control used to do, so the control sits on its group
-    wherever the group has been matched to.
+    build_control_shapes). Its transform values are reset either way, so
+    the control sits on its group wherever the group has been matched to.
 
     Arguments
         control (str): Control name
@@ -422,10 +421,8 @@ def create_control_match_list(rigname, matchlist, template_ctrl, template_grp=No
 
 def create_controls_fk(rigname, joints, jnt_pos):
     '''
-    Create NUM_CTRL_FK Variable FK controls and, when rt_constants.INDIV_FK is
-    enabled, individual FK joint controls.
-    Variable FK controls are distributed evenly along the FK chain.
-    Individual FK joint controls are created at each joint.
+    Create NUM_CTRL_FK variable-FK controls, distributed evenly along the
+    FK chain, plus one control per joint when rt_constants.INDIV_FK is on.
 
     Arguments
         rigname (str): Name of rig component
@@ -555,9 +552,8 @@ def mirror_control_frames(rigname, groups, matches):
 
 def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
     '''
-    Create NUM_CTRL_IK IK controls to drive the IK spline.
-    Creates three sets of controls: IK, Float, and Spline.
-    Also creates up-vector controls for twist.
+    Create all four IK control sets: the IK, Float and Spline rows that
+    drive the spline's clusters, plus the up-vector pair for twist.
 
     Arguments
         rigname (str): Name of rig component
@@ -613,8 +609,8 @@ def create_controls_ik(rigname, joints, clusters, duplicate_ends=True, scale=1):
 
 def create_spline_controls_ik(rigname, cluster_handles, orient_world, scale=1):
     '''
-    Build IK mode controls for spline clusters.
-    Creates NUM_CTRL_IK nested controls that aim toward each other.
+    Build the IK mode row: NUM_CTRL_IK nested controls aimed at each
+    other.
 
     Arguments
         rigname (str): Name of rig component
@@ -643,8 +639,8 @@ def create_spline_controls_ik(rigname, cluster_handles, orient_world, scale=1):
 
 def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1):
     '''
-    Build Float mode controls for spline clusters.
-    Creates NUM_CTRL_IK independent (non-nested) controls.
+    Build the Float mode row: NUM_CTRL_IK controls that do not nest, each
+    parented straight to the base control.
 
     Arguments
         rigname (str): Name of rig component
@@ -674,27 +670,24 @@ def create_spline_controls_float(rigname, cluster_handles, orient_world, scale=1
 def create_spline_controls_spline(rigname, cluster_handles, orient_world,
                                   scale=1, joints=None):
     '''
-    Build Spline IK mode controls for spline clusters.
-    Creates 5 main controls plus a rotation offset mid control.
-    SPLINE_CONTROLS = [bot, bot_sml, mid, top_sml, top, mid_rot]
+    Build the fixed six SplineIK controls: five main plus a rotation
+    offset mid (SPLINE_CONTROLS = [bot, bot_sml, mid, top_sml, top,
+    mid_rot]).
 
-    The spline set is fixed regardless of NUM_CTRL_IK: each main control
-    is placed at a fixed fraction of the tail (bot=0, bot_sml=0.25,
-    mid=0.5, top_sml=0.75, top=1.0; mid_rot shares mid, position and
-    orientation both - SPLINE_CONTROLS lists it last for its own shape and
-    colour, which is a creation order and not a place in the row). Fractions are
-    resolved to the nearest joint (joints are far denser than clusters),
-    so bot_sml/top_sml no longer drift onto a different cluster when
-    NUM_CTRL_IK changes. When no joints are supplied the nearest cluster
-    handle is used as a fallback. Positioning stays consistent with the
-    SplineIK influence mapping (spline_control_index): control k drives the
-    clusters nearest fraction k/4, which is where control k sits.
+    The set is fixed regardless of NUM_CTRL_IK, each main control placed
+    at a fixed fraction of the tail: bot=0, bot_sml=0.25, mid=0.5,
+    top_sml=0.75, top=1.0. mid_rot shares mid's position and orientation
+    both; SPLINE_CONTROLS lists it last for its own shape and colour,
+    which is a creation order and not a place in the row.
 
-    Control hierarchy:
-    - bot_sml parents under bot
-    - top_sml parents under top
-    - top parents under mid_rot
-    - mid_rot controls middle rotation offset
+    Fractions resolve to the nearest JOINT, since joints are far denser
+    than clusters and a fraction resolved against clusters shifts onto a
+    different one when NUM_CTRL_IK changes. The nearest cluster handle is
+    the fallback when no joints are supplied. This keeps placement in step
+    with the influence mapping (spline_control_index): control k drives
+    the clusters nearest fraction k/4, which is where control k sits.
+
+    Hierarchy: bot_sml under bot, top_sml under top, top under mid_rot.
 
     Arguments
         rigname (str): Name of rig component
@@ -908,8 +901,8 @@ def get_controls_ik(rigname):
 
 def get_control_hierarchy(control, end_control=None):
     '''
-    Get all controls in hierarchy recursively.
-    Assume controls are labeled as CTRL.
+    Every control under a control, in DAG order, identified by the CTRL
+    label in its name.
 
     Arguments
         control (str): Starting control/group
@@ -935,8 +928,8 @@ def get_control_hierarchy(control, end_control=None):
 
 def add_fk_attributes_to_controls(controls, joints):
     '''
-    Add control attributes to Variable FK controls.
-    Called after creating controls for the FK joint chain.
+    Add the sliding dials to the variable-FK controls, after the FK joint
+    chain's controls exist.
 
     Attributes added:
         orig_position (float): Original control position (0-10), locked for reference
@@ -992,8 +985,9 @@ def add_fk_attributes_to_controls(controls, joints):
 
 def set_attributes_visibility_fk(fk_controls):
     '''
-    Hide translate, scale on FK controls.
-    Show rotate, visibility as keyable.
+    Leave FK controls keyable on rotate and visibility only, hiding
+    translate and scale: the variable-FK controls transmit rotation, and
+    their position along the chain comes from the position dial.
 
     Arguments
         controls (list): List of FK control names
@@ -1016,9 +1010,12 @@ def set_attributes_visibility_fk(fk_controls):
 
 def set_attributes_visibility_ik(ik_controls):
     '''
-    Hide scale on IK controls.
-    Show translate, rotate, visibility as keyable.
-    Float controls are translate-only: rotate is non-keyable and hidden.
+    Leave IK controls keyable on translate, rotate and visibility,
+    hiding scale.
+
+    Float controls are translate-only, their rotate non-keyable and
+    hidden: each owns a single cluster CV with the handle's pivot on it,
+    so rotating one moves nothing.
 
     Arguments
         ik_controls (dict): Dict of control types -> control lists

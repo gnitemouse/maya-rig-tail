@@ -773,15 +773,9 @@ def _build_mirror_chain(src_joints, target):
     Create one chain as the mirror of another and return its joints.
 
     Joints are named from the naming template under the target rigname,
-    keeping the source's own index per joint so the two sides number alike
-    - INCLUDING when the source has no index. A one-joint chain is
-    commonly authored unnumbered, and numbering the mirror of
-    'BN_L_leg_jnt' as 'BN_R_leg_00_jnt' broke the pair in two ways: the
-    sides no longer read as the same name but for the side token, and
-    _mirror_parent - which looks for the side-swap of the source's own
-    parent name, 'BN_R_leg_jnt' - could not find the joint that had just
-    been created, so every chain hanging off that pivot was parented back
-    under the SOURCE side.
+    carrying the source's own index per joint so the two sides number
+    alike, INCLUDING when the source has no index. See _mirror_index for
+    what numbering an unnumbered source would cost.
 
     Positions and orientations are the reflected source's, written by the
     same _apply_frames the batch mirror uses.
@@ -830,13 +824,13 @@ def _mirror_index(src_jnt, position):
     '''
     The index a created joint should carry, from the source joint's own.
 
-    The two sides are meant to read as the same name but for the side
-    token, so the source's index is carried across AS IT IS - including
-    its absence. Numbering the mirror of an unnumbered 'BN_L_leg_jnt' as
-    'BN_R_leg_00_jnt' broke the pair twice over: the names no longer
-    matched, and _mirror_parent's lookup for 'BN_R_leg_jnt' missed the
-    joint that had just been created, so everything hanging off that pivot
-    was parented back under the source side.
+    The two sides must read as the same name but for the side token, so
+    the source's index is carried across AS IT IS, its absence included. A
+    one-joint chain is commonly authored unnumbered, and numbering the
+    mirror of 'BN_L_leg_jnt' as 'BN_R_leg_00_jnt' breaks the pair twice
+    over: the names stop matching, and _mirror_parent's lookup for
+    'BN_R_leg_jnt' misses the joint just created, so everything hanging
+    off that pivot is parented back under the source side.
 
     Arguments
         src_jnt (str): the source joint being mirrored.

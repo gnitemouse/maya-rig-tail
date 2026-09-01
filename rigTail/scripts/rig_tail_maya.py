@@ -4,6 +4,12 @@ author: Daisy Jane @gnitemouse
 
 Consolidated Maya wrappers and scene helpers for Rig Tail.
 
+The bottom layer: everything here talks to maya.cmds or the API, and
+imports no other rig_tail module except constants and naming. Nodes are
+addressed by full DAG path wherever a short name could be ambiguous, and
+a call that cannot do its job logs and returns rather than raising, so
+one unreadable node does not abort a build.
+
 Functions:
     build_performance_scope: Suspend refresh/EM for the duration of a build
     timed: Time one step of the build in progress (see build_timer)
@@ -760,8 +766,11 @@ def disconnect_nodes(nodes, source=True, destination=True, verified=False):
 
 def ensure_connect(src, dst):
     """
-    Connect src -> dst plug unless already connected (rebuild-safe).
-    Skips unitConversion nodes when comparing existing sources.
+    Connect src to dst unless the two are already connected, so a
+    rebuild over a live rig re-runs as a query.
+
+    Compares with skipConversionNodes, or the unitConversion Maya
+    inserts on an angle plug would hide the existing source behind it.
 
     Arguments:
         src (str): Source plug (node.attribute)
@@ -1090,12 +1099,10 @@ def set_channel_flags(node, attrs, k=None, cb=None, l=None,
     """
     Set keyable / channel-box / lock flags on a node's plugs via the API.
 
-    A compound name ('translate') flags its CHILDREN - translateX/Y/Z -
-    which is exactly what the per-axis cmds.setAttr loops this replaces
-    did, so the resulting channel box is unchanged. The compound itself is
-    only touched with compound=True, used when unlocking: a lock on the
-    compound blocks its children too, and the old per-axis unlock could not
-    clear it (it queried the lock afterwards and gave up).
+    A compound name ('translate') flags its CHILDREN, translateX/Y/Z. The
+    compound itself is only touched with compound=True, which is what
+    unlocking needs: a lock on the compound blocks its children too, and
+    clearing the per-axis locks alone leaves them stuck.
 
     Keyable is written before channel-box on purpose: Maya treats a keyable
     plug as being in the channel box regardless, so the order decides the
@@ -1850,13 +1857,15 @@ def geometry_matches_rigname(rigname, geo, warn=False):
 
 def bind_geometry(rigname):
     '''
-    Search for geometry named after the rig part and bind to BN joints.
-    Binds every match, so multi-mesh parts work: rigname 'tail' binds
-    'tail_geo', 'tail_01_geo', and 'tail_02_geo'. Meshes named after
-    the part but missing the geo term ('tail', 'tail_01') are bound
-    with a naming warning. Skips meshes that belong to other parts
+    Bind every mesh named after the rig part to its BN joints.
+
+    Multi-mesh parts work because every match binds: rigname 'tail' takes
+    'tail_geo', 'tail_01_geo' and 'tail_02_geo'. A mesh named after the
+    part but missing the geo term ('tail', 'tail_01') is bound with a
+    naming warning. A mesh belonging to another part is left alone
     ('R_tail_geo' is not bound by 'tail').
-    Skips if no geometry found, and skips entirely with BIND_GEOMETRY off.
+
+    Does nothing when no geometry matches, or with BIND_GEOMETRY off.
 
     Arguments:
         rigname (str): Rig component name
@@ -1890,17 +1899,17 @@ def geometry_transforms(root=None):
     '''
     Mesh transforms under the geometry group (or any given root).
 
-    ONE typed listRelatives for the whole subtree, and the transforms come
-    from the mesh shapes it returns. The obvious version - list every
-    descendant transform, then ask is_geometry(t) about each - costs two
-    more commands per transform, and it is called once per rig part in
-    cleanup (unbind), in connect (bind) and again in report_missing_
-    geometry, so on a character with a few hundred meshes that walk was a
-    measurable slice of both phases.
+    ONE typed listRelatives for the whole subtree, with the transforms
+    taken from the mesh shapes it returns. Listing every descendant
+    transform and asking is_geometry about each costs two more commands
+    per transform, and this runs once per rig part in cleanup (unbind), in
+    connect (bind) and again in report_missing_geometry, so on a character
+    with a few hundred meshes that walk is a measurable slice of both
+    phases.
 
     Intermediate shapes (the 'Orig' mesh a skinCluster leaves behind) share
-    their transform with the visible shape, so the result is deduped;
-    dict.fromkeys keeps the scene order the callers used to see.
+    their transform with the visible shape, so the result is deduped
+    through dict.fromkeys, which preserves scene order.
 
     Arguments:
         root (str): Subtree to search, defaulting to the rig geometry group.
@@ -2025,8 +2034,9 @@ def unbind_geometry_all():
 
 def _delete_orphan_bindposes(poses):
     '''
-    Delete bindPose (dagPose) nodes no longer used by any skinCluster.
-    Called after unbinding: Maya creates a bindPose per bind and never
+    Delete bindPose (dagPose) nodes no skinCluster still uses.
+
+    Called after unbinding. Maya creates a bindPose per bind and never
     removes it, so rebuilds accumulate one orphan per rebind.
 
     Arguments:

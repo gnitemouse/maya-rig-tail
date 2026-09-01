@@ -51,19 +51,18 @@ TWO METRICS, easily confused
     read it through control_position_plug, never off the raw dial.
 
 KEY DECISIONS
-    Stock nodes, wired with maya.cmds. Everything here is built from nodes
-    that ship with Maya. The module installs by copying scripts: no
-    compiled plugin, no per-Maya-version or per-platform builds, and a rig
-    opens on any machine that can open Maya - including render nodes that
-    were never set up for it. Every intermediate value stays an
-    inspectable plug, so the network can be debugged in the Node Editor
-    and fixed in a scene without a rebuild.
+    Stock nodes only, wired with maya.cmds. The module installs by copying
+    scripts: no compiled plugin, no per-Maya-version or per-platform
+    builds, and a rig opens on any machine that can open Maya, render
+    nodes included. Every intermediate value stays an inspectable plug, so
+    the network can be debugged in the Node Editor and fixed in a scene
+    without a rebuild.
 
     The cost is node count, which scales with controls x joints, so the
-    weighting is kept deliberately lean - four nodes per joint per control.
-    For the compiled alternative see Serguei Kalentchouk's write-up in the
-    credits below: the same job as one C++ node, at the price of a build
-    matrix and scenes that will not open without the plugin.
+    weighting is kept lean at four nodes per joint per control. For the
+    compiled alternative see Serguei Kalentchouk's write-up in the credits
+    below: the same job as one C++ node, at the price of a build matrix
+    and scenes that will not open without the plugin.
 
     Rotation only. Controls transmit rotation; position along the chain,
     stretch and twist come from their own networks, which keeps each on a
@@ -130,21 +129,15 @@ def control_position_plug(control):
 
 def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     '''
-    Slide each variable-FK control along the curve from its position dial.
+    Slide each variable-FK control along the curve from its position dial,
+    by driving its parent group from a pointOnCurveInfo.
 
-    Node network per control:
-    1. multDoubleLinear (ctrlpos): position dial (0-10) -> fraction (0-1)
-    2. remapValue (remap): tail-length fraction -> curve parameter fraction
-    3. pointOnCurveInfo (poci): world position on the curve at that parameter
-    4. pointMatrixMult (pmm): world position -> basectrl local space
-    5. pmm.output -> control_group.translate
-
-    The remap is what keeps a control drawn on the joints it actually
-    rotates. poci.turnOnPercentage takes a fraction of the curve's
-    PARAMETER range, not of its length, and the two diverge wherever the
-    bones are uneven - on an 8:1 taper badly enough to draw a control a
-    sixth of a tail away from its own bend. So the ramp carries one point
-    per joint, mapping that joint's length fraction to its Greville
+    The remapValue in that chain is what keeps a control drawn on the
+    joints it actually rotates. poci.turnOnPercentage takes a fraction of
+    the curve's PARAMETER range rather than of its length, and the two
+    diverge wherever the bones are uneven, far enough on a tapered chain to
+    draw a control well away from its own bend. So the ramp carries one
+    point per joint, mapping that joint's length fraction to its Greville
     fraction. Points are sampled off the curve itself, so degree and CV
     count cannot drift out of step with create_curve.
 
@@ -152,12 +145,11 @@ def set_curveinfo_fk(rigname, curve, controls, typ=rt_constants.TYPE_FK):
     control_position_plug, which is what holds the two together.
 
     The ramp is built from the REST curve, so a curve stretching under
-    animation drifts the mapping slightly - the same class of static
+    animation drifts the mapping slightly, the same class of static
     approximation as offset_unit_scale.
 
-    Position, joint_pos and the curve parameter all run base to tip.
-
-    Called after setting control attributes.
+    Position, joint_pos and the curve parameter all run base to tip. Call
+    after setting control attributes.
 
     Arguments
         rigname (str): Name of rig component
@@ -253,40 +245,22 @@ def falloff_rotation(rigname, n, joints, sdks, typ=rt_constants.TYPE_FK):
         num_joints        joints currently in range, computed here from
                           falloff and reported back to the animator
 
-    The network, per CONTROL:
+    The weight falls out of a single remapValue per joint. Normalising an
+    input between two bounds is what that node already does, and
+    inputMin/inputMax are connectable, so driving them from ctrl_pos -/+
+    falloff yields the tent's position directly with no arithmetic nodes in
+    front. Those bounds do not vary along the chain, which is why they are
+    built per control rather than per joint.
 
-        plusMinusAverage x2  ctrl_pos -/+ falloff, the window along the
-                             chain that this control reaches over
-        plusMinusAverage     rotation summed with every earlier control's
-        multiplyDivide       1 / num_joints
-        multiplyDivide       mirror signs, on the mirrored side only
-
-    and per JOINT:
-
-        remapValue           joint_pos read against that window, shaped by
-                             the tent and scaled by 1/num_joints
-        multiplyDivide       rotation * weight -> sdk_grp.rotate
-
-    The weight falls out of the remapValue alone. Normalising an input
-    between two bounds is what that node already does, and inputMin/inputMax
-    are connectable - so driving them from ctrl_pos -/+ falloff yields
-    (joint_pos - (ctrl_pos - falloff)) / (2 * falloff), the tent's position
-    directly, with no arithmetic nodes in front. The bounds do not vary along
-    the chain, which is why they are per control rather than per joint.
-
-    The mirror multiply sits between the rotation sum and the weighting. On
+    A mirror multiply sits between the rotation sum and the weighting. On
     the mirrored side of an L/R pair the controls stand in a
     behaviour-mirrored frame (rt_control.mirror_control_frames) pointing two
     axes the other way from the joints', and negating those two puts gizmo
-    and bend back in agreement, so one value poses the pair as mirror images.
+    and bend back in agreement, so one value poses the pair as mirror
+    images.
 
     Comparisons against jnt.joint_pos go through control_position_plug, so
     a control rotates the joints it is drawn on. See set_curveinfo_fk.
-
-    The remapValue samples its ramp in single precision, putting a few parts
-    in 10^7 of rounding on every weight. At 90 degrees of control rotation
-    that is around 3e-05 of a degree at the joint - the node's resolution,
-    not a fault in the network feeding it.
 
     Arguments
         rigname (str): Name of rig component
@@ -435,25 +409,24 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
 
         sdk_01 > sdk_02 > sdk_03 > ctrl_sdk > joint
 
-    A layer each is what lets the controls' influences accumulate through the
-    hierarchy instead of contending for one channel: falloff_rotation writes
-    a single control's weighted rotation into a single layer, while
+    A layer each is what lets the controls' influences accumulate through
+    the hierarchy instead of contending for one channel: falloff_rotation
+    writes a single control's weighted rotation into a single layer, while
     twist, roll and stretch each own a different channel of the same stack.
     Every layer also carries a copy of the joint's joint_pos, so the
     weighting network can read it locally.
 
-    Built from the tip down, and each layer's transform is baked into
+    Built from the tip down, with each layer's transform baked into
     offsetParentMatrix as it is placed, leaving local rotate at zero for
     falloff_rotation to drive.
 
-    Reruns cheaply on a rebuild. Groups that already exist are reused where
-    they stand, and match_transform recognises a layer that is already in
-    position, so a light teardown leaves almost nothing to do here.
+    Existing groups are reused where they stand, so a rebuild after a light
+    teardown leaves almost nothing to do here.
 
     Arguments
         rigname (str): Name of rig component
         joints (list): List of FK joints
-        typ str): Type identifier (TYPE_FK)
+        typ (str): Type identifier (TYPE_FK)
 
     Return
         fkjnt_grp (str): Top group containing entire FK joint chain with SDK groups

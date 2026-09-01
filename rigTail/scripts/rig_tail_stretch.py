@@ -47,10 +47,6 @@ Architecture notes:
     joints. Whatever drives a control may read the sliders, its own baked
     rest, or controls nearer the base; reading the curve, its length or
     the joints closes the loop and cycles.
-  - preserveVolume is a thickness dial only: it fades the taffy rule in
-    and out of scaleY/Z and has no say in how long the tail is. Gating
-    the reactive ratio with it would make preserveVolume = 0 mean the IK
-    length cannot react to its own curve.
 
 Functions:
     Build phase (called from rig_tail):
@@ -94,16 +90,11 @@ REST_SEGMENT_ATTR = 'stretch_rest_segment'
 
 def build_stretch(rigname, curve, joints, typ):
     '''
-    Build stretch/squash node network WITHOUT creating attributes.
-    Attributes are created later in rig_tail_connect.add_basectrl_attributes().
+    Create the stretch/squash node network, without attributes.
 
-    This function only creates:
-    - curveInfo nodes for measurement
-    - Remap nodes (stretch_remap, squash_remap) waiting for connections
-    - Stretch calculation nodes (ratio, pma, clamp)
-    - Squash calculation nodes (volume, blend)
-    - World scale nodes (scale_world, squash_world)
-    - Joint multiply nodes (stretch_mult, squash_mult)
+    Runs before the base control has its sliders, so the remap inputs are
+    left unconnected here; rig_tail_connect creates the attributes and
+    calls connect_stretch_to_joints to wire them.
 
     Arguments
         rigname (str): Name of rig component
@@ -139,15 +130,12 @@ def build_stretch(rigname, curve, joints, typ):
 
 def connect_stretch_to_joints(rigname, basectrl, fk, ik):
     '''
-    Connect stretch system to joints.
-    Called from rig_tail_connect.connect_stretch() after attributes are created.
+    Wire the base control's sliders and the network's outputs to the
+    joints, and the stretch dial to the IK control row, which is how IK
+    stretches at all.
 
-    This connects:
-    - Basectrl preserveVolume -> squash blend
-    - World scale nodes -> scale_grp
-    - Squash nodes -> joint multiply nodes
-    - Joint multiply nodes -> joint scaleY/Z
-    - Stretch dial -> IK control row, which is how IK stretches at all
+    Called from rig_tail_connect.connect_stretch() once the attributes
+    build_stretch left unconnected exist.
 
     Arguments
         rigname (str): Name of rig component
@@ -292,8 +280,8 @@ def sdk_rest_offset(sdk_grp):
 
 def remap_stretch_attr(rigname):
     '''
-    Create remap nodes for stretch and squash.
-    These will be connected to basectrl attributes in connect phase.
+    Create the stretch and squash remap nodes, left for the connect
+    phase to wire to the base control's dials.
 
     Arguments
         rigname (str): Name of rig component
@@ -443,8 +431,8 @@ def create_stretch(rigname, joints, curvelen, stretch_remap, typ):
 
 def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
     '''
-    Create squash calculation node network.
-    Volume-preserving squash based on stretch ratio.
+    Create the squash node network: ratio^-0.5 blended by preserveVolume
+    and trimmed by the squash dial.
 
     Arguments
         rigname (str): Name of rig component
@@ -500,8 +488,8 @@ def create_squash(rigname, curvelen, squash_remap, stretch_ratio, typ):
 
 def create_world_scale(rigname, squash_pma):
     '''
-    Create world scale compensation nodes.
-    Prevents squash from being affected by overall rig scaling.
+    Create the world scale compensation nodes, so scaling the whole rig
+    does not read as a squash.
 
     Arguments
         rigname (str): Name of rig component
@@ -541,8 +529,8 @@ def create_world_scale(rigname, squash_pma):
 
 def create_joint_mult(rigname, joints, typ):
     '''
-    Create multiply nodes for each joint.
-    These will be connected in connect phase.
+    Create the per-joint multiply nodes, left for the connect phase to
+    wire.
 
     For stretch: scale the joint's rest bone offset. IK multiplies its
         translateX by the ratio; FK multiplies its whole offset vector by
@@ -643,8 +631,7 @@ def connect_preserve_volume(rigname, basectrl, squash_blend):
 
 def connect_world_scale(rigname, basectrl, scale_world):
     '''
-    Connect world scale compensation.
-    Constrains scale_grp to basectrl and connects scale nodes.
+    Connect world scale compensation, constraining scale_grp to basectrl.
 
     Arguments
         rigname (str): Name of rig component
@@ -668,8 +655,8 @@ def connect_world_scale(rigname, basectrl, scale_world):
 
 def connect_joint_squash(rigname, basectrl, squash_world):
     '''
-    Connect squash to BN joints.
-    Routes squash through multiply nodes to avoid nested scaling issues.
+    Connect squash to the BN joints' scaleY/Z, through the per-joint
+    multiply nodes so a parent's scale does not nest into its children's.
 
     Arguments
         rigname (str): Name of rig component
@@ -1086,10 +1073,12 @@ def connect_fk_stretch_to_joints(rigname, joints, stretch_delta, typ):
 
 def set_curveinfo_stretch(rigname, curve, typ=''):
     '''
-    Set up curve measurement system for stretch.
+    Create the curveInfo the stretch ratio is measured from, and cache its
+    rest length once.
 
-    - FK: Measure the skinned curve
-    - IK: Measure the solver curve (used by ikHandle)
+    FK measures the skinned curve, IK the solver curve the ikHandle reads.
+    The rest length is cached on first build only, so rebuilding a posed
+    rig cannot adopt a stretched length as rest.
 
     Arguments
         curve (str): Name of curve
@@ -1131,7 +1120,8 @@ def set_curveinfo_stretch(rigname, curve, typ=''):
 
 def fallback_curve_length(rigname, typ):
     '''
-    Fallback method using joint positions when curve method fails.
+    Curve length from summed joint distances, for when the curve cannot be
+    measured.
 
     Arguments
         rigname (str): Name of rig component
