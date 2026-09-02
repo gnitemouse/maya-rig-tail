@@ -146,21 +146,6 @@ def _resolve_module_dir(modules_dir, tool_dirs):
     return None, False
 
 
-def _confirm_outside_delete(module_dir):
-    '''Confirm deletion of an installer-owned external copy.'''
-    answer = cmds.confirmDialog(
-        title='Remove Rig Tail files?',
-        message=('Rig Tail was installed to a folder you chose:\n\n{0}\n\n'
-                 'Delete that folder, or keep the files and just remove '
-                 'the shelf buttons and module registration?'.format(
-                     module_dir)),
-        button=['Keep the files', 'Delete it', 'Cancel'],
-        defaultButton='Keep the files',
-        cancelButton='Cancel',
-        dismissString='Cancel')
-    return answer == 'Delete it'
-
-
 def _remove_module(modules_dir, module_dir, copied):
     '''Remove module registration and, when owned, its module folder.'''
     removed = []
@@ -174,9 +159,9 @@ def _remove_module(modules_dir, module_dir, copied):
         return removed, None
     if not copied:
         return removed, (module_dir, 'not created by the installer')
-    if not _is_inside(module_dir, modules_dir) and \
-            not _confirm_outside_delete(module_dir):
-        return removed, (module_dir, 'kept at your request')
+    if not _is_inside(module_dir, modules_dir):
+        return removed, (module_dir, 'installed to a folder you chose -- '
+                                     'delete it by hand if you want it gone')
 
     _release_cwd(module_dir)
     shutil.rmtree(module_dir, ignore_errors=True)
