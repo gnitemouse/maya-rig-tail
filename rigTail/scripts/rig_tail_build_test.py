@@ -2745,10 +2745,18 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
     came out wrong all show up as a number rather than as a rig that looks
     vaguely off.
 
+    MUTATING, and restoring: it drives the wave attributes to an amplitude
+    and a frequency of its own first. Their default is zero, and against a
+    zero amplitude every expected value is zero and so is every plug - the
+    comparison agrees perfectly and has tested nothing. The frequency is
+    high enough that the phase at the tip runs well past a single cycle,
+    which is where a sin curve not set to repeat stops answering.
+
     A large error at EVERY frame including the first points at the
     per-joint chain. An error that grows with the frame number points at
     the clock, which is the one place a time attribute becomes a plain
-    number.
+    number. An error confined to the joints PAST some point along the
+    chain points at the sin curve's infinity.
 
     Arguments:
         rigname (str): Name of rig component
@@ -2759,13 +2767,26 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
         bool: True if every plug matched at every frame
     '''
     print('\n=== WAVE VALUES vs FORMULA ===\n')
-    if not cmds.objExists(rt_naming.fstr(rigname, rt_constants.BASECTRL)):
+    basectrl = rt_naming.fstr(rigname, rt_constants.BASECTRL)
+    if not cmds.objExists(basectrl):
         print(f'✗ Base control missing for {rigname}')
         return False
 
-    restore = cmds.currentTime(q=True)
-    worst_overall, failures = 0.0, 0
+    # Three different amplitudes, one of them zero, so a pair of axes wired
+    # across each other cannot agree by symmetry. Frequency 3 puts the tip's
+    # phase two cycles past the first, where a curve not set to repeat quits.
+    probe = {'waveX': 2.0, 'waveY': 0.0, 'waveZ': 5.0, 'wave_frequency': 3.0,
+             'wave_speed': 3.0, 'wave_falloff': 1.0}
+    saved = {attr: cmds.getAttr(f'{basectrl}.{attr}') for attr in probe
+             if cmds.attributeQuery(attr, n=basectrl, ex=1)
+             and cmds.getAttr(f'{basectrl}.{attr}', settable=True)}
+    restore_time = cmds.currentTime(q=True)
+    worst_overall, failures, signal = 0.0, 0, 0.0
     try:
+        for attr, val in probe.items():
+            if attr in saved:
+                cmds.setAttr(f'{basectrl}.{attr}', val)
+
         for frame in frames:
             cmds.currentTime(frame, edit=True)
             expected = _wave_expected(rigname, frame)
@@ -2773,6 +2794,7 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
                 print('✗ No wave composeMatrix nodes found')
                 return False
 
+            signal = max(signal, max(abs(v) for v in expected.values()))
             worst, worst_plug = 0.0, ''
             for plug, want in expected.items():
                 got = cmds.getAttr(plug)
@@ -2788,10 +2810,21 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
                       f'got {cmds.getAttr(worst_plug):.6f}, '
                       f'expected {expected[worst_plug]:.6f}')
     finally:
-        cmds.currentTime(restore, edit=True)
+        for attr, val in saved.items():
+            cmds.setAttr(f'{basectrl}.{attr}', val)
+        cmds.currentTime(restore_time, edit=True)
+
+    # A comparison of zero against zero agrees and proves nothing, so the
+    # size of what was compared decides whether a match is worth anything
+    if signal <= tolerance:
+        print(f'\n  INCONCLUSIVE - the largest value compared was '
+              f'{signal:.6f}°, within the tolerance itself. Nothing was '
+              f'tested; check the wave attributes are reaching the rig.\n')
+        return False
 
     print(f'\n  {"PASS" if not failures else "FAIL"} - '
-          f'worst {worst_overall:.6f}° against {tolerance}° allowed\n')
+          f'worst {worst_overall:.6f}° against {tolerance}° allowed, '
+          f'over values up to {signal:.2f}°\n')
     return not failures
 
 

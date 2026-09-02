@@ -234,6 +234,32 @@ ensure_connect = rt_maya.ensure_connect
 # attributes allow.
 SIN_CYCLE_SAMPLES = 32
 
+# animCurve preInfinity/postInfinity: 0 constant, 1 linear, 2 cycle,
+# 3 cycle with offset, 4 oscillate.
+INFINITY_CYCLE = 2
+
+
+def set_cycle_infinity(curve):
+    '''
+    Make a curve repeat its keyed span in both directions.
+
+    Written as plain attributes rather than through cmds.setInfinity,
+    which addresses a curve through the attribute it animates and has
+    nothing to act on for one held as a bare node, and rather than
+    trusting cmds.duplicate to carry the setting to a copy.
+
+    Load-bearing, not a default worth having: on constant infinity a
+    curve answers every input past its span with its end key. A sine keyed
+    across one cycle ends at zero, so every joint whose phase runs beyond
+    one cycle stops moving altogether and the chain hinges at the joint
+    where it crosses.
+
+    Arguments
+        curve (str): animCurve node
+    '''
+    cmds.setAttr(f'{curve}.preInfinity', INFINITY_CYCLE)
+    cmds.setAttr(f'{curve}.postInfinity', INFINITY_CYCLE)
+
 
 def sin_cycle_curve(name):
     '''
@@ -271,7 +297,7 @@ def sin_cycle_curve(name):
         angle = math.degrees(math.atan(math.cos(i * step)))
         cmds.keyTangent(name, e=True, index=(i,), itt='fixed', ott='fixed',
                         ia=angle, oa=angle)
-    cmds.setInfinity(name, pri='cycle', poi='cycle')
+    set_cycle_infinity(name)
     return name
 
 
@@ -575,6 +601,9 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
         sin_node = f'{rigname}_wave_{NN:02d}_sin_animCurveUU'
         if not cmds.objExists(sin_node):
             cmds.duplicate(sin_template, n=sin_node)
+        # Outside the create guard: a curve reached on a rebuild has to be
+        # cycling whatever a previous build left it on
+        set_cycle_infinity(sin_node)
         ensure_connect(f'{phase}.output1D', f'{sin_node}.input')
 
         falloff = f'{rigname}_wave_{NN:02d}_falloff_multiplyDivide'
