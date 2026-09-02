@@ -879,14 +879,44 @@ def fx_census():
     return counts
 
 
-def bench_playback(start=None, end=None, warmup=5, refresh=True):
+@contextlib.contextmanager
+def cached_playback_off():
+    '''
+    Turn Cached Playback off for the block, and put it back after.
+
+    Without this there is nothing to measure. Cached Playback stores each
+    frame's result the first time it is evaluated, so a second pass over
+    the same frames reports the cost of reading the cache - the number
+    falls, the rig has not got faster, and the effect is strongest for the
+    heavy rig that most needs measuring. The evaluator does not exist in
+    DG mode, where the RuntimeError is the answer.
+
+    Restored on the way out because it is a scene-wide setting the
+    animator has to live with afterwards, not a knob local to the bench.
+    '''
+    try:
+        was_on = cmds.evaluator(name='cache', query=True, enable=True)
+    except RuntimeError:
+        yield None
+        return
+
+    cmds.evaluator(name='cache', enable=False)
+    try:
+        yield was_on
+    finally:
+        cmds.evaluator(name='cache', enable=bool(was_on))
+
+
+def bench_playback(start=None, end=None, runs=3, refresh=True):
     '''
     Milliseconds per frame of timeline playback, as a repeatable number.
 
-    Wall time on this machine drifts by tens of percent between sessions,
-    so a single run means nothing on its own: run the baseline and the
-    change back to back in ONE session, and read fx_census alongside to
-    confirm the tree under test is the one that was edited.
+    BEST of N runs, not the mean of one. Wall time on this machine drifts
+    by tens of percent between sessions and jitters within them, and the
+    noise is one-sided - nothing makes a frame evaluate faster than it
+    can, so the fastest run is the closest to the rig's own cost. Run the
+    baseline and the change back to back in ONE session even so, and read
+    fx_census alongside to confirm the tree under test is the one edited.
 
     Frames are stepped by hand rather than played, because cmds.play is
     asynchronous and drops frames to keep real time - it would report the
@@ -902,8 +932,7 @@ def bench_playback(start=None, end=None, warmup=5, refresh=True):
     Arguments:
         start (int): First frame; defaults to the playback range start.
         end (int): Last frame; defaults to the playback range end.
-        warmup (int): Frames to evaluate and discard first, so the first
-            frame's compile and cache fill stays out of the mean.
+        runs (int): Passes over the range; the fastest is reported.
         refresh (bool): Redraw each frame. False times the DG alone.
 
     Return:
@@ -917,26 +946,32 @@ def bench_playback(start=None, end=None, warmup=5, refresh=True):
         return 0.0
 
     restore = cmds.currentTime(q=True)
-    try:
-        for frame in frames[:warmup]:
-            cmds.currentTime(frame, edit=True)
-            if refresh:
+    mode = cmds.evaluationManager(query=True, mode=True) or ['?']
+    best = None
+    with cached_playback_off():
+        try:
+            for _ in range(runs):
+                # First frame outside the timing: it carries the compile
+                # and the first fill of every cache downstream
+                cmds.currentTime(start, edit=True)
                 cmds.refresh(force=True)
 
-        started = time.perf_counter()
-        for frame in frames:
-            cmds.currentTime(frame, edit=True)
-            if refresh:
-                cmds.refresh(force=True)
-        elapsed = time.perf_counter() - started
-    finally:
-        cmds.currentTime(restore, edit=True)
+                started = time.perf_counter()
+                for frame in frames:
+                    cmds.currentTime(frame, edit=True)
+                    if refresh:
+                        cmds.refresh(force=True)
+                elapsed = time.perf_counter() - started
+                best = elapsed if best is None else min(best, elapsed)
+        finally:
+            cmds.currentTime(restore, edit=True)
 
-    per_frame = elapsed / len(frames) * 1000
-    print(f'\n  PLAYBACK  frames {start}-{end}, refresh={refresh}')
+    per_frame = best / len(frames) * 1000
+    print(f'\n  PLAYBACK  frames {start}-{end}, best of {runs}, '
+          f'refresh={refresh}, EM {mode[0]}')
     print('  ' + '-' * 62)
     print(f'  {per_frame:.2f} ms/frame   ({1000 / per_frame:.1f} fps, '
-          f'{elapsed:.2f}s total)')
+          f'{best:.2f}s per pass)')
     print()
     return per_frame
 

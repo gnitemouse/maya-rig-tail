@@ -25,6 +25,7 @@ Functions:
     cleanup_rigname: full teardown of one rig part
     cleanup_connections: light teardown, break connections only
     cleanup_anim_effects: remove one part's FX expression/node network
+    cleanup_disabled_effects: remove the networks of the effects now off
     excluded_sdk_curves: SDK curves the scene-wide sweep must spare
     cleanup_dangling_unit_conversions: sweep orphaned conversion nodes
     cleanup_dangling_curveinfo: sweep curveInfo nodes with no input curve
@@ -149,6 +150,92 @@ def fx_expression_patterns(rigname):
         f'{rigname}_*noise*_expression',
         f'{rigname}_loop_time_expression',
     ]
+
+
+def fx_effect_patterns(rigname, effect):
+    '''
+    The nodes ONE animation effect owns, matched against a leaf name.
+
+    Only the four rig_tail_anim builds. rt_constants.EFFECTS also carries
+    'stretchy', whose squash network belongs to rig_tail_stretch and comes
+    down with the rest of the stretch rig - sweeping half of it from here
+    would hand the build a network nobody had finished removing.
+
+    Arguments
+        rigname (str): Name of rig component
+        effect (str): Key from rt_constants.EFFECTS
+
+    Return
+        list: name patterns, empty for an effect owning no network here
+    '''
+    typ = rt_constants.TYPE_FX
+    return {
+        'wave': [f'{rigname}_*wave*_expression',
+                 f'{rigname}_*_wave_composeMatrix',
+                 f'{typ}_{rigname}_wave_*'],
+        'noise': [f'{rigname}_*noise*_expression',
+                  f'{rigname}_*_noise_composeMatrix'],
+        'curl': [f'{rigname}_curl*_multiplyDivide',
+                 f'{rigname}_curl*_plusMinusAverage',
+                 f'{rigname}_curl*_clamp',
+                 f'{rigname}_*_curl_composeMatrix',
+                 f'{typ}_{rigname}_curl_*'],
+        'loop': [f'{rigname}_loop_time_expression',
+                 f'{rigname}_loop_time',
+                 f'{typ}_{rigname}_loop_*'],
+    }.get(effect, [])
+
+
+def cleanup_disabled_effects(rigname):
+    '''
+    Delete the networks of the animation effects that are switched OFF.
+
+    Keeping the FX network is right for an effect still enabled, which the
+    build meets and reuses, and wrong for one that has just been turned
+    off: nothing rebuilds it and nothing else deletes it, so it sits in the
+    scene evaluating. An expression is the expensive case, being built to
+    always evaluate - it goes on costing a frame's work whether or not
+    anything reads its output. Before this, only a Force Rebuild cleared
+    them, so unchecking an effect made playback no faster.
+
+    Read off the CURRENT settings rather than a remembered previous build.
+    The scene outlives the session: LAST_BUILD is empty after a restart
+    while the nodes are still there, so a comparison would find nothing to
+    do in exactly the case that needs doing.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        int: nodes deleted
+    '''
+    patterns = []
+    for effect in ('wave', 'curl', 'noise', 'loop'):
+        if not rt_constants.EFFECTS.get(effect):
+            patterns += fx_effect_patterns(rigname, effect)
+    if not patterns:
+        return 0
+
+    # One scene scan however many patterns, then match in Python where a
+    # name test is free (see cleanup_anim_effects)
+    typ = rt_constants.TYPE_FX
+    candidates = cmds.ls(f'{rigname}_*', f'{typ}_{rigname}_*') or []
+    nodes = [n for n in dict.fromkeys(candidates)
+             if any(fnmatch.fnmatchcase(n.split('|')[-1], p)
+                    for p in patterns)]
+    if not nodes:
+        return 0
+
+    # Expressions first, and as one batch: a delete cascades through a
+    # connected expression's web (see cleanup_anim_effects)
+    expressions = [n for n in nodes if cmds.nodeType(n) == 'expression']
+    removed = rt_maya.remove_nodes(expressions)
+    removed += rt_maya.remove_nodes([n for n in nodes
+                                     if n not in set(expressions)])
+    cleanup_dangling_unit_conversions()
+
+    logger.debug(f'{rigname}: {removed} node(s) removed for disabled effects')
+    return removed
 
 
 # CLEANUP ==============================================================
@@ -1084,12 +1171,15 @@ def cleanup_connections(rigname, fk, ik):
         ]
         rt_maya.remove_nodes(dict.fromkeys(cmds.ls(*fk_patterns) or []))
 
-    # The whole FX network stays, both halves of it rebuilding in place:
-    # build_curl reuses its nodes through objExists and ensure_connect, and
-    # rig_tail_anim.sync_expressions compares each expression against the
-    # code it should hold, rewriting only what differs. An expression's code
-    # is fixed by the rig it describes, so on an unchanged rig that is a
-    # query per expression against a teardown and a rewrite of every one.
+    # The FX network of an ENABLED effect stays, both halves of it
+    # rebuilding in place: build_curl reuses its nodes through objExists and
+    # ensure_connect, and rig_tail_anim.sync_expressions compares each
+    # expression against the code it should hold, rewriting only what
+    # differs. An expression's code is fixed by the rig it describes, so on
+    # an unchanged rig that is a query per expression against a teardown and
+    # a rewrite of every one. A DISABLED effect has no such rebuild coming,
+    # so its network goes now.
+    cleanup_disabled_effects(rigname)
 
 def cleanup_anim_effects(rigname, fk, ik):
     '''
