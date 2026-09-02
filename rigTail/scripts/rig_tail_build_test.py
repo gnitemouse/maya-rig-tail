@@ -858,9 +858,9 @@ def fx_census():
     Both halves matter to a before/after. The counts are what a change to
     the FX layout is supposed to move, and they move deterministically
     where a frame time drifts with the machine. The module path is the
-    other half: a stale sys.path serving the previous tree reads as 'no
-    change', and has done - so print the file that is actually loaded
-    rather than trusting the one that was edited.
+    other half: a stale sys.path serving a different checkout reads as 'no
+    change', so print the file actually loaded rather than trusting the
+    one that was edited.
 
     Return:
         dict: node type -> count
@@ -2739,12 +2739,11 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
     Check the wave network against the formula it is supposed to compute,
     at several frames.
 
-    The node-graph wave cannot be verified outside Maya the way the
-    expression could - a generated string can be read, a web of connections
-    has to be evaluated. This is that check: it recomputes the wave in
-    Python and compares, so a mis-wired plug, a time unit read as seconds
-    instead of frames, or a sin curve whose tangents came out wrong all
-    show up as a number rather than as a rig that looks vaguely off.
+    A web of connections can only be checked by evaluating it, so this
+    recomputes the wave in Python and compares. A mis-wired plug, a time
+    unit read as seconds instead of frames, or a sin curve whose tangents
+    came out wrong all show up as a number rather than as a rig that looks
+    vaguely off.
 
     A large error at EVERY frame including the first points at the
     per-joint chain. An error that grows with the frame number points at
@@ -3416,8 +3415,8 @@ def fix_expression_time_dependency(rigname='tail'):
 
     # Every FX expression of the part, in one batch: rt_anim.remove_expressions
     # disconnects the lot before deleting any of it, which is what stops a
-    # delete cascading through the connection web. Matched by pattern, so a
-    # rig still carrying the old per-joint-per-axis expressions is cleared too.
+    # delete cascading through the connection web. Matched by pattern, so
+    # every naming spelling the scene may carry is cleared.
     exprs = cmds.ls(*rt_cleanup.fx_expression_patterns(rigname),
                     type='expression') or []
 

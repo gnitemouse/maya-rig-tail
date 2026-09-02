@@ -16,14 +16,15 @@ front of the driver term - so FX rotate each joint about its own pivot
 and never touch the joints' channels. Attribute sources go through
 rt_ctrlall.resolved_plug so the Main Controller dashboard can route them.
 
-Curl and wave are node graphs; noise is ONE expression per part driving
-every joint and axis. Measured on the squid, an expression costs the DG
-far more per node per evaluation than the arithmetic inside it - one per
-joint per axis was 94% of frame time, one per part cut that by 88%, and
-curl's 5300-node graph costs ~0.2ms. So the order of preference is a
-graph first, and failing that as few expressions as the shape allows.
-Everything a part's joints share - the frequencies, the amplitudes, the
-clock - is computed once rather than once per driven plug.
+Curl and wave are node graphs; noise is one expression per part driving
+every joint and axis. An expression costs the DG far more per node per
+evaluation than the arithmetic inside it, where compiled nodes are close
+to free at any count the rig reaches - curl's 5300 carry ~0.2ms a frame
+on the squid. So an effect wants a graph, and failing that as few
+expressions as its shape allows; noise stays an expression because the
+graph it needs runs to 20,000 nodes for a few ms. Whatever a part's
+joints share - the frequencies, the amplitudes, the clock - is computed
+once rather than once per driven plug.
 
 Every effect is built to be met again: nodes are created only when absent
 and connected only when unconnected, and expressions pass through
@@ -206,14 +207,14 @@ def sync_expressions(specs):
 
 def drop_per_joint_expressions(pattern):
     '''
-    Delete the per-joint-per-axis expressions a rig built before wave and
-    noise collapsed to one expression each.
+    Delete FX expressions matching a superseded naming spelling.
 
-    The light teardown leaves the FX network standing for the build to meet
-    (rt_cleanup.cleanup_connections), so without this sweep the old nodes
-    survive a rebuild holding the plugs the new expression wants, and go on
-    evaluating for nothing. The patterns cannot match the one-per-part
-    names, so a rig already converted pays a single ls.
+    A scene can hold expressions from an FX layout the builder no longer
+    produces, and the light teardown leaves the whole FX network standing
+    for the build to meet - so nothing else takes them. Left alone they
+    hold the plugs the current build wants and go on evaluating for
+    nothing. Patterns must not match the names in use, so a rig carrying
+    none pays a single ls.
 
     Arguments
         pattern (str): Name pattern for the superseded expressions
@@ -238,15 +239,16 @@ def sin_cycle_curve(name):
     '''
     An animCurveUU holding one cycle of sin, cycling to infinity.
 
-    Base Maya has no sin utility node, and this is what lets the wave be a
-    node graph at all - see build_wave for why that is worth a curve.
+    Base Maya has no sin utility node, so this is what lets an effect
+    carrying a sine be a node graph at all.
 
     Keyed across the module's TWO_PI, the same literal the phase is built
     from, which is what keeps a loop exact. Cycle infinity repeats the
     curve's span EXACTLY, so a phase advanced by whole cycles lands on the
-    identical value, where sin() of a 2*pi literal drifts in the last
+    identical value - where sin() of a 2*pi literal drifts in the last
     digits every cycle. The approximation is to sin's shape, not its
-    period.
+    period, and at 32 samples it is under a thousandth of a degree at the
+    largest wave the attributes allow.
 
     Tangents carry cos at every key, so the two ends meet at the same
     slope and the join at the cycle boundary is smooth rather than a kink
@@ -279,10 +281,10 @@ def step_curve(name, breakpoints):
     offers.
 
     Wave's loop mode rounds frequency and speed to whole numbers, which is
-    what makes sin(loop_time * N) close exactly. Base Maya has no floor or
-    round node, and the rounding has to survive the port or looping stops
-    being loopable - so it is keyed instead. Exact across the range the
-    basectrl attributes allow, which is all the input can ever be.
+    what makes sin(loop_time * N) close exactly - drop the rounding and
+    the cycle no longer meets itself. Base Maya has no floor or round
+    node, so the steps are keyed. Exact across the range the basectrl
+    attributes allow, which is all the input can ever be.
 
     Arguments
         name (str): Node name
@@ -432,11 +434,9 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
 
     Wave = sin(2pi*u*frequency + time*speed) * amplitude * (u^falloff) * sign
 
-    Six nodes per joint, ~3500 for the squid - curl's order, and curl is
-    the measured proof that a graph that size costs nothing: it adds over
-    5300 nodes for ~0.2ms a frame where the expressions it replaces cost
-    ~5us per driven plug. The plug write out of the MEL interpreter is
-    what that buys back.
+    Six nodes per joint, ~3500 for the squid, which is curl's order and so
+    costs about what curl does - see this module's header for why a graph
+    is worth building at all.
 
     Only u varies down the chain and the three axes differ only in
     amplitude, so the clock, the frequencies and the three amplitudes are
@@ -444,8 +444,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     joint rather than one per plug.
 
     Two things base Maya has no node for are keyed curves instead, see
-    sin_cycle_curve and step_curve. The rounding is not decoration: loop
-    mode needs whole-number harmonics or the cycle does not close.
+    sin_cycle_curve and step_curve.
 
     Arguments:
         rigname (str): Name of rig component
@@ -465,9 +464,8 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     span = float(len(joints) - 1)
 
-    # Before anything is wired, so the graph meets free plugs: both the
-    # per-joint-per-axis spelling and the one-per-part expression this
-    # replaces drive the very composeMatrix inputs it is about to take
+    # First, so the graph meets free plugs: a superseded wave expression
+    # holds the very composeMatrix inputs it is about to take
     drop_per_joint_expressions(f'{rigname}_*wave*_expression')
 
     # resolved_plug: override condition output when the main controller

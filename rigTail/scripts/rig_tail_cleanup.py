@@ -135,9 +135,8 @@ def fx_expression_patterns(rigname):
     the rest of the FX network standing, since build_curl reuses its nodes in
     place.
 
-    The wave and noise patterns are loose enough to also catch the
-    per-joint-per-axis names of a rig built before those effects collapsed
-    to one expression per part.
+    The wave and noise patterns are loose enough to catch every naming
+    spelling a scene may be carrying, not only the one in use.
 
     Arguments
         rigname (str): Name of rig component
@@ -192,12 +191,11 @@ def cleanup_disabled_effects(rigname):
     Delete the networks of the animation effects that are switched OFF.
 
     Keeping the FX network is right for an effect still enabled, which the
-    build meets and reuses, and wrong for one that has just been turned
-    off: nothing rebuilds it and nothing else deletes it, so it sits in the
-    scene evaluating. An expression is the expensive case, being built to
-    always evaluate - it goes on costing a frame's work whether or not
-    anything reads its output. Before this, only a Force Rebuild cleared
-    them, so unchecking an effect made playback no faster.
+    build meets and reuses, and wrong for one switched off: nothing
+    rebuilds it and nothing else deletes it, so it sits in the scene
+    evaluating and unchecking the effect buys no playback back. An
+    expression is the expensive case, being built to always evaluate - it
+    costs a frame's work whether or not anything reads its output.
 
     Read off the CURRENT settings rather than a remembered previous build.
     The scene outlives the session: LAST_BUILD is empty after a restart
