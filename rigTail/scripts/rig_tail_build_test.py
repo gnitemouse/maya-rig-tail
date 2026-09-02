@@ -870,6 +870,8 @@ def fx_census():
         'unitConversion': len(cmds.ls(type='unitConversion') or []),
         'composeMatrix': len(cmds.ls(type='composeMatrix') or []),
         'multiplyDivide': len(cmds.ls(type='multiplyDivide') or []),
+        'plusMinusAverage': len(cmds.ls(type='plusMinusAverage') or []),
+        'animCurveUU': len(cmds.ls(type='animCurveUU') or []),
     }
     print(f'\n  FX CENSUS   (rig_tail_anim from {rt_anim.__file__})')
     print('  ' + '-' * 62)
@@ -2676,6 +2678,122 @@ VALUES:
     print(f'  {bn_jnt}.rotate (local) = {bn_r} (should be [0,0,0])')
     print(f'  {bn_jnt}.worldTranslate = {bn_w_t}')
     print()
+
+
+def _wave_expected(rigname, frame):
+    '''
+    What the wave SHOULD put on each composeMatrix at this frame, from the
+    formula rather than from the rig.
+
+    Values are read through rt_ctrlall.resolved_plug, so a dashboard-routed
+    rig is measured against the attributes it is actually driven by rather
+    than the basectrl ones it is not.
+
+    Arguments:
+        rigname (str): Name of rig component
+        frame (float): Frame to evaluate at
+
+    Return:
+        dict: plug -> expected degrees
+    '''
+    def value(attr):
+        return cmds.getAttr(rt_ctrlall.resolved_plug(rigname, attr))
+
+    joints = rt_constants.JOINTS_BN.get(rigname, [])
+    span = float(len(joints) - 1)
+    signs = rt_mirror.rotation_signs(rigname)
+
+    looped = cmds.objExists(f'{rigname}_loop_time')
+    loop_on = value('loop') > 0.5 if looped else False
+    loop_len = value('loop_frame') if looped else rt_anim.LOOP_FRAME_DEFAULT
+
+    if loop_on:
+        span_t = frame - math.floor(frame / loop_len) * loop_len
+    else:
+        span_t = frame
+    t = span_t * rt_anim.TWO_PI / loop_len
+
+    freq, speed = value('wave_frequency'), value('wave_speed') * 0.5
+    if loop_on:
+        freq = max(math.floor(freq + 0.5), 1.0)
+        speed = math.floor(speed + 0.5)
+    falloff = value('wave_falloff')
+
+    expected = {}
+    for idx, jnt in enumerate(joints[1:], 1):
+        NN = rt_naming.get_index_from_name(jnt)
+        compose = f'{rigname}_{NN:02d}_wave_composeMatrix'
+        if not cmds.objExists(compose):
+            continue
+        u = idx / span
+        val = math.sin(rt_anim.TWO_PI * u * freq + t * speed)
+        weight = math.pow(u, falloff)
+        for axis in ('X', 'Y', 'Z'):
+            amp = value(f'wave{axis}') * 3.0 * signs[axis]
+            expected[f'{compose}.inputRotate{axis}'] = val * amp * weight
+    return expected
+
+
+def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
+    '''
+    Check the wave network against the formula it is supposed to compute,
+    at several frames.
+
+    The node-graph wave cannot be verified outside Maya the way the
+    expression could - a generated string can be read, a web of connections
+    has to be evaluated. This is that check: it recomputes the wave in
+    Python and compares, so a mis-wired plug, a time unit read as seconds
+    instead of frames, or a sin curve whose tangents came out wrong all
+    show up as a number rather than as a rig that looks vaguely off.
+
+    A large error at EVERY frame including the first points at the
+    per-joint chain. An error that grows with the frame number points at
+    the clock, which is the one place a time attribute becomes a plain
+    number.
+
+    Arguments:
+        rigname (str): Name of rig component
+        frames (tuple): Frames to test
+        tolerance (float): Degrees of disagreement allowed
+
+    Return:
+        bool: True if every plug matched at every frame
+    '''
+    print('\n=== WAVE VALUES vs FORMULA ===\n')
+    if not cmds.objExists(rt_naming.fstr(rigname, rt_constants.BASECTRL)):
+        print(f'✗ Base control missing for {rigname}')
+        return False
+
+    restore = cmds.currentTime(q=True)
+    worst_overall, failures = 0.0, 0
+    try:
+        for frame in frames:
+            cmds.currentTime(frame, edit=True)
+            expected = _wave_expected(rigname, frame)
+            if not expected:
+                print('✗ No wave composeMatrix nodes found')
+                return False
+
+            worst, worst_plug = 0.0, ''
+            for plug, want in expected.items():
+                got = cmds.getAttr(plug)
+                if abs(got - want) > worst:
+                    worst, worst_plug = abs(got - want), plug
+            worst_overall = max(worst_overall, worst)
+            ok = worst <= tolerance
+            failures += 0 if ok else 1
+            print(f'  frame {frame:>4}  {"✓" if ok else "✗"}  '
+                  f'max error {worst:.6f}°  ({len(expected)} plugs)')
+            if not ok:
+                print(f'          worst at {worst_plug}: '
+                      f'got {cmds.getAttr(worst_plug):.6f}, '
+                      f'expected {expected[worst_plug]:.6f}')
+    finally:
+        cmds.currentTime(restore, edit=True)
+
+    print(f'\n  {"PASS" if not failures else "FAIL"} - '
+          f'worst {worst_overall:.6f}° against {tolerance}° allowed\n')
+    return not failures
 
 
 def test_wave(rigname='tail'):

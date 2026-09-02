@@ -172,6 +172,7 @@ def fx_effect_patterns(rigname, effect):
     return {
         'wave': [f'{rigname}_*wave*_expression',
                  f'{rigname}_*_wave_composeMatrix',
+                 f'{rigname}_wave_*',
                  f'{typ}_{rigname}_wave_*'],
         'noise': [f'{rigname}_*noise*_expression',
                   f'{rigname}_*_noise_composeMatrix'],
@@ -1203,6 +1204,7 @@ def cleanup_anim_effects(rigname, fk, ik):
         f'{rigname}_curl*_multiplyDivide',
         f'{rigname}_curl*_plusMinusAverage',
         f'{rigname}_curl*_clamp',
+        f'{rigname}_wave_*',
         f'{typ}_{rigname}_wave_*',
         f'{typ}_{rigname}_curl_*',
         f'{typ}_{rigname}_dynOffset_*',

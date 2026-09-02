@@ -13,18 +13,17 @@ the controls do, driven by animatable basectrl attributes.
 Each FX writes per-joint rotations into its own composeMatrix, which
 rig_tail_matrix multiplies into the BN joint's offsetParentMatrix in
 front of the driver term - so FX rotate each joint about its own pivot
-and never touch the joints' channels. Curl is a pure node network; wave
-and noise are expressions, which is what buys them time as an input.
-Attribute sources go through rt_ctrlall.resolved_plug so the Main
-Controller dashboard can route them.
+and never touch the joints' channels. Attribute sources go through
+rt_ctrlall.resolved_plug so the Main Controller dashboard can route them.
 
-Wave and noise are ONE expression per part, driving every joint and axis.
-An expression costs the DG a fixed price per node per evaluation that
-dwarfs the arithmetic inside it: curl's ~3500-node graph is free at
-playback while the same count of expressions was 94% of frame time. So
-the count is what matters, and everything a part's joints share - the
-frequencies, the amplitudes, the clock - is computed once per frame
-rather than once per driven plug.
+Curl and wave are node graphs; noise is ONE expression per part driving
+every joint and axis. Measured on the squid, an expression costs the DG
+far more per node per evaluation than the arithmetic inside it - one per
+joint per axis was 94% of frame time, one per part cut that by 88%, and
+curl's 5300-node graph costs ~0.2ms. So the order of preference is a
+graph first, and failing that as few expressions as the shape allows.
+Everything a part's joints share - the frequencies, the amplitudes, the
+clock - is computed once rather than once per driven plug.
 
 Every effect is built to be met again: nodes are created only when absent
 and connected only when unconnected, and expressions pass through
@@ -44,6 +43,7 @@ Functions:
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
     build_loop: modulo-time driver the other FX read
+    sin_cycle_curve, step_curve: keyed curves for sin and rounding
     build_wave, build_curl, build_noise: one network per effect
 '''
 
@@ -227,6 +227,80 @@ def drop_per_joint_expressions(pattern):
 ensure_connect = rt_maya.ensure_connect
 
 
+# Samples per cycle in the sin curve. Cubic interpolation between keys
+# carrying the exact slope puts the error near 1e-6 of amplitude at 32,
+# which is under a thousandth of a degree at the largest wave the
+# attributes allow.
+SIN_CYCLE_SAMPLES = 32
+
+
+def sin_cycle_curve(name):
+    '''
+    An animCurveUU holding one cycle of sin, cycling to infinity.
+
+    Base Maya has no sin utility node, and this is what lets the wave be a
+    node graph at all - see build_wave for why that is worth a curve.
+
+    Keyed across the module's TWO_PI, the same literal the phase is built
+    from, which is what keeps a loop exact. Cycle infinity repeats the
+    curve's span EXACTLY, so a phase advanced by whole cycles lands on the
+    identical value, where sin() of a 2*pi literal drifts in the last
+    digits every cycle. The approximation is to sin's shape, not its
+    period.
+
+    Tangents carry cos at every key, so the two ends meet at the same
+    slope and the join at the cycle boundary is smooth rather than a kink
+    once per loop.
+
+    Arguments
+        name (str): Node name
+
+    Return
+        str: The curve node
+    '''
+    if cmds.objExists(name):
+        return name
+
+    cmds.createNode('animCurveUU', n=name)
+    step = TWO_PI / SIN_CYCLE_SAMPLES
+    for i in range(SIN_CYCLE_SAMPLES + 1):
+        cmds.setKeyframe(name, float=i * step, value=math.sin(i * step))
+    for i in range(SIN_CYCLE_SAMPLES + 1):
+        angle = math.degrees(math.atan(math.cos(i * step)))
+        cmds.keyTangent(name, e=True, index=(i,), itt='fixed', ott='fixed',
+                        ia=angle, oa=angle)
+    cmds.setInfinity(name, pri='cycle', poi='cycle')
+    return name
+
+
+def step_curve(name, breakpoints):
+    '''
+    An animCurveUU holding a step function, for a quantiser no base node
+    offers.
+
+    Wave's loop mode rounds frequency and speed to whole numbers, which is
+    what makes sin(loop_time * N) close exactly. Base Maya has no floor or
+    round node, and the rounding has to survive the port or looping stops
+    being loopable - so it is keyed instead. Exact across the range the
+    basectrl attributes allow, which is all the input can ever be.
+
+    Arguments
+        name (str): Node name
+        breakpoints (list): (input at which the step rises, value) pairs
+
+    Return
+        str: The curve node
+    '''
+    if cmds.objExists(name):
+        return name
+
+    cmds.createNode('animCurveUU', n=name)
+    for at, value in breakpoints:
+        cmds.setKeyframe(name, float=at, value=value)
+    cmds.keyTangent(name, e=True, itt='clamped', ott='step')
+    return name
+
+
 # BUILD ANIM EFFECTS ===================================================
 
 def build_anim_effects(rigname, fk, ik):
@@ -354,13 +428,24 @@ if ($loop_enabled > 0.5) {{
 def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
     Build the wave effect: a sinusoidal traveling wave with adjustable
-    falloff, as one expression per part driving every joint and axis.
+    falloff, as a node graph per joint rather than an expression.
 
-    Wave = sin(u*frequency + time*speed) * amplitude * (u^falloff) * sign
+    Wave = sin(2pi*u*frequency + time*speed) * amplitude * (u^falloff) * sign
 
-    Only u varies down the chain, and the three axes differ only in
-    amplitude - so the frequencies and the clock are read once per frame,
-    and sin and pow are called once per joint rather than once per plug.
+    Six nodes per joint, ~3500 for the squid - curl's order, and curl is
+    the measured proof that a graph that size costs nothing: it adds over
+    5300 nodes for ~0.2ms a frame where the expressions it replaces cost
+    ~5us per driven plug. The plug write out of the MEL interpreter is
+    what that buys back.
+
+    Only u varies down the chain and the three axes differ only in
+    amplitude, so the clock, the frequencies and the three amplitudes are
+    one node each for the whole part, and sin and pow are one node per
+    joint rather than one per plug.
+
+    Two things base Maya has no node for are keyed curves instead, see
+    sin_cycle_curve and step_curve. The rounding is not decoration: loop
+    mode needs whole-number harmonics or the cycle does not close.
 
     Arguments:
         rigname (str): Name of rig component
@@ -379,46 +464,87 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     signs = signs or rt_mirror.NO_MIRROR
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
     span = float(len(joints) - 1)
-    # With no loop node, normalize raw time the same way the loop node does
-    # at its default frame (loop off) so wave speed matches a loop-built rig.
-    time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
-    # The loop attribute only exists when the Loop effect is built; when it
-    # is not, reference a literal 0 so the expression still compiles and
-    # takes the non-looping branch. resolved_plug: override condition
-    # output when the main controller dashboard is active, the basectrl
-    # attribute otherwise.
-    loop_enabled_src = rt_ctrlall.resolved_plug(rigname, 'loop') if loop_time else '0'
+
+    # Before anything is wired, so the graph meets free plugs: both the
+    # per-joint-per-axis spelling and the one-per-part expression this
+    # replaces drive the very composeMatrix inputs it is about to take
+    drop_per_joint_expressions(f'{rigname}_*wave*_expression')
+
+    # resolved_plug: override condition output when the main controller
+    # dashboard is active, the basectrl attribute otherwise
     freq_src = rt_ctrlall.resolved_plug(rigname, 'wave_frequency')
     speed_src = rt_ctrlall.resolved_plug(rigname, 'wave_speed')
     falloff_src = rt_ctrlall.resolved_plug(rigname, 'wave_falloff')
 
-    amp_srcs = {attr: rt_ctrlall.resolved_plug(rigname, attr)
-                for _, attr in wave_axes}
+    # $t. With no loop node, normalize raw time the same way the loop node
+    # does at its default frame (loop off) so wave speed matches a
+    # loop-built rig. Both sources are time attributes and this is where
+    # they become a plain number.
+    clock = f'{rigname}_wave_time_multiplyDivide'
+    if not cmds.objExists(clock):
+        cmds.createNode('multiplyDivide', n=clock)
+    cmds.setAttr(f'{clock}.operation', 1)
+    ensure_connect(loop_time or 'time1.outTime', f'{clock}.input1X')
+    cmds.setAttr(f'{clock}.input2X',
+                 1.0 if loop_time else TWO_PI / LOOP_FRAME_DEFAULT)
 
-    lines = [f'// Wave for {rigname} - every joint and axis',
-             f'float $loop_enabled = {loop_enabled_src};',
-             f'float $wave_freq = {freq_src};',
-             f'float $wave_speed = {speed_src} * 0.5;',
-             'float $freq;',
-             'float $speed;',
-             'if ($loop_enabled > 0.5) {',
-             '    $freq  = floor($wave_freq + 0.5);',
-             '    if ($freq < 1.0) $freq = 1.0;          // ensure at least 1',
-             '    $speed = floor($wave_speed + 0.5);',
-             '} else {',
-             '    $freq = $wave_freq;',
-             '    $speed = $wave_speed;',
-             '}']
-    lines += [f'float $amp{rot_axis} = {amp_srcs[wave_attr]} '
-              f'* {_mel_float(3.0 * signs[rot_axis])};'
-              for rot_axis, wave_attr in wave_axes]
-    lines += [f'float $falloff = {falloff_src};',
-              f'float $t = {time_source};',
-              'float $u;',
-              'float $val;',
-              'float $w;']
+    # wave_speed is halved before anything else reads it
+    speed_scale = f'{rigname}_wave_speedScale_multiplyDivide'
+    if not cmds.objExists(speed_scale):
+        cmds.createNode('multiplyDivide', n=speed_scale)
+    cmds.setAttr(f'{speed_scale}.operation', 1)
+    ensure_connect(speed_src, f'{speed_scale}.input1X')
+    cmds.setAttr(f'{speed_scale}.input2X', 0.5)
 
-    plugs = []
+    # Loop mode rounds both to whole numbers - frequency to at least 1 -
+    # so the harmonics close over the cycle. Keyed at the half-steps the
+    # rounding turns on, exact over the range the attributes allow.
+    freq_quant = step_curve(f'{rigname}_wave_freqQuant_animCurveUU',
+                            [(0.0, 1), (1.5, 2), (2.5, 3), (3.5, 4), (4.5, 5)])
+    speed_quant = step_curve(f'{rigname}_wave_speedQuant_animCurveUU',
+                             [(0.0, 0), (0.5, 1), (1.5, 2), (2.5, 3),
+                              (3.5, 4), (4.5, 5)])
+    ensure_connect(freq_src, f'{freq_quant}.input')
+    ensure_connect(f'{speed_scale}.outputX', f'{speed_quant}.input')
+
+    # Rounded when loop is on, raw when it is off. 'loop' is a bool, so
+    # the blend only ever sees 0 or 1 and picks rather than mixes; the
+    # attribute exists only when the Loop effect is built.
+    mode = f'{rigname}_wave_mode_blendColors'
+    if not cmds.objExists(mode):
+        cmds.createNode('blendColors', n=mode)
+    ensure_connect(f'{freq_quant}.output', f'{mode}.color1R')
+    ensure_connect(f'{speed_quant}.output', f'{mode}.color1G')
+    ensure_connect(freq_src, f'{mode}.color2R')
+    ensure_connect(f'{speed_scale}.outputX', f'{mode}.color2G')
+    if loop_time:
+        ensure_connect(rt_ctrlall.resolved_plug(rigname, 'loop'),
+                       f'{mode}.blender')
+    else:
+        cmds.setAttr(f'{mode}.blender', 0)
+
+    # $t * $speed, shared by every joint
+    t_speed = f'{rigname}_wave_tSpeed_multiplyDivide'
+    if not cmds.objExists(t_speed):
+        cmds.createNode('multiplyDivide', n=t_speed)
+    cmds.setAttr(f'{t_speed}.operation', 1)
+    ensure_connect(f'{clock}.outputX', f'{t_speed}.input1X')
+    ensure_connect(f'{mode}.outputG', f'{t_speed}.input2X')
+
+    # All three amplitudes in one node, the mirror sign riding on the
+    # per-unit factor as it does in build_curl
+    amp = f'{rigname}_wave_amp_multiplyDivide'
+    if not cmds.objExists(amp):
+        cmds.createNode('multiplyDivide', n=amp)
+    cmds.setAttr(f'{amp}.operation', 1)
+    for rot_axis, wave_attr in wave_axes:
+        ensure_connect(rt_ctrlall.resolved_plug(rigname, wave_attr),
+                       f'{amp}.input1{rot_axis}')
+        cmds.setAttr(f'{amp}.input2{rot_axis}', 3.0 * signs[rot_axis])
+
+    sin_template = sin_cycle_curve(f'{rigname}_wave_sinCycle_animCurveUU')
+
+    driven = 0
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_naming.get_index_from_name(jnt)
         compose_node = f'{rigname}_{NN:02d}_wave_composeMatrix'
@@ -427,24 +553,60 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
             logger.trace(f'{compose_node} does not exist, skipping wave joint')
             continue
 
-        lines += ['',
-                  f'// joint {NN:02d}',
-                  f'$u = {_mel_float(idx / span)};',
-                  '$val = sin((6.28318530718 * $u * $freq) + ($t * $speed));',
-                  '$w = pow($u, $falloff);']
+        u = idx / span
+
+        # 2pi*u is constant per joint, so the phase is one multiply and
+        # one add against the part's shared clock
+        phase_u = f'{rigname}_wave_{NN:02d}_phaseU_multiplyDivide'
+        if not cmds.objExists(phase_u):
+            cmds.createNode('multiplyDivide', n=phase_u)
+        cmds.setAttr(f'{phase_u}.operation', 1)
+        cmds.setAttr(f'{phase_u}.input1X', TWO_PI * u)
+        ensure_connect(f'{mode}.outputR', f'{phase_u}.input2X')
+
+        phase = f'{rigname}_wave_{NN:02d}_phase_plusMinusAverage'
+        if not cmds.objExists(phase):
+            cmds.createNode('plusMinusAverage', n=phase)
+        cmds.setAttr(f'{phase}.operation', 1)
+        ensure_connect(f'{phase_u}.outputX', f'{phase}.input1D[0]')
+        ensure_connect(f'{t_speed}.outputX', f'{phase}.input1D[1]')
+
+        # Duplicated from the template rather than keyed again: the keys
+        # are identical for every joint, and cleanup_rig's scene-wide
+        # animCurve delete means these are rebuilt on every build
+        sin_node = f'{rigname}_wave_{NN:02d}_sin_animCurveUU'
+        if not cmds.objExists(sin_node):
+            cmds.duplicate(sin_template, n=sin_node)
+        ensure_connect(f'{phase}.output1D', f'{sin_node}.input')
+
+        falloff = f'{rigname}_wave_{NN:02d}_falloff_multiplyDivide'
+        if not cmds.objExists(falloff):
+            cmds.createNode('multiplyDivide', n=falloff)
+        cmds.setAttr(f'{falloff}.operation', 3)  # power
+        cmds.setAttr(f'{falloff}.input1X', u)
+        ensure_connect(falloff_src, f'{falloff}.input2X')
+
+        val_fall = f'{rigname}_wave_{NN:02d}_valFall_multiplyDivide'
+        if not cmds.objExists(val_fall):
+            cmds.createNode('multiplyDivide', n=val_fall)
+        cmds.setAttr(f'{val_fall}.operation', 1)
+        ensure_connect(f'{sin_node}.output', f'{val_fall}.input1X')
+        ensure_connect(f'{falloff}.outputX', f'{val_fall}.input2X')
+
+        # One node carries all three axes: the same sin*falloff against
+        # the three amplitudes
+        out = f'{rigname}_wave_{NN:02d}_out_multiplyDivide'
+        if not cmds.objExists(out):
+            cmds.createNode('multiplyDivide', n=out)
+        cmds.setAttr(f'{out}.operation', 1)
         for rot_axis, _ in wave_axes:
-            lines.append(f'{compose_node}.inputRotate{rot_axis} = '
-                         f'$val * $amp{rot_axis} * $w;')
-            plugs.append(f'{compose_node}.inputRotate{rot_axis}')
+            ensure_connect(f'{val_fall}.outputX', f'{out}.input1{rot_axis}')
+            ensure_connect(f'{amp}.output{rot_axis}', f'{out}.input2{rot_axis}')
+            ensure_connect(f'{out}.output{rot_axis}',
+                           f'{compose_node}.inputRotate{rot_axis}')
+        driven += 1
 
-    drop_per_joint_expressions(f'{rigname}_*_wave?_expression')
-    if not plugs:
-        logger.warning(f'{rigname}: No wave composeMatrix nodes to drive')
-        return
-
-    sync_expressions([(f'{rigname}_wave_expression',
-                       '\n'.join(lines) + '\n', plugs)])
-    logger.debug(f'{rigname}: Wave effect built ({len(plugs)} plugs)')
+    logger.debug(f'{rigname}: Wave effect built ({driven} joints, node graph)')
 
 
 # CURL =================================================================
