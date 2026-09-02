@@ -1137,6 +1137,11 @@ def test_matrix(rigname='tail'):
     opm_drift_warned = False
     for i, jnt in enumerate(joints):
         NN = rt_naming.get_index_from_name(jnt)
+        # The root's OPM carries the chain's base orientation, so its first
+        # row is the aim axis in world terms and has no reason to be ~1.0.
+        # Only joints below it sit in a parent frame this holds for.
+        if i == 0:
+            continue
         opm = cmds.getAttr(f'{jnt}.offsetParentMatrix')
         if opm:
             diag_x = opm[0]   # should be ~1.0
@@ -1152,7 +1157,7 @@ def test_matrix(rigname='tail'):
                 opm_drift_warned = True
                 print(f'  Jnt {NN:02d}: OPM first row [{round(diag_x,6)}, {round(off_y,8)}, {round(off_z,8)}] DRIFT DETECTED')
             elif drift > 1e-10:
-                print(f'  Jnt {NN:02d}: OPM first row [{round(diag_x,6)}, {round(off_y,2e-8):.2e}, {round(off_z,2e-8):.2e}] (fp noise, ok)')
+                print(f'  Jnt {NN:02d}: OPM first row [{round(diag_x,6)}, {off_y:.2e}, {off_z:.2e}] (fp noise, ok)')
             else:
                 print(f'  Jnt {NN:02d}: OPM first row [{round(diag_x,6)}, {off_y:.2e}, {off_z:.2e}] OK')
     print()
@@ -2319,8 +2324,15 @@ def test_stretch(rigname='tail', amount=10.0, tolerance=0.02):
 def test_matrix_opm(rigname='tail', count=0):
     '''
     Validate each BN joint's offsetParentMatrix against the expected
-    parent-space matrix (parent_world.inverse() * ik_world) for joints 1-3.
+    parent-space matrix (ik_world * parent_world.inverse()) for joints 1-3.
     Returns True if every translation error is within tolerance, else False.
+
+    MMatrix is row-vector: a child's world matrix is local * parent, so the
+    local matrix is world * parent.inverse() and NOT parent.inverse() *
+    world. The two differ, and the reversed form is not a near miss - it
+    returns an offset of the wrong LENGTH, because it rotates the parent's
+    own translation into the child's frame instead of measuring between
+    them. On a chain whose joints sit 2.43 apart it reported 2.20.
     '''
     print(f'\n=== MANUAL MATRIX CHECK: (COUNT: {count}) ===\n')
 
@@ -2336,7 +2348,7 @@ def test_matrix_opm(rigname='tail', count=0):
         parent_inv = parent_world.inverse()
 
         # Expected local matrix (parent space)
-        expected_local = parent_inv * ik_world
+        expected_local = ik_world * parent_inv
         # Actual offsetParentMatrix
         opm = om.MMatrix(cmds.getAttr(f'{bn_jnt}.offsetParentMatrix'))
         print_matrix(opm, f'{bn_jnt}.offsetParentMatrix')
