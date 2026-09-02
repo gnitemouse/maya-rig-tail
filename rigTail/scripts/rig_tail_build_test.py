@@ -31,6 +31,8 @@ Usage:
     rt_build_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
     rt_build_test.test_remove_rig()                          # Remove Rig leaves a clean scene (MUTATES)
     rt_build_test.profile_build()                            # which Maya command the build time goes to (MUTATES)
+    rt_build_test.test_sin_curve('C_fintail')                # wave's sin curve, shape and cycling
+    rt_build_test.test_wave_values('C_fintail')              # wave network vs the formula
     rt_build_test.fx_census()                                # FX node counts, and which checkout is loaded
     rt_build_test.bench_playback()                           # ms/frame of playback
 '''
@@ -2678,6 +2680,69 @@ VALUES:
     print(f'  {bn_jnt}.rotate (local) = {bn_r} (should be [0,0,0])')
     print(f'  {bn_jnt}.worldTranslate = {bn_w_t}')
     print()
+
+
+def test_sin_curve(rigname='tail', samples=241, tolerance=0.002):
+    '''
+    Check one of wave's sin curves against sin, on its own, across three
+    cycles.
+
+    The curve is the one part of the wave graph carrying an approximation
+    rather than arithmetic, and the two things that can be wrong with it -
+    the shape between keys and whether it repeats past its keyed span -
+    are both invisible from further downstream. A phase that never leaves
+    the first cycle reads correct either way, and every joint near the
+    base of a chain is in that position.
+
+    MUTATING nothing: a duplicate is driven and deleted, so the curve in
+    the rig is never touched and its input connection is left alone.
+
+    An error that appears only outside the keyed span is the infinity
+    setting. An error spread across the whole sweep is the tangents.
+
+    Arguments:
+        rigname (str): Name of rig component
+        samples (int): Points to test across three cycles
+        tolerance (float): Allowed disagreement, in sin's own units
+
+    Return:
+        bool: True if the curve tracks sin everywhere tested
+    '''
+    print('\n=== WAVE SIN CURVE ===\n')
+    curves = cmds.ls(f'{rigname}_wave_*_sin_animCurveUU',
+                     type='animCurveUU') or []
+    if not curves:
+        print(f'✗ No wave sin curves found for {rigname}')
+        return False
+
+    probe = cmds.duplicate(curves[0], n='rt_sin_probe_tmp')[0]
+    inside = outside = 0.0
+    try:
+        span_lo = rt_anim.SIN_CYCLE_START
+        span_hi = span_lo + rt_anim.TWO_PI
+        lo, hi = span_lo - rt_anim.TWO_PI, span_lo + 2 * rt_anim.TWO_PI
+        for i in range(samples):
+            x = lo + (hi - lo) * i / (samples - 1)
+            cmds.setAttr(f'{probe}.input', x)
+            error = abs(cmds.getAttr(f'{probe}.output') - math.sin(x))
+            if span_lo <= x <= span_hi:
+                inside = max(inside, error)
+            else:
+                outside = max(outside, error)
+    finally:
+        cmds.delete(probe)
+
+    print(f'  curve tested   {curves[0]}  ({len(curves)} in this part)')
+    print(f'  within the keyed span   max error {inside:.2e}'
+          f'   {"✓" if inside <= tolerance else "✗ tangents"}')
+    print(f'  beyond it (2 cycles)    max error {outside:.2e}'
+          f'   {"✓" if outside <= tolerance else "✗ infinity is not cycling"}')
+
+    ok = max(inside, outside) <= tolerance
+    print(f'\n  {"PASS" if ok else "FAIL"} - worst {max(inside, outside):.2e} '
+          f'against {tolerance} allowed '
+          f'(={max(inside, outside) * 30:.4f}° at a 30° wave)\n')
+    return ok
 
 
 def _wave_expected(rigname, frame):

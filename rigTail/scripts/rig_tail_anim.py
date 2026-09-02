@@ -228,11 +228,20 @@ def drop_per_joint_expressions(pattern):
 ensure_connect = rt_maya.ensure_connect
 
 
-# Samples per cycle in the sin curve. Cubic interpolation between keys
-# carrying the exact slope puts the error near 1e-6 of amplitude at 32,
-# which is under a thousandth of a degree at the largest wave the
-# attributes allow.
-SIN_CYCLE_SAMPLES = 32
+# Samples per cycle in the sin curve, and where that cycle starts.
+#
+# The span begins at a trough rather than at zero, which is what makes the
+# curve independent of how Maya tangents the first and last key. Both ends
+# then sit on an extremum where the true slope IS zero, so a flattened end
+# tangent is the right answer rather than a 0.4 degree error at the join,
+# and auto tangents flatten at an extremum anyway. Keyed from zero the two
+# ends carry sin's steepest slope and the curve depends on getting them
+# exactly right.
+#
+# At 64 the error against sin stays inside 0.02 degrees at the largest
+# wave the attributes allow, whichever way the ends are tangented.
+SIN_CYCLE_SAMPLES = 64
+SIN_CYCLE_START = -TWO_PI / 4.0
 
 # animCurve preInfinity/postInfinity: 0 constant, 1 linear, 2 cycle,
 # 3 cycle with offset, 4 oscillate.
@@ -268,17 +277,18 @@ def sin_cycle_curve(name):
     Base Maya has no sin utility node, so this is what lets an effect
     carrying a sine be a node graph at all.
 
-    Keyed across the module's TWO_PI, the same literal the phase is built
+    Spanning the module's TWO_PI, the same literal the phase is built
     from, which is what keeps a loop exact. Cycle infinity repeats the
     curve's span EXACTLY, so a phase advanced by whole cycles lands on the
     identical value - where sin() of a 2*pi literal drifts in the last
     digits every cycle. The approximation is to sin's shape, not its
-    period, and at 32 samples it is under a thousandth of a degree at the
-    largest wave the attributes allow.
+    period.
 
-    Tangents carry cos at every key, so the two ends meet at the same
-    slope and the join at the cycle boundary is smooth rather than a kink
-    once per loop.
+    Tangents are left to Maya. The angle keyTangent takes is measured
+    against an x axis in SECONDS, so an angle computed from the curve's
+    own slope comes out wrong by the scene's frame rate - a curve that is
+    not a sine at all. Nothing here needs a convention it cannot check:
+    see SIN_CYCLE_START for why auto tangents are enough.
 
     Arguments
         name (str): Node name
@@ -292,11 +302,9 @@ def sin_cycle_curve(name):
     cmds.createNode('animCurveUU', n=name)
     step = TWO_PI / SIN_CYCLE_SAMPLES
     for i in range(SIN_CYCLE_SAMPLES + 1):
-        cmds.setKeyframe(name, float=i * step, value=math.sin(i * step))
-    for i in range(SIN_CYCLE_SAMPLES + 1):
-        angle = math.degrees(math.atan(math.cos(i * step)))
-        cmds.keyTangent(name, e=True, index=(i,), itt='fixed', ott='fixed',
-                        ia=angle, oa=angle)
+        at = SIN_CYCLE_START + i * step
+        cmds.setKeyframe(name, float=at, value=math.sin(at))
+    cmds.keyTangent(name, e=True, itt='auto', ott='auto')
     set_cycle_infinity(name)
     return name
 
