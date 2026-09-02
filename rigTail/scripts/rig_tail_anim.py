@@ -18,6 +18,14 @@ and noise are expressions, which is what buys them time as an input.
 Attribute sources go through rt_ctrlall.resolved_plug so the Main
 Controller dashboard can route them.
 
+Wave and noise are ONE expression per part, driving every joint and axis.
+An expression costs the DG a fixed price per node per evaluation that
+dwarfs the arithmetic inside it: curl's ~3500-node graph is free at
+playback while the same count of expressions was 94% of frame time. So
+the count is what matters, and everything a part's joints share - the
+frequencies, the amplitudes, the clock - is computed once per frame
+rather than once per driven plug.
+
 Every effect is built to be met again: nodes are created only when absent
 and connected only when unconnected, and expressions pass through
 sync_expressions, which compares each against the code it should hold. An
@@ -31,12 +39,15 @@ mirrored skeleton alone can only ever manage one of them.
 Functions:
     remove_expressions: delete expressions without the delete cascading
     sync_expressions: write only the expressions whose code has moved
+    drop_per_joint_expressions: clear a rig's superseded FX expressions
     build_anim_effects: entry point; build the enabled FX for one part
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
     build_loop: modulo-time driver the other FX read
     build_wave, build_curl, build_noise: one network per effect
 '''
+
+import math
 
 import maya.cmds as cmds
 from logger_config import logger_setup
@@ -81,19 +92,44 @@ CONVERSION_TYPES = ['unitConversion', 'unitToTimeConversion',
                     'timeToUnitConversion']
 
 
-def _expression_is_current(expr, code, plug):
+def _mel_float(value):
     '''
-    Whether an expression holds this code AND is the thing driving this plug.
+    A Python float as a MEL literal that reads back as the same double.
+
+    repr round-trips, but can spell a number '1e-17', and MEL wants a
+    decimal point before the exponent.
+
+    Arguments
+        value (float): Value to spell
+
+    Return
+        str: MEL float literal
+    '''
+    text = repr(float(value))
+    if 'e' in text and '.' not in text:
+        text = text.replace('e', '.0e')
+    return text
+
+
+def _expression_is_current(expr, code, plugs):
+    '''
+    Whether an expression holds this code AND is the thing driving every
+    plug it should.
 
     Matching code alone proves nothing about the wiring, and an expression
     connected to nothing is silent rather than visibly broken.
     skipConversionNodes, so the unitConversion Maya inserts on an angle plug
     does not hide the expression behind it.
 
+    The plugs go to listConnections in one call. It returns one entry per
+    CONNECTED destination, so a result that is this expression as many times
+    over as there are plugs says all of them are driven and all by this - no
+    plug names to match, and one command instead of a hundred and fifty.
+
     Arguments
         expr (str): Expression node name
         code (str): Code it should hold
-        plug (str): Plug it should drive
+        plugs (list): Plugs it should drive
 
     Return
         bool: True if the expression can be left alone
@@ -102,8 +138,8 @@ def _expression_is_current(expr, code, plug):
         return False
     if cmds.expression(expr, q=True, s=True) != code:
         return False
-    return expr in (cmds.listConnections(plug, s=True, d=False,
-                                         scn=True) or [])
+    drivers = cmds.listConnections(plugs, s=True, d=False, scn=True) or []
+    return len(drivers) == len(plugs) and set(drivers) == {expr}
 
 
 def remove_expressions(exprs):
@@ -149,7 +185,7 @@ def sync_expressions(specs):
     unitConversion survives on the plug side alone.
 
     Arguments
-        specs (list): (expression name, code, driven plug) triples
+        specs (list): (expression name, code, driven plugs) triples
 
     Return
         int: expressions rewritten
@@ -159,12 +195,33 @@ def sync_expressions(specs):
         return 0
 
     remove_expressions([name for name, _, _ in stale])
-    for name, code, plug in stale:
-        rt_maya.break_connection(plug)
+    for name, code, plugs in stale:
+        for plug in plugs:
+            rt_maya.break_connection(plug)
         cmds.expression(n=name, s=code, o='', ae=1, uc='all')
 
     logger.debug(f'{len(stale)} of {len(specs)} expressions rewritten')
     return len(stale)
+
+
+def drop_per_joint_expressions(pattern):
+    '''
+    Delete the per-joint-per-axis expressions a rig built before wave and
+    noise collapsed to one expression each.
+
+    The light teardown leaves the FX network standing for the build to meet
+    (rt_cleanup.cleanup_connections), so without this sweep the old nodes
+    survive a rebuild holding the plugs the new expression wants, and go on
+    evaluating for nothing. The patterns cannot match the one-per-part
+    names, so a rig already converted pays a single ls.
+
+    Arguments
+        pattern (str): Name pattern for the superseded expressions
+
+    Return
+        int: nodes deleted
+    '''
+    return remove_expressions(cmds.ls(pattern, type='expression') or [])
 
 
 ensure_connect = rt_maya.ensure_connect
@@ -288,7 +345,7 @@ if ($loop_enabled > 0.5) {{
 }}
 '''
 
-    sync_expressions([(modulo_expr, expr_code, f'{loop_time}.loop_time')])
+    sync_expressions([(modulo_expr, expr_code, [f'{loop_time}.loop_time'])])
     return f'{loop_time}.loop_time'
 
 
@@ -297,9 +354,13 @@ if ($loop_enabled > 0.5) {{
 def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
     Build the wave effect: a sinusoidal traveling wave with adjustable
-    falloff, one expression per joint per axis.
+    falloff, as one expression per part driving every joint and axis.
 
     Wave = sin(u*frequency + time*speed) * amplitude * (u^falloff) * sign
+
+    Only u varies down the chain, and the three axes differ only in
+    amplitude - so the frequencies and the clock are read once per frame,
+    and sin and pow are called once per joint rather than once per plug.
 
     Arguments:
         rigname (str): Name of rig component
@@ -317,7 +378,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
 
     signs = signs or rt_mirror.NO_MIRROR
     wave_axes = [('X', 'waveX'), ('Y', 'waveY'), ('Z', 'waveZ')]
-    num_joints = len(joints)
+    span = float(len(joints) - 1)
     # With no loop node, normalize raw time the same way the loop node does
     # at its default frame (loop off) so wave speed matches a loop-built rig.
     time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
@@ -334,52 +395,56 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     amp_srcs = {attr: rt_ctrlall.resolved_plug(rigname, attr)
                 for _, attr in wave_axes}
 
-    specs = []
+    lines = [f'// Wave for {rigname} - every joint and axis',
+             f'float $loop_enabled = {loop_enabled_src};',
+             f'float $wave_freq = {freq_src};',
+             f'float $wave_speed = {speed_src} * 0.5;',
+             'float $freq;',
+             'float $speed;',
+             'if ($loop_enabled > 0.5) {',
+             '    $freq  = floor($wave_freq + 0.5);',
+             '    if ($freq < 1.0) $freq = 1.0;          // ensure at least 1',
+             '    $speed = floor($wave_speed + 0.5);',
+             '} else {',
+             '    $freq = $wave_freq;',
+             '    $speed = $wave_speed;',
+             '}']
+    lines += [f'float $amp{rot_axis} = {amp_srcs[wave_attr]} '
+              f'* {_mel_float(3.0 * signs[rot_axis])};'
+              for rot_axis, wave_attr in wave_axes]
+    lines += [f'float $falloff = {falloff_src};',
+              f'float $t = {time_source};',
+              'float $u;',
+              'float $val;',
+              'float $w;']
+
+    plugs = []
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_naming.get_index_from_name(jnt)
-        u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
+        compose_node = f'{rigname}_{NN:02d}_wave_composeMatrix'
 
-        for rot_axis, wave_attr in wave_axes:
-            expr = f'{rigname}_{NN:02d}_wave{rot_axis}_expression'
-            compose_node = f'{rigname}_{NN:02d}_wave_composeMatrix'
+        if not cmds.objExists(compose_node):
+            logger.trace(f'{compose_node} does not exist, skipping wave joint')
+            continue
 
-            if not cmds.objExists(compose_node):
-                logger.trace(f'{compose_node} does not exist, skipping wave expression')
-                continue
+        lines += ['',
+                  f'// joint {NN:02d}',
+                  f'$u = {_mel_float(idx / span)};',
+                  '$val = sin((6.28318530718 * $u * $freq) + ($t * $speed));',
+                  '$w = pow($u, $falloff);']
+        for rot_axis, _ in wave_axes:
+            lines.append(f'{compose_node}.inputRotate{rot_axis} = '
+                         f'$val * $amp{rot_axis} * $w;')
+            plugs.append(f'{compose_node}.inputRotate{rot_axis}')
 
-            amp_src = amp_srcs[wave_attr]
+    drop_per_joint_expressions(f'{rigname}_*_wave?_expression')
+    if not plugs:
+        logger.warning(f'{rigname}: No wave composeMatrix nodes to drive')
+        return
 
-            expr_code = f'''// Wave expression for joint {NN:02d} axis {rot_axis}
-float $loop_enabled = {loop_enabled_src};
-float $wave_freq = {freq_src};
-float $wave_speed = {speed_src} * 0.5;
-float $freq;
-float $speed;
-if ($loop_enabled > 0.5) {{
-    $freq  = floor($wave_freq + 0.5);
-    if ($freq < 1.0) $freq = 1.0;          // ensure at least 1
-    $speed = floor($wave_speed + 0.5);
-}} else {{
-    $freq = $wave_freq;
-    $speed = $wave_speed;
-}}
-float $amp = {amp_src} * {3.0 * signs[rot_axis]};
-float $falloff = {falloff_src};
-float $t = {time_source};
-float $u = {u};
-
-float $phase = (6.28318530718 * $u * $freq) + ($t * $speed);
-float $val = sin($phase);
-float $w = pow($u, $falloff);
-float $out = $val * $amp * $w;
-
-{compose_node}.inputRotate{rot_axis} = $out;
-'''
-            specs.append((expr, expr_code,
-                          f'{compose_node}.inputRotate{rot_axis}'))
-
-    sync_expressions(specs)
-    logger.debug(f'{rigname}: Wave effect built')
+    sync_expressions([(f'{rigname}_wave_expression',
+                       '\n'.join(lines) + '\n', plugs)])
+    logger.debug(f'{rigname}: Wave effect built ({len(plugs)} plugs)')
 
 
 # CURL =================================================================
@@ -518,7 +583,7 @@ def build_curl(rigname, basectrl, joints, signs=None):
 def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     '''
     Build the noise effect: procedural jitter for kelp and tentacle
-    motion, one expression per joint per axis.
+    motion, as one expression per part driving every joint and axis.
 
     A dominant low-frequency wave travels along the chain, with a smaller
     higher-frequency jitter on top, under a per-joint falloff that keeps
@@ -528,6 +593,13 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     The seed is per joint index and axis, so an L/R pair already jitters
     to the same numbers; the mirror signs (rt_mirror) are what turn that
     into the two sides jittering as mirror images.
+
+    Everything downstream of the seed - the phases, the spatial offset,
+    the jitter frequency, the falloff - is fixed at build time, so it is
+    computed here and spelled into the code as a literal instead of being
+    recomputed every frame. The three harmonic rates depend only on time,
+    so they are hoisted to the top; what is left per plug is the four sin
+    calls that actually vary.
 
     Arguments:
         rigname (str): Name of rig component
@@ -546,7 +618,7 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     signs = signs or rt_mirror.NO_MIRROR
     effect_axes = ['X', 'Y', 'Z']
     axis_offsets = {'X': 0.0, 'Y': 100.0, 'Z': 200.0}
-    num_joints = len(joints)
+    span = float(len(joints) - 1)
     # With no loop node, normalize raw time the same way the loop node does
     # at its default frame (loop off) so noise speed matches a loop-built rig.
     time_source = loop_time if loop_time else UNLOOPED_TIME_SRC
@@ -560,78 +632,77 @@ def build_noise(rigname, basectrl, joints, loop_time=None, signs=None):
     freq_src = rt_ctrlall.resolved_plug(rigname, 'noise_frequency')
     speed_src = rt_ctrlall.resolved_plug(rigname, 'noise_speed')
 
-    specs = []
+    lines = [f'// Noise for {rigname} - every joint and axis',
+             f'float $loop_enabled = {loop_enabled_src};',
+             f'float $noise_freq = {freq_src};',
+             f'float $noise_speed = {speed_src} * 0.2;',
+             f'float $t = {time_source};']
+    lines += [f'float $amp{axis} = {amp_src} * {_mel_float(signs[axis])};'
+              for axis in effect_axes]
+    lines += ['float $f1;',
+              'float $f2;',
+              'float $f3;',
+              'float $speed;',
+              'if ($loop_enabled > 0.5) {',
+              '    // quantize base to integer counts so sin(loop_time * N) loops exactly',
+              '    $f1 = floor($noise_freq + 0.5);',
+              '    if ($f1 < 1.0) $f1 = 1.0;          // ensure at least 1',
+              '    $f2 = $f1 * 2.0;                   // integer multiple',
+              '    $f3 = $f1 * 3.0;                   // integer multiple',
+              '    $speed = floor($noise_speed + 0.5);',
+              '} else {',
+              '    // freer fractional frequencies for organic motion',
+              '    $f1 = $noise_freq * 0.5;   // gentle base when free (tweakable)',
+              '    $f2 = $noise_freq * 1.7;',
+              '    $f3 = $noise_freq * 2.3;',
+              '    $speed = $noise_speed;',
+              '}',
+              '',
+              '// the three harmonic clocks, shared by every joint and axis',
+              'float $w1 = $t * $f1 * $speed;',
+              'float $w2 = $t * $f2 * $speed;',
+              'float $w3 = $t * $f3 * $speed;']
+
+    plugs = []
     for idx, jnt in enumerate(joints[1:], 1):
         NN = rt_naming.get_index_from_name(jnt)
-        u = idx / float(num_joints - 1) if num_joints > 1 else 0.0
+        compose_node = f'{rigname}_{NN:02d}_noise_composeMatrix'
+
+        if not cmds.objExists(compose_node):
+            logger.trace(f'{compose_node} does not exist, skipping noise joint')
+            continue
+
+        u = idx / span
+        # traveling subtle wave, spatial dependence
+        spatial = u * 6.28318530718 * 0.75
+        # loose decay so base stays nearly straight
+        fall = pow(u, 1.1)
+        lines += ['', f'// joint {NN:02d}']
 
         for axis in effect_axes:
-            expr = f'{rigname}_{NN:02d}_noise_{axis}_expression'
-            compose_node = f'{rigname}_{NN:02d}_noise_composeMatrix'
-            axis_seed = axis_offsets[axis]
+            # deterministic per-joint/axis seed -> [0,1), and the phases and
+            # jitter frequency it fixes
+            h = math.sin((idx * 12.9898) + (axis_offsets[axis] * 78.233)) \
+                * 43758.5453
+            seed = h - math.floor(h)
+            p1 = seed * 6.28318530718
+            jf = max(math.floor(seed * 6.0 + 0.5), 1.0)
 
-            if not cmds.objExists(compose_node):
-                logger.trace(f'{compose_node} does not exist, skipping noise expression')
-                continue
+            # weighted sum of harmonics (zero-mean), then the jitter
+            noise = (f'0.6 * sin($w1 + {_mel_float(p1 + spatial)})'
+                     f' + 0.35 * sin($w2 + {_mel_float(p1 + 1.234 + spatial * 0.7)})'
+                     f' + 0.2 * sin($w3 + {_mel_float(p1 + 2.468 + spatial * 0.4)})'
+                     f' + 0.12 * sin($t * {_mel_float(jf)}'
+                     f' + {_mel_float(seed * 3.14159265)})')
+            lines.append(f'{compose_node}.inputRotate{axis} = ({noise})'
+                         f' * $amp{axis} * {_mel_float(fall)};')
+            plugs.append(f'{compose_node}.inputRotate{axis}')
 
-            expr_code = f'''
-float $loop_enabled = {loop_enabled_src};
-float $amp = {amp_src} * {signs[axis]};
-float $noise_freq = {freq_src};
-float $noise_speed = {speed_src} * 0.2;
-float $t = {time_source};
-float $u = {u};
+    drop_per_joint_expressions(f'{rigname}_*_noise_?_expression')
+    if not plugs:
+        logger.warning(f'{rigname}: No noise composeMatrix nodes to drive')
+        return
 
-// deterministic per-joint/axis seed -> [0,1)
-float $h = sin(({idx} * 12.9898) + ({axis_seed} * 78.233)) * 43758.5453;
-float $seed = $h - floor($h);
-
-float $f1;
-float $f2;
-float $f3;
-float $speed;
-if ($loop_enabled > 0.5) {{
-    // quantize base to integer counts so sin(loop_time * N) loops exactly
-    $f1 = floor($noise_freq + 0.5);
-    if ($f1 < 1.0) $f1 = 1.0;          // ensure at least 1
-    $f2 = $f1 * 2.0;                   // integer multiple
-    $f3 = $f1 * 3.0;                   // integer multiple
-    $speed = floor($noise_speed + 0.5);
-}} else {{
-    // freer fractional frequencies for organic motion
-    $f1 = $noise_freq * 0.5;   // gentle base when free (tweakable)
-    $f2 = $noise_freq * 1.7;
-    $f3 = $noise_freq * 2.3;
-    $speed = $noise_speed;
-}}
-
-// per-harmonic phases derived from seed
-float $p1 = $seed * 6.28318530718;
-float $p2 = $p1 + 1.234;
-float $p3 = $p1 + 2.468;
-
-// traveling subtle wave, spatial dependence
-float $spatial = $u * 6.28318530718 * 0.75;
-
-// build noise as small weighted sum of harmonics (zero-mean)
-float $noise = 0.6*sin($t*$f1*$speed + $p1 + $spatial)
-             + 0.35*sin($t*$f2*$speed + $p2 + $spatial*0.7)
-             + 0.2*sin($t*$f3*$speed + $p3 + $spatial*0.4);
-
-// small integer jitter frequency from seed
-float $jf = floor($seed * 6.0 + 0.5);
-if ($jf < 1.0) $jf = 1.0;
-$noise += 0.12 * sin($t * $jf + $seed * 3.14159265);
-
-// loose decay so base stays nearly straight
-float $fall = pow($u, 1.1);
-
-float $out = $noise * $amp * $fall;
-
-{compose_node}.inputRotate{axis} = $out;
-'''
-            specs.append((expr, expr_code,
-                          f'{compose_node}.inputRotate{axis}'))
-
-    sync_expressions(specs)
-    logger.debug(f'{rigname}: Noise effect built')
+    sync_expressions([(f'{rigname}_noise_expression',
+                       '\n'.join(lines) + '\n', plugs)])
+    logger.debug(f'{rigname}: Noise effect built ({len(plugs)} plugs)')

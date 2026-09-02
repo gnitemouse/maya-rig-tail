@@ -31,6 +31,8 @@ Usage:
     rt_build_test.test_build_exclusion('C_tail')             # Excluded part survives a rebuild (MUTATES)
     rt_build_test.test_remove_rig()                          # Remove Rig leaves a clean scene (MUTATES)
     rt_build_test.profile_build()                            # which Maya command the build time goes to (MUTATES)
+    rt_build_test.fx_census()                                # FX node counts, and which checkout is loaded
+    rt_build_test.bench_playback()                           # ms/frame of playback
 '''
 import contextlib
 import math
@@ -847,6 +849,96 @@ def profile_build(root=None, fk=None, ik=None, callers_for=()):
     with profile_cmds(callers_for=callers_for) as stats:
         rig_tail.rig_tail_multiple(root=root, fk=fk, ik=ik)
     return stats
+
+
+def fx_census():
+    '''
+    Count the FX nodes in the scene, and say which checkout built them.
+
+    Both halves matter to a before/after. The counts are what a change to
+    the FX layout is supposed to move, and they move deterministically
+    where a frame time drifts with the machine. The module path is the
+    other half: a stale sys.path serving the previous tree reads as 'no
+    change', and has done - so print the file that is actually loaded
+    rather than trusting the one that was edited.
+
+    Return:
+        dict: node type -> count
+    '''
+    counts = {
+        'expression': len(cmds.ls(type='expression') or []),
+        'unitConversion': len(cmds.ls(type='unitConversion') or []),
+        'composeMatrix': len(cmds.ls(type='composeMatrix') or []),
+        'multiplyDivide': len(cmds.ls(type='multiplyDivide') or []),
+    }
+    print(f'\n  FX CENSUS   (rig_tail_anim from {rt_anim.__file__})')
+    print('  ' + '-' * 62)
+    for name, count in counts.items():
+        print(f'  {name:<20}{count:>8}')
+    print()
+    return counts
+
+
+def bench_playback(start=None, end=None, warmup=5, refresh=True):
+    '''
+    Milliseconds per frame of timeline playback, as a repeatable number.
+
+    Wall time on this machine drifts by tens of percent between sessions,
+    so a single run means nothing on its own: run the baseline and the
+    change back to back in ONE session, and read fx_census alongside to
+    confirm the tree under test is the one that was edited.
+
+    Frames are stepped by hand rather than played, because cmds.play is
+    asynchronous and drops frames to keep real time - it would report the
+    frame rate the viewport settled for, not the cost of evaluating one.
+    The refresh is what forces that evaluation; without it currentTime
+    only dirties the graph and the work lands on whatever pulls next.
+
+    Usage:
+        import rig_tail_build_test as rt_build_test
+        rt_build_test.fx_census()
+        rt_build_test.bench_playback()
+
+    Arguments:
+        start (int): First frame; defaults to the playback range start.
+        end (int): Last frame; defaults to the playback range end.
+        warmup (int): Frames to evaluate and discard first, so the first
+            frame's compile and cache fill stays out of the mean.
+        refresh (bool): Redraw each frame. False times the DG alone.
+
+    Return:
+        float: milliseconds per frame
+    '''
+    start = int(cmds.playbackOptions(q=True, min=True)) if start is None else start
+    end = int(cmds.playbackOptions(q=True, max=True)) if end is None else end
+    frames = list(range(start, end + 1))
+    if not frames:
+        print('✗ Empty frame range')
+        return 0.0
+
+    restore = cmds.currentTime(q=True)
+    try:
+        for frame in frames[:warmup]:
+            cmds.currentTime(frame, edit=True)
+            if refresh:
+                cmds.refresh(force=True)
+
+        started = time.perf_counter()
+        for frame in frames:
+            cmds.currentTime(frame, edit=True)
+            if refresh:
+                cmds.refresh(force=True)
+        elapsed = time.perf_counter() - started
+    finally:
+        cmds.currentTime(restore, edit=True)
+
+    per_frame = elapsed / len(frames) * 1000
+    print(f'\n  PLAYBACK  frames {start}-{end}, refresh={refresh}')
+    print('  ' + '-' * 62)
+    print(f'  {per_frame:.2f} ms/frame   ({1000 / per_frame:.1f} fps, '
+          f'{elapsed:.2f}s total)')
+    print()
+    return per_frame
 
 
 # TEST ORCHESTRATION =========================================
@@ -2936,21 +3028,15 @@ def test_time_evaluation(rigname='tail'):
     noise_expressions = []
     loop_expression = f'{rigname}_loop_time_expression'
 
-    for axis in ['X', 'Y', 'Z']:
-        wave_expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
-        noise_expr = f'{rigname}_{NN:02d}_noise_{axis}_expression'
-
-        if cmds.objExists(wave_expr):
-            wave_expressions.append(wave_expr)
-            print(f'  ✓ Found wave expression: {wave_expr}')
+    for label, expr, found in [('wave', f'{rigname}_wave_expression',
+                                wave_expressions),
+                               ('noise', f'{rigname}_noise_expression',
+                                noise_expressions)]:
+        if cmds.objExists(expr):
+            found.append(expr)
+            print(f'  ✓ Found {label} expression: {expr}')
         else:
-            issues.append(f'Missing wave expression: {wave_expr}')
-
-        if cmds.objExists(noise_expr):
-            noise_expressions.append(noise_expr)
-            print(f'  ✓ Found noise expression: {noise_expr}')
-        else:
-            issues.append(f'Missing noise expression: {noise_expr}')
+            issues.append(f'Missing {label} expression: {expr}')
 
     if cmds.objExists(loop_expression):
         print(f'  ✓ Found loop expression: {loop_expression}')
@@ -3177,17 +3263,13 @@ def fix_expression_time_dependency(rigname='tail'):
 
     # Every FX expression of the part, in one batch: rt_anim.remove_expressions
     # disconnects the lot before deleting any of it, which is what stops a
-    # delete cascading through the connection web
-    exprs = [f'{rigname}_loop_time_expression']
-    for jnt in joints[1:]:
-        NN = rt_naming.get_index_from_name(jnt)
-        for axis in ['X', 'Y', 'Z']:
-            exprs.append(f'{rigname}_{NN:02d}_wave{axis}_expression')
-            exprs.append(f'{rigname}_{NN:02d}_noise_{axis}_expression')
+    # delete cascading through the connection web. Matched by pattern, so a
+    # rig still carrying the old per-joint-per-axis expressions is cleared too.
+    exprs = cmds.ls(*rt_cleanup.fx_expression_patterns(rigname),
+                    type='expression') or []
 
     for expr in exprs:
-        if cmds.objExists(expr):
-            print(f'  Deleting: {expr}')
+        print(f'  Deleting: {expr}')
     deleted_count = rt_anim.remove_expressions(exprs)
 
     print(f'\n✓ Deleted {deleted_count} expression and conversion nodes')
@@ -3216,15 +3298,9 @@ def check_expression_flags(rigname='tail'):
         print(f'  Frame {frame}: time1.outTime = {time_val}')
     print()
 
-    test_joint = 2
-    NN = rt_naming.get_index_from_name(joints[test_joint])
-
-    expressions = []
-
-    for axis in ['X', 'Y', 'Z']:
-        expr = f'{rigname}_{NN:02d}_wave{axis}_expression'
-        if cmds.objExists(expr):
-            expressions.append(expr)
+    expressions = [expr for expr in (f'{rigname}_wave_expression',
+                                     f'{rigname}_noise_expression')
+                   if cmds.objExists(expr)]
 
     loop_expr = f'{rigname}_loop_time_expression'
     if cmds.objExists(loop_expr):

@@ -134,6 +134,10 @@ def fx_expression_patterns(rigname):
     the rest of the FX network standing, since build_curl reuses its nodes in
     place.
 
+    The wave and noise patterns are loose enough to also catch the
+    per-joint-per-axis names of a rig built before those effects collapsed
+    to one expression per part.
+
     Arguments
         rigname (str): Name of rig component
 
@@ -141,8 +145,8 @@ def fx_expression_patterns(rigname):
         list: name patterns, matched against a node's leaf name
     '''
     return [
-        f'{rigname}_*_wave*_expression',
-        f'{rigname}_*_noise_*_expression',
+        f'{rigname}_*wave*_expression',
+        f'{rigname}_*noise*_expression',
         f'{rigname}_loop_time_expression',
     ]
 
