@@ -115,12 +115,24 @@ OPTIONAL_SCRIPTS = frozenset(
 
 # Each launcher pins its selected scripts directory ahead of other installs.
 TOOL_DIR_PREAMBLE = '''import sys
+import os
 import importlib as il
 
-# Rig Tail install this button was made from.
+# Rig Tail install this button was made from. Re-pinned on every click, not
+# inserted only when absent: being ON sys.path is not the same as being at
+# the FRONT of it. A worktree launcher pins its own tree the same way, so
+# once one has been clicked this directory is present but behind it, an
+# insert-if-absent does nothing, and the purge below then reloads the
+# worktree's copy from the front of the path. Whichever button was pressed
+# last has to be the tree the next import answers from.
+#
+# Compared normalized: the same directory reaches sys.path in both slash
+# spellings (this file writes '/', a worktree install writes '\\'), and a
+# plain != leaves the other spelling sitting in front.
 TOOL_DIR = r'{0}'
-if TOOL_DIR not in sys.path:
-    sys.path.insert(0, TOOL_DIR)
+_rt_key = lambda p: os.path.normcase(os.path.normpath(p))
+sys.path = [p for p in sys.path if _rt_key(p) != _rt_key(TOOL_DIR)]
+sys.path.insert(0, TOOL_DIR)
 '''
 
 PREAMBLE_TOKEN = '#@TOOL_DIR@'
