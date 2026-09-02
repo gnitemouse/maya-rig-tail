@@ -423,16 +423,12 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
     Existing groups are reused where they stand, so a rebuild after a light
     teardown leaves almost nothing to do here.
 
-    One scene query up front decides which of two inner loops runs. With no
-    SDK group for this part in the scene, every group is created here, and
-    the reuse tests - does it exist, is it already parented, what is
-    connected to it, does it already hold the attribute - can only return
-    the same answer for all (NUM_CTRL_FK + 1) x len(joints) of them. The
-    fresh loop asks none of them and skips the match/bake pair outright: two
-    groups created at identity, one parented under the other, already match,
-    and baking identity into offsetParentMatrix changes nothing. The unlock
-    at the end of that chain is the only part with an effect, so it is made
-    directly.
+    One scene query up front picks between two inner loops. With no SDK
+    group for this part in the scene every group below is created here, so
+    the reuse tests can only answer the same way for all of them and the
+    fresh loop skips them. It also skips the match/bake pair, which on two
+    groups created at identity matches what already matches and bakes an
+    identity; the unlock that pair owes is made directly instead.
 
     Arguments
         rigname (str): Name of rig component
@@ -508,13 +504,12 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
 
             if prev_sdk_grp: # Nest current SDK group under previous
                 if fresh:
-                    # create_group locks translate/rotate/scale; the unlock
-                    # is owed here because falloff_rotation connects onto
-                    # rotate, and a locked plug refuses the connection. This
-                    # is the one effect match_transform's bake would have had
-                    # (reset_transforms, identity path) - jointOrient rides
-                    # along because a transform without it costs nothing to
-                    # skip, which is cheaper than asking.
+                    # create_group locks translate/rotate/scale, and
+                    # falloff_rotation connects onto rotate later - a locked
+                    # plug refuses the connection, so the unlock is owed even
+                    # though nothing else in the skipped pair does anything.
+                    # jointOrient rides along: a transform without it costs
+                    # nothing to skip, which is cheaper than asking.
                     cmds.parent(sdk_grp, prev_sdk_grp, r=True)
                     rt_maya.set_channel_flags(
                         sdk_grp, ['translate', 'rotate', 'scale',
@@ -578,11 +573,10 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
     orientation left on that channel would be overwritten the instant the
     connection is made.
 
-    The joint is reparented ONCE, which is what the ordering here buys.
-    Joints are wrapped tip-first, so a joint already carries the whole
-    already-wrapped chain below it and every reparent drags that subtree
-    along; on a 51-joint part that is the most expensive command in the
-    build, and doing it twice per joint doubled it for nothing.
+    The joint moves ONCE, which is what the ordering buys. Joints are
+    wrapped tip-first, so a joint already carries the whole wrapped chain
+    below it and every reparent drags that subtree along - the most
+    expensive command in the build on a long part.
 
     Returns immediately if the joint is already nested, which is the usual
     case on a rebuild.
@@ -600,12 +594,9 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         jnt_parent = jnt_parent[0]
         logger.trace(f"jnt:'{jnt}' jnt_parent:'{jnt_parent}' first_sdk_grp:'{first_sdk_grp}' last_sdk_grp:'{last_sdk_grp}'")
 
-        # The stack arrives beside the joint under the same parent, is
-        # cleared of whatever transform the reparent left on it, then placed
-        # on the joint and baked (see the docstring for why the bake matters
-        # here). The joint stays put throughout - it is a sibling of the
-        # stack until the one move below, and its world transform is what
-        # the placement reads.
+        # The joint stays where it is while the stack is built beside it:
+        # they are siblings until the single move below, so the joint's
+        # world transform is what the placement here reads.
         rt_maya.parent_to(first_sdk_grp, jnt_parent)
         cmds.matchTransform(first_sdk_grp, jnt_parent)
         rt_maya.reset_opm(first_sdk_grp)
@@ -613,9 +604,9 @@ def put_jnt_under_sdk_groups(jnt, first_sdk_grp, last_sdk_grp):
         cmds.matchTransform(first_sdk_grp, jnt)
         rt_maya.opm(first_sdk_grp)
 
-        # Absolute, so the stack's transform stays on offsetParentMatrix and
-        # the joint's own channels come out clear. Any extra transform the
-        # reparent inserted on the way is dropped.
+        # Absolute, so the rest transform stays on the stack's
+        # offsetParentMatrix and the joint's own channels come out clear.
+        # Any extra transform the reparent inserts on the way is dropped.
         rt_maya.parent_to(jnt, last_sdk_grp, a=1)
         transf = cmds.listRelatives(jnt, p=True, typ='transform')[0]
         if transf != last_sdk_grp:

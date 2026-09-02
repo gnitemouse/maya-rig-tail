@@ -2327,12 +2327,12 @@ def test_matrix_opm(rigname='tail', count=0):
     parent-space matrix (ik_world * parent_world.inverse()) for joints 1-3.
     Returns True if every translation error is within tolerance, else False.
 
-    MMatrix is row-vector: a child's world matrix is local * parent, so the
-    local matrix is world * parent.inverse() and NOT parent.inverse() *
-    world. The two differ, and the reversed form is not a near miss - it
-    returns an offset of the wrong LENGTH, because it rotates the parent's
-    own translation into the child's frame instead of measuring between
-    them. On a chain whose joints sit 2.43 apart it reported 2.20.
+    Order matters and is easy to get backwards: MMatrix is row-vector, so a
+    child's world matrix is local * parent and the local matrix is therefore
+    world * parent.inverse(). Reversing the two does not merely lose
+    precision - it rotates the parent's own translation into the child's
+    frame instead of measuring between them, and returns an offset of the
+    wrong LENGTH.
     '''
     print(f'\n=== MANUAL MATRIX CHECK: (COUNT: {count}) ===\n')
 
