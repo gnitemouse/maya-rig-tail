@@ -1705,7 +1705,7 @@ def detect_joints_bn():
 
 def fk_ik_match_bn(rigname, tol=None):
     '''
-    Are the cached FK and IK chains still one-to-one with BN, and on it?
+    Whether the cached FK and IK chains are still one-to-one with BN, and on it.
 
     FK and IK are duplicated from BN and, at rest, sit on it. So one test
     covers everything set_joints needs to know about whether its cached

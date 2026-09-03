@@ -1493,7 +1493,7 @@ def test_ikfk_drive(rigname='tail', joint_index=3):
     Diagnose FK control -> FK joint -> BN propagation at both switch extremes.
 
     Checks, for one sample joint:
-      1. What drives FK_jnt.rotate (is the control actually connected?)
+      1. What drives FK_jnt.rotate, and whether the control is actually connected
       2. blendMatrix target weight when switch is set low vs high
       3. Whether BN world position tracks IK vs FK as the switch moves
     '''

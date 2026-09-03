@@ -287,7 +287,7 @@ are needed.
   length**, so 5 is halfway down the tail.
 - `joint_pos` (0 to 1, base to tip) is what the network compares against: a
   normalised **Greville abscissa**, a fraction of the curve's *parameter*
-  range, which is what a `pointOnCurveInfo` needs in order to land on a given
+  range, which is what a `pointOnCurveInfo` needs to land on a given
   joint.
 
 A `remapValue` per control converts the first into the second. Both
