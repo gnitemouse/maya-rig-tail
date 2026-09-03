@@ -2684,18 +2684,19 @@ VALUES:
 
 def test_sin_curve(rigname='tail', points_per_cycle=41, tolerance=0.002):
     '''
-    Check one of wave's sin curves against sin across its whole keyed span,
-    and confirm a phase safely outside that span never reaches it.
+    Check one of wave's sin curves against sin across its whole keyed span.
 
     The curve is the one part of the wave graph carrying an approximation
     rather than arithmetic, so a bad tangent or a mis-set key shows up as
     a number here rather than as a rig that looks vaguely off. wave keys a
     FIXED span wide enough for any phase the attributes can produce once
-    the time term is wrapped (see rig_tail_anim.wrapped_time_expression) - it does
-    not rely on the curve repeating itself, which animCurveUU in this Maya
-    does not do: preInfinity/postInfinity read back unset even on a bare,
-    freshly created curve immediately after being set. So this checks the
-    span that is actually keyed, not an infinity setting.
+    the time term is wrapped (see rig_tail_anim.wrapped_time_expression),
+    rather than relying on the curve repeating itself - animCurveUU in
+    this Maya does not honor preInfinity/postInfinity, so this checks the
+    span actually keyed rather than an infinity setting nothing enforces.
+    Whether a phase can ever reach outside that span is a property of
+    wrapped_time_expression's own math, not of the curve; see
+    test_wave_values for that.
 
     MUTATING nothing: a duplicate is driven and deleted, so the curve in
     the rig is never touched and its input connection is left alone.
@@ -2823,17 +2824,16 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61, 5_000_000),
     The default frames include one far into the future, specifically to
     exercise rig_tail_anim.wrapped_time_expression: the phase the sin
     curve reads is bounded by attribute limits alone EXCEPT for the time
-    term, which grows for as long as the timeline runs, and the curve
-    only covers a fixed span. The multiply and the wrap both happen
-    inside that one expression, in double precision - a multiplyDivide
-    computing t*speed upstream of it read back exactly the float32
-    rounding of the true value at large frame numbers, precise enough to
-    matter once fed into a modulo.
+    term, which grows for as long as the timeline runs, while the curve
+    only covers a fixed span. wrapped_time_expression is what keeps that
+    growing term from ever reaching the curve unwrapped - see its
+    docstring for why the multiply has to live inside the expression
+    rather than in a node feeding it.
 
     A large error at EVERY frame including the first points at the
-    per-joint chain. An error that grows with the frame number and stays
-    small at ordinary ones points at wrapped_time_expression, or at
-    whatever now sits between it and the curve.
+    per-joint chain. An error confined to the far frame points at
+    wrapped_time_expression, or at whatever now sits between it and the
+    curve.
 
     Arguments:
         rigname (str): Name of rig component
@@ -3296,19 +3296,18 @@ def test_time_evaluation(rigname='tail'):
     test_joint = 2
     NN = rt_naming.get_index_from_name(joints[test_joint])
 
-    wave_expressions = []
     noise_expressions = []
     loop_expression = f'{rigname}_loop_time_expression'
 
-    for label, expr, found in [('wave', f'{rigname}_wave_expression',
-                                wave_expressions),
-                               ('noise', f'{rigname}_noise_expression',
-                                noise_expressions)]:
-        if cmds.objExists(expr):
-            found.append(expr)
-            print(f'  ✓ Found {label} expression: {expr}')
-        else:
-            issues.append(f'Missing {label} expression: {expr}')
+    print('  · wave is a node graph, not an expression - see test_sin_curve '
+         'and test_wave_values instead')
+
+    noise_expr = f'{rigname}_noise_expression'
+    if cmds.objExists(noise_expr):
+        noise_expressions.append(noise_expr)
+        print(f'  ✓ Found noise expression: {noise_expr}')
+    else:
+        issues.append(f'Missing noise expression: {noise_expr}')
 
     if cmds.objExists(loop_expression):
         print(f'  ✓ Found loop expression: {loop_expression}')
@@ -3322,7 +3321,7 @@ def test_time_evaluation(rigname='tail'):
 --------------------------------------------------------------------------------'''
     print(section_header)
 
-    for expr in wave_expressions + noise_expressions:
+    for expr in noise_expressions:
         expr_code = cmds.expression(expr, q=1, s=1)
 
         # Check if expression references time
@@ -3474,7 +3473,7 @@ def test_time_evaluation(rigname='tail'):
 --------------------------------------------------------------------------------'''
     print(section_header)
 
-    sample_expr = wave_expressions[0] if wave_expressions else None
+    sample_expr = noise_expressions[0] if noise_expressions else None
     if sample_expr:
         expr_code = cmds.expression(sample_expr, q=1, s=1)
         print(f'Sample expression code ({sample_expr}):')

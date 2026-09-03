@@ -232,16 +232,6 @@ def drop_per_joint_expressions(*patterns):
 ensure_connect = rt_maya.ensure_connect
 
 
-# Samples per cycle in the sin curve, and where that cycle starts.
-#
-# The span begins at a trough rather than at zero, which is what makes the
-# curve independent of how Maya tangents the first and last key. Both ends
-# then sit on an extremum where the true slope IS zero, so a flattened end
-# tangent is the right answer rather than a 0.4 degree error at the join,
-# and auto tangents flatten at an extremum anyway. Keyed from zero the two
-# ends carry sin's steepest slope and the curve depends on getting them
-# exactly right.
-#
 # Samples per cycle of the sin curve.
 SIN_CYCLE_SAMPLES = 64
 
@@ -273,10 +263,9 @@ def sin_span_curve(name):
     holds the end key regardless. wrapped_time_expression is what makes a
     fixed span enough despite time being unbounded - see its docstring.
 
-    Tangents are left to Maya. The angle keyTangent takes is measured
-    against an x axis in SECONDS, so an angle computed from the curve's
-    own slope came out wrong by the scene's frame rate on a prior version
-    of this curve - a curve that was not a sine at all.
+    Tangents are left to Maya rather than computed from the curve's own
+    slope: keyTangent's angle is measured against an x axis in SECONDS, so
+    a slope-derived angle comes out wrong by the scene's frame rate.
 
     Arguments
         name (str): Node name
@@ -332,17 +321,14 @@ def wrapped_time_expression(rigname, loop_time, speed_plug):
     no matter how far the timeline runs.
 
     The multiply happens HERE rather than in a multiplyDivide node feeding
-    the expression, because multiplyDivide's output is single precision -
-    confirmed empirically, not assumed: at frame 5,000,000 a chain of two
-    multiplyDivide nodes read back exactly the float32 rounding of the
-    true value (0.0057 and a further 0.0156 radians off, bit-for-bit what
-    IEEE-754 single precision predicts), while the wrap's own floor() -
-    given that already-corrupted input - reproduced the correct remainder
-    to 2e-10. The expression was never the imprecise part; the storage
-    upstream of it was. So the multiply is folded in here, where MEL
-    keeps double precision, and only the small, bounded quantities
-    (speed, the wrapped remainder itself) ever pass through a
-    multiplyDivide.
+    the expression, because multiplyDivide stores its output as single
+    precision. That is not enough precision to survive a modulo once t
+    reaches the hundreds of thousands - the rounding on a value that large
+    is bigger than the whole remainder a modulo is trying to recover. MEL
+    expression arithmetic itself is effectively double precision, so
+    folding the multiply in here keeps the large intermediate product
+    exact; only the small, bounded quantities (speed, the wrapped
+    remainder itself) ever pass through a multiplyDivide afterward.
 
     One expression per part, not one per joint or per plug - about what
     the loop clock already costs.
@@ -515,12 +501,12 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     one node each for the whole part, and sin and pow are one node per
     joint rather than one per plug.
 
-    Three things base Maya has no node for are keyed curves or an
-    expression instead, see sin_span_curve, step_curve and
-    wrapped_time_expression - the last of those is the one place this
-    graph still holds an expression, one per part, needed because the
-    time term is unbounded and nothing about a node graph can key a curve
-    wide enough to outrun a timeline that keeps running.
+    Three things base Maya has no node for - sin, a quantiser, and a
+    modulo - are keyed curves or an expression instead: see sin_span_curve,
+    step_curve and wrapped_time_expression. The last of those is the one
+    place this graph still holds an expression, one per part, needed
+    because the time term is unbounded and nothing about a node graph can
+    key a curve wide enough to outrun a timeline that keeps running.
 
     Arguments:
         rigname (str): Name of rig component
