@@ -258,8 +258,8 @@ def rootctrl_attr_specs(fk, ik, root_ctrl):
         specs.append(('locators', 'Locators', None, 0, None))
     specs += [
         # Clusters is a visibility toggle, so it belongs above the DISPLAY
-        # divider. It used to be created after it on some rigs; enforce_
-        # attr_order below is what actually moves it back.
+        # divider; enforce_attr_order below corrects the position on a rig
+        # where it was created out of order.
         ('clusters', 'Clusters', rt_naming.fstr('', rt_constants.CLUSTERS_GRP), 0, None),
         ('dispDivider', 'DISPLAY', None, None, None),
     ]
@@ -376,8 +376,8 @@ def connect_root(fk, ik):
                 cmds.setAttr(f'{geometry_grp}.overrideVisibility', 1)
             cmds.connectAttr(f'{root_ctrl}.export_geo',
                              f'{geometry_grp}.overrideDisplayType', f=1)
-            # Unlocked (0). This used to force Locked (2), which left the
-            # geometry unselectable in the viewport after every build.
+            # Unlocked (0): Locked (2) leaves the geometry unselectable in
+            # the viewport.
             rt_maya.set_attr_value(f"{root_ctrl}.export_geo", 0)
         else:
             logger.warning(
@@ -851,7 +851,7 @@ def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
     # override flag) when the dashboard is active, the per-tail cog
     # switch otherwise
     ikfk_attr = rt_ctrlall.ikfk_driver(rigname)
-    fk_mode = rt_constants.ikfk_fk_mode_index() # Get index of FK mode
+    fk_mode = rt_constants.ikfk_fk_mode_index()
     if fk_mode is None:
         logger.warning(f"{rigname}: No 'FK' mode in IKFK_MODES, skip FK switch")
         return
@@ -864,7 +864,7 @@ def setup_switch_fk(rigname, fkroot_grp, fkjnt_grp):
 def setup_switch_ik(rigname, ikjnt_grp, spline_constraints):
     ik_controls, ik_ctrlgrps = get_cached_controls_ik(rigname)
     ikfk_attr = rt_ctrlall.ikfk_driver(rigname)
-    fk_mode = rt_constants.ikfk_fk_mode_index() # Get index of FK mode
+    fk_mode = rt_constants.ikfk_fk_mode_index()
     num_clusters = len(spline_constraints)
 
     # Constraint weights: each cluster constraint has targets

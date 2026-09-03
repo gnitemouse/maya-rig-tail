@@ -1061,7 +1061,7 @@ def has_non_default_locked_attributes(node, attrcheck=None, locked=None):
     # Only a locked plug can make this True, so query the locked
     # attributes once instead of value+lock reads on every plug. This
     # runs inside opm(), which the build calls for every SDK group and
-    # control, so the per-plug version dominated build time.
+    # control, so the per-plug version would dominate build time.
     if locked is None:
         locked = cmds.listAttr(node, locked=True) or []
     if not locked:
@@ -1136,8 +1136,8 @@ def set_channel_flags(node, attrs, k=None, cb=None, l=None,
                     plug = fn.findPlug(attr, False)
                 except RuntimeError:
                     # Attribute this node does not have ('radius' on a
-                    # plain transform): the same skip the callers used to
-                    # pay an attributeQuery for
+                    # plain transform): skip it without paying for an
+                    # attributeQuery.
                     continue
                 if plug.isCompound:
                     if compound:
@@ -1372,7 +1372,8 @@ def set_joint_color(joint, color):
     # nothing to check for but settability - and asking costs as much as
     # setting, so set and skip the ones that refuse. colour_skeletons calls
     # this for every rig joint of every part at the end of every build, so
-    # the getAttr it used to pay per plug was a third of the pass.
+    # skipping the settability query on every plug is what keeps that pass
+    # cheap.
     for plug, value in (('overrideEnabled', 1),
                         ('overrideRGBColors', 0),
                         ('overrideColor', index)):
@@ -1687,7 +1688,8 @@ def attribute_is_proxy(node, attr):
         return om.MFnAttribute(mfn.attribute(attr)).isProxyAttribute
     except (AttributeError, RuntimeError):
         # isProxyAttribute is Maya 2019+. On older versions report False
-        # so the attribute is edited in place, matching previous behaviour
+        # so an unqueryable attribute is treated as an ordinary one and
+        # edited in place.
         logger.trace(f"cannot query proxy state of '{node}.{attr}'")
         return False
 
@@ -2365,12 +2367,10 @@ def bind_skincluster(joints, node, name, preserve=False):
         return None
     logger.trace(f"Bind skinCluster '{name}' to object '{node}'")
 
-    # Check if skinCluster already exists
     existing_skin = cmds.ls(cmds.listHistory(node), type='skinCluster')
     if existing_skin:
         logger.trace(f'SkinCluster already exists on {node}: {existing_skin[0]}')
 
-        # Check if it's the same joints
         existing_influences = cmds.skinCluster(existing_skin[0], q=True, inf=True)
         if existing_influences is not None and set(existing_influences) == set(joints):
             logger.debug(f'Reusing existing skinCluster: {existing_skin[0]}')
@@ -2396,14 +2396,13 @@ def bind_skincluster(joints, node, name, preserve=False):
                              f'rig joints): {existing_skin[0]}')
             return existing_skin[0]
         else:
-            # Different joints or failed query, need to unbind first
             logger.debug(f'Removing old skinCluster {existing_skin[0]} (different joints or invalid)')
             poses = cmds.listConnections(f'{existing_skin[0]}.bindPose',
                                          s=True, d=False) or []
             cmds.delete(existing_skin[0])
             _delete_orphan_bindposes(poses)
 
-    # Create skinCluster - Bind method is closest distance
+    # bm=0: closest-distance bind method
     return cmds.skinCluster(joints, node, n=name, nw=1, bm=0, sm=0, mi=4, tsb=True)
 
 
@@ -2425,7 +2424,6 @@ def unbind_skincluster(node, delete_history=True):
         return
 
     for shape in shapes:
-        # Get skinClusters connected to shape
         skinclusters = cmds.listConnections(shape, d=0, t='skinCluster') or []
         for skincluster in skinclusters:
             poses = cmds.listConnections(f'{skincluster}.bindPose',
