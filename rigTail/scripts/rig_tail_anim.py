@@ -44,8 +44,9 @@ Functions:
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
     build_loop: modulo-time driver the other FX read
-    sin_span_curve, step_curve, wrap_expression: keyed curves for sin and
-        rounding, and the one expression that keeps sin's input bounded
+    sin_span_curve, step_curve: keyed curves for sin and rounding
+    wrapped_time_expression: the one expression that keeps sin's input
+        bounded, however long the timeline runs
     build_wave, build_curl, build_noise: one network per effect
 '''
 
@@ -215,7 +216,7 @@ def drop_per_joint_expressions(*patterns):
     for the build to meet - so nothing else takes them. Left alone they
     hold the plugs the current build wants and go on evaluating for
     nothing. Patterns must not match a name still in use - wave's own
-    wrap_expression node would otherwise be swept and rebuilt on every
+    phaseWrap expression would otherwise be swept and rebuilt on every
     single call rather than only when its code changes, since this runs
     ahead of it in build_wave.
 
@@ -246,8 +247,8 @@ SIN_CYCLE_SAMPLES = 64
 
 # Wave's phase is 2*pi*u*frequency (bounded: u in [0,1], frequency capped
 # by the basectrl attribute) plus a wrapped time term (bounded to one
-# cycle by wrap_expression before it ever reaches the curve) - so the
-# WHOLE phase is bounded regardless of how long the timeline runs, at
+# cycle by wrapped_time_expression before it ever reaches the curve) - so
+# the WHOLE phase is bounded regardless of how long the timeline runs, at
 # u=1 and frequency and speed both at their attribute max, before the
 # margin below adds one cycle either side.
 WAVE_PHASE_MAX_CYCLES = 6
@@ -264,13 +265,13 @@ def sin_span_curve(name):
     carrying a sine be a node graph at all.
 
     Keyed across a FIXED, finite span wide enough to hold any phase the
-    attributes and wrap_expression can produce, with a cycle of margin on
-    each side - not across one cycle with infinity set to repeat it.
-    animCurveUU does not honor preInfinity/postInfinity: setting either
-    reads back unchanged even on a bare, disconnected curve immediately
-    after the set, and evaluation past the keyed span holds the end key
-    regardless. wrap_expression is what makes a fixed span enough despite
-    time being unbounded - see its docstring.
+    attributes and wrapped_time_expression can produce, with a cycle of
+    margin on each side - not across one cycle with infinity set to
+    repeat it. animCurveUU does not honor preInfinity/postInfinity:
+    setting either reads back unchanged even on a bare, disconnected
+    curve immediately after the set, and evaluation past the keyed span
+    holds the end key regardless. wrapped_time_expression is what makes a
+    fixed span enough despite time being unbounded - see its docstring.
 
     Tangents are left to Maya. The angle keyTangent takes is measured
     against an x axis in SECONDS, so an angle computed from the curve's
@@ -324,33 +325,54 @@ def step_curve(name, breakpoints):
     return name
 
 
-def wrap_expression(name, source_plug, target_plug):
+def wrapped_time_expression(rigname, loop_time, speed_plug):
     '''
-    Fold an unbounded value down to [0, TWO_PI) by one MEL floor(), so a
-    fixed-span curve downstream never sees an input outside its keys.
+    t*speed, computed and wrapped to [0, TWO_PI) inside ONE expression, so
+    a fixed-span sin curve downstream never sees an input outside its keys
+    no matter how far the timeline runs.
 
-    Wave's per-joint phase is otherwise bounded by attribute limits alone,
-    but the time term grows with the frame number for as long as the
-    timeline runs, and nothing about a node graph can key a curve wide
-    enough to outrun that. This is the one place the port keeps an
-    expression: one per part, reading the shared clock rather than one
-    per joint or per plug, so it costs about what the loop clock already
-    does and nothing scales with joint count.
+    The multiply happens HERE rather than in a multiplyDivide node feeding
+    the expression, because multiplyDivide's output is single precision -
+    confirmed empirically, not assumed: at frame 5,000,000 a chain of two
+    multiplyDivide nodes read back exactly the float32 rounding of the
+    true value (0.0057 and a further 0.0156 radians off, bit-for-bit what
+    IEEE-754 single precision predicts), while the wrap's own floor() -
+    given that already-corrupted input - reproduced the correct remainder
+    to 2e-10. The expression was never the imprecise part; the storage
+    upstream of it was. So the multiply is folded in here, where MEL
+    keeps double precision, and only the small, bounded quantities
+    (speed, the wrapped remainder itself) ever pass through a
+    multiplyDivide.
+
+    One expression per part, not one per joint or per plug - about what
+    the loop clock already costs.
 
     Arguments
-        name (str): Expression node name
-        source_plug (str): Unbounded input
-        target_plug (str): Plug to hold the wrapped result, in [0, TWO_PI)
+        rigname (str): Name of rig component
+        loop_time (str): Optional loop time output plug; unbuilt when None,
+            in which case raw time1.outTime is read and scaled to match
+        speed_plug (str): Resolved, already-halved wave_speed source
 
     Return
-        str: target_plug
+        str: Plug holding the wrapped result, in [0, TWO_PI)
     '''
-    code = f'''// Wrap {source_plug} into one cycle for the sin curve
-float $x = {source_plug};
-{target_plug} = $x - floor($x / {TWO_PI}) * {TWO_PI};
+    time_src = loop_time if loop_time else 'time1.outTime'
+    scale = 1.0 if loop_time else TWO_PI / LOOP_FRAME_DEFAULT
+
+    wrap_node = f'{rigname}_wave_phaseWrap'
+    if not cmds.objExists(wrap_node):
+        cmds.createNode('network', n=wrap_node)
+        cmds.addAttr(wrap_node, ln='wrapped', at='float', k=1)
+    target = f'{wrap_node}.wrapped'
+
+    code = f'''// t*speed for {rigname}'s wave, wrapped to one cycle
+float $t = {time_src};
+float $speed = {speed_plug};
+float $x = $t * {_mel_float(scale)} * $speed;
+{target} = $x - floor($x / {TWO_PI}) * {TWO_PI};
 '''
-    sync_expressions([(name, code, [target_plug])])
-    return target_plug
+    sync_expressions([(f'{rigname}_wave_phaseWrap_expression', code, [target])])
+    return target
 
 
 # BUILD ANIM EFFECTS ===================================================
@@ -495,10 +517,10 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
 
     Three things base Maya has no node for are keyed curves or an
     expression instead, see sin_span_curve, step_curve and
-    wrap_expression - the last of those is the one place this graph still
-    holds an expression, one per part, needed because the time term is
-    unbounded and nothing about a node graph can key a curve wide enough
-    to outrun a timeline that keeps running.
+    wrapped_time_expression - the last of those is the one place this
+    graph still holds an expression, one per part, needed because the
+    time term is unbounded and nothing about a node graph can key a curve
+    wide enough to outrun a timeline that keeps running.
 
     Arguments:
         rigname (str): Name of rig component
@@ -528,18 +550,6 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     freq_src = rt_ctrlall.resolved_plug(rigname, 'wave_frequency')
     speed_src = rt_ctrlall.resolved_plug(rigname, 'wave_speed')
     falloff_src = rt_ctrlall.resolved_plug(rigname, 'wave_falloff')
-
-    # $t. With no loop node, normalize raw time the same way the loop node
-    # does at its default frame (loop off) so wave speed matches a
-    # loop-built rig. Both sources are time attributes and this is where
-    # they become a plain number.
-    clock = f'{rigname}_wave_time_multiplyDivide'
-    if not cmds.objExists(clock):
-        cmds.createNode('multiplyDivide', n=clock)
-    cmds.setAttr(f'{clock}.operation', 1)
-    ensure_connect(loop_time or 'time1.outTime', f'{clock}.input1X')
-    cmds.setAttr(f'{clock}.input2X',
-                 1.0 if loop_time else TWO_PI / LOOP_FRAME_DEFAULT)
 
     # wave_speed is halved before anything else reads it
     speed_scale = f'{rigname}_wave_speedScale_multiplyDivide'
@@ -576,23 +586,10 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     else:
         cmds.setAttr(f'{mode}.blender', 0)
 
-    # $t * $speed, shared by every joint
-    t_speed = f'{rigname}_wave_tSpeed_multiplyDivide'
-    if not cmds.objExists(t_speed):
-        cmds.createNode('multiplyDivide', n=t_speed)
-    cmds.setAttr(f'{t_speed}.operation', 1)
-    ensure_connect(f'{clock}.outputX', f'{t_speed}.input1X')
-    ensure_connect(f'{mode}.outputG', f'{t_speed}.input2X')
-
-    # Folded into one cycle so the sin curve's fixed span can hold it no
-    # matter how far the timeline runs - see wrap_expression
-    wrap_node = f'{rigname}_wave_phaseWrap'
-    if not cmds.objExists(wrap_node):
-        cmds.createNode('network', n=wrap_node)
-        cmds.addAttr(wrap_node, ln='wrapped', at='float', k=1)
-    t_speed_wrapped = wrap_expression(f'{rigname}_wave_phaseWrap_expression',
-                                      f'{t_speed}.outputX',
-                                      f'{wrap_node}.wrapped')
+    # $t * $speed, wrapped to one cycle - see wrapped_time_expression for
+    # why the multiply happens inside it rather than in a node upstream
+    t_speed_wrapped = wrapped_time_expression(rigname, loop_time,
+                                              f'{mode}.outputG')
 
     # All three amplitudes in one node, the mirror sign riding on the
     # per-unit factor as it does in build_curl

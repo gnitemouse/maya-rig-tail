@@ -2691,7 +2691,7 @@ def test_sin_curve(rigname='tail', points_per_cycle=41, tolerance=0.002):
     rather than arithmetic, so a bad tangent or a mis-set key shows up as
     a number here rather than as a rig that looks vaguely off. wave keys a
     FIXED span wide enough for any phase the attributes can produce once
-    the time term is wrapped (see rig_tail_anim.wrap_expression) - it does
+    the time term is wrapped (see rig_tail_anim.wrapped_time_expression) - it does
     not rely on the curve repeating itself, which animCurveUU in this Maya
     does not do: preInfinity/postInfinity read back unset even on a bare,
     freshly created curve immediately after being set. So this checks the
@@ -2821,16 +2821,19 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61, 5_000_000),
     touching the ALL value other parts share.
 
     The default frames include one far into the future, specifically to
-    exercise rig_tail_anim.wrap_expression: the phase the sin curve reads
-    is bounded by attribute limits alone EXCEPT for the time term, which
-    grows for as long as the timeline runs, and the curve only covers a
-    fixed span - wrap_expression is what keeps a frame number this large
-    from ever reaching it unwrapped.
+    exercise rig_tail_anim.wrapped_time_expression: the phase the sin
+    curve reads is bounded by attribute limits alone EXCEPT for the time
+    term, which grows for as long as the timeline runs, and the curve
+    only covers a fixed span. The multiply and the wrap both happen
+    inside that one expression, in double precision - a multiplyDivide
+    computing t*speed upstream of it read back exactly the float32
+    rounding of the true value at large frame numbers, precise enough to
+    matter once fed into a modulo.
 
     A large error at EVERY frame including the first points at the
-    per-joint chain. An error that grows with the frame number points at
-    the wrap or the clock upstream of it, both of which handle a time
-    attribute becoming a plain number.
+    per-joint chain. An error that grows with the frame number and stays
+    small at ordinary ones points at wrapped_time_expression, or at
+    whatever now sits between it and the curve.
 
     Arguments:
         rigname (str): Name of rig component
