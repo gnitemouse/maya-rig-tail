@@ -2817,6 +2817,14 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
     high enough that the phase at the tip runs well past a single cycle,
     which is where a sin curve not set to repeat stops answering.
 
+    When the Main Controller dashboard is active, resolved_plug reads the
+    override condition rather than basectrl, and the condition follows
+    basectrl only while this part's own override flag is on - otherwise it
+    follows the cog's ALL value instead. Setting basectrl alone would then
+    write a plug nothing downstream reads. So the override flag is forced
+    on for the duration, which routes the condition to basectrl WITHOUT
+    touching the ALL value other parts share.
+
     A large error at EVERY frame including the first points at the
     per-joint chain. An error that grows with the frame number points at
     the clock, which is the one place a time attribute becomes a plain
@@ -2845,6 +2853,14 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
     saved = {attr: cmds.getAttr(f'{basectrl}.{attr}') for attr in probe
              if cmds.attributeQuery(attr, n=basectrl, ex=1)
              and cmds.getAttr(f'{basectrl}.{attr}', settable=True)}
+
+    override_plug = f'{rt_naming.fstr("", rt_constants.COG_CTRL)}.' \
+                   f'{rt_naming.fstr(rigname, rt_constants.OVERRIDE)}'
+    override_was = None
+    if rt_ctrlall.active() and cmds.objExists(override_plug):
+        override_was = cmds.getAttr(override_plug)
+        cmds.setAttr(override_plug, 1)
+
     restore_time = cmds.currentTime(q=True)
     worst_overall, failures, signal = 0.0, 0, 0.0
     try:
@@ -2878,6 +2894,8 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
         for attr, val in saved.items():
             cmds.setAttr(f'{basectrl}.{attr}', val)
         cmds.currentTime(restore_time, edit=True)
+        if override_was is not None:
+            cmds.setAttr(override_plug, override_was)
 
     # A comparison of zero against zero agrees and proves nothing, so the
     # size of what was compared decides whether a match is worth anything
