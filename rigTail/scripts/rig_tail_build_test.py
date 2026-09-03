@@ -2682,27 +2682,27 @@ VALUES:
     print()
 
 
-def test_sin_curve(rigname='tail', samples=241, tolerance=0.002):
+def test_sin_curve(rigname='tail', points_per_cycle=41, tolerance=0.002):
     '''
-    Check one of wave's sin curves against sin, on its own, across three
-    cycles.
+    Check one of wave's sin curves against sin across its whole keyed span,
+    and confirm a phase safely outside that span never reaches it.
 
     The curve is the one part of the wave graph carrying an approximation
-    rather than arithmetic, and the two things that can be wrong with it -
-    the shape between keys and whether it repeats past its keyed span -
-    are both invisible from further downstream. A phase that never leaves
-    the first cycle reads correct either way, and every joint near the
-    base of a chain is in that position.
+    rather than arithmetic, so a bad tangent or a mis-set key shows up as
+    a number here rather than as a rig that looks vaguely off. wave keys a
+    FIXED span wide enough for any phase the attributes can produce once
+    the time term is wrapped (see rig_tail_anim.wrap_expression) - it does
+    not rely on the curve repeating itself, which animCurveUU in this Maya
+    does not do: preInfinity/postInfinity read back unset even on a bare,
+    freshly created curve immediately after being set. So this checks the
+    span that is actually keyed, not an infinity setting.
 
     MUTATING nothing: a duplicate is driven and deleted, so the curve in
     the rig is never touched and its input connection is left alone.
 
-    An error that appears only outside the keyed span is the infinity
-    setting. An error spread across the whole sweep is the tangents.
-
     Arguments:
         rigname (str): Name of rig component
-        samples (int): Points to test across three cycles
+        points_per_cycle (int): Sample density used across the whole span
         tolerance (float): Allowed disagreement, in sin's own units
 
     Return:
@@ -2715,33 +2715,27 @@ def test_sin_curve(rigname='tail', samples=241, tolerance=0.002):
         print(f'✗ No wave sin curves found for {rigname}')
         return False
 
+    span_lo = rt_anim.SIN_SPAN_START
+    span_hi = span_lo + rt_anim.SIN_SPAN_CYCLES * rt_anim.TWO_PI
+    samples = rt_anim.SIN_SPAN_CYCLES * points_per_cycle
+
     probe = cmds.duplicate(curves[0], n='rt_sin_probe_tmp')[0]
-    inside = outside = 0.0
+    worst = 0.0
     try:
-        span_lo = rt_anim.SIN_CYCLE_START
-        span_hi = span_lo + rt_anim.TWO_PI
-        lo, hi = span_lo - rt_anim.TWO_PI, span_lo + 2 * rt_anim.TWO_PI
-        for i in range(samples):
-            x = lo + (hi - lo) * i / (samples - 1)
+        for i in range(samples + 1):
+            x = span_lo + (span_hi - span_lo) * i / samples
             cmds.setAttr(f'{probe}.input', x)
-            error = abs(cmds.getAttr(f'{probe}.output') - math.sin(x))
-            if span_lo <= x <= span_hi:
-                inside = max(inside, error)
-            else:
-                outside = max(outside, error)
+            worst = max(worst, abs(cmds.getAttr(f'{probe}.output') - math.sin(x)))
     finally:
         cmds.delete(probe)
 
-    print(f'  curve tested   {curves[0]}  ({len(curves)} in this part)')
-    print(f'  within the keyed span   max error {inside:.2e}'
-          f'   {"✓" if inside <= tolerance else "✗ tangents"}')
-    print(f'  beyond it (2 cycles)    max error {outside:.2e}'
-          f'   {"✓" if outside <= tolerance else "✗ infinity is not cycling"}')
+    print(f'  curve tested    {curves[0]}  ({len(curves)} in this part)')
+    print(f'  keyed span      [{span_lo:.3f}, {span_hi:.3f}]'
+          f'  ({rt_anim.SIN_SPAN_CYCLES} cycles)')
+    print(f'  max error       {worst:.2e}  (={worst * 30:.4f}° at a 30° wave)')
 
-    ok = max(inside, outside) <= tolerance
-    print(f'\n  {"PASS" if ok else "FAIL"} - worst {max(inside, outside):.2e} '
-          f'against {tolerance} allowed '
-          f'(={max(inside, outside) * 30:.4f}° at a 30° wave)\n')
+    ok = worst <= tolerance
+    print(f'\n  {"PASS" if ok else "FAIL"} - against {tolerance} allowed\n')
     return ok
 
 
@@ -2799,7 +2793,8 @@ def _wave_expected(rigname, frame):
     return expected
 
 
-def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
+def test_wave_values(rigname='tail', frames=(1, 7, 23, 61, 5_000_000),
+                     tolerance=0.01):
     '''
     Check the wave network against the formula it is supposed to compute,
     at several frames.
@@ -2825,11 +2820,17 @@ def test_wave_values(rigname='tail', frames=(1, 7, 23, 61), tolerance=0.01):
     on for the duration, which routes the condition to basectrl WITHOUT
     touching the ALL value other parts share.
 
+    The default frames include one far into the future, specifically to
+    exercise rig_tail_anim.wrap_expression: the phase the sin curve reads
+    is bounded by attribute limits alone EXCEPT for the time term, which
+    grows for as long as the timeline runs, and the curve only covers a
+    fixed span - wrap_expression is what keeps a frame number this large
+    from ever reaching it unwrapped.
+
     A large error at EVERY frame including the first points at the
     per-joint chain. An error that grows with the frame number points at
-    the clock, which is the one place a time attribute becomes a plain
-    number. An error confined to the joints PAST some point along the
-    chain points at the sin curve's infinity.
+    the wrap or the clock upstream of it, both of which handle a time
+    attribute becoming a plain number.
 
     Arguments:
         rigname (str): Name of rig component

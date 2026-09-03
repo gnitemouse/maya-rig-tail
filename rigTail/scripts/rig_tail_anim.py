@@ -44,7 +44,8 @@ Functions:
     add_anim_attributes_to_basectrl: the animatable FX attrs (gated
         per enabled effect; mirrored by rt_ctrlall.routed_attr_specs)
     build_loop: modulo-time driver the other FX read
-    sin_cycle_curve, step_curve: keyed curves for sin and rounding
+    sin_span_curve, step_curve, wrap_expression: keyed curves for sin and
+        rounding, and the one expression that keeps sin's input bounded
     build_wave, build_curl, build_noise: one network per effect
 '''
 
@@ -205,7 +206,7 @@ def sync_expressions(specs):
     return len(stale)
 
 
-def drop_per_joint_expressions(pattern):
+def drop_per_joint_expressions(*patterns):
     '''
     Delete FX expressions matching a superseded naming spelling.
 
@@ -213,16 +214,18 @@ def drop_per_joint_expressions(pattern):
     produces, and the light teardown leaves the whole FX network standing
     for the build to meet - so nothing else takes them. Left alone they
     hold the plugs the current build wants and go on evaluating for
-    nothing. Patterns must not match the names in use, so a rig carrying
-    none pays a single ls.
+    nothing. Patterns must not match a name still in use - wave's own
+    wrap_expression node would otherwise be swept and rebuilt on every
+    single call rather than only when its code changes, since this runs
+    ahead of it in build_wave.
 
     Arguments
-        pattern (str): Name pattern for the superseded expressions
+        patterns (str): Name patterns for the superseded expressions
 
     Return
         int: nodes deleted
     '''
-    return remove_expressions(cmds.ls(pattern, type='expression') or [])
+    return remove_expressions(cmds.ls(*patterns, type='expression') or [])
 
 
 ensure_connect = rt_maya.ensure_connect
@@ -238,68 +241,41 @@ ensure_connect = rt_maya.ensure_connect
 # ends carry sin's steepest slope and the curve depends on getting them
 # exactly right.
 #
-# At 64 the error against sin stays inside 0.02 degrees at the largest
-# wave the attributes allow, whichever way the ends are tangented.
+# Samples per cycle of the sin curve.
 SIN_CYCLE_SAMPLES = 64
-SIN_CYCLE_START = -TWO_PI / 4.0
 
-# animCurve preInfinity/postInfinity: 0 constant, 1 linear, 2 cycle,
-# 3 cycle with offset, 4 oscillate.
-INFINITY_CYCLE = 2
+# Wave's phase is 2*pi*u*frequency (bounded: u in [0,1], frequency capped
+# by the basectrl attribute) plus a wrapped time term (bounded to one
+# cycle by wrap_expression before it ever reaches the curve) - so the
+# WHOLE phase is bounded regardless of how long the timeline runs, at
+# u=1 and frequency and speed both at their attribute max, before the
+# margin below adds one cycle either side.
+WAVE_PHASE_MAX_CYCLES = 6
+SIN_SPAN_START = -TWO_PI
+SIN_SPAN_CYCLES = WAVE_PHASE_MAX_CYCLES + 2
 
 
-def set_cycle_infinity(curve):
+def sin_span_curve(name):
     '''
-    Make a curve repeat its keyed span in both directions.
-
-    Written as plain attributes rather than through cmds.setInfinity,
-    which addresses a curve through the attribute it animates and has
-    nothing to act on for one held as a bare node, and rather than
-    trusting cmds.duplicate to carry the setting to a copy.
-
-    Load-bearing, not a default worth having: on constant infinity a
-    curve answers every input past its span with its end key. A sine keyed
-    across one cycle ends at zero, so every joint whose phase runs beyond
-    one cycle stops moving altogether and the chain hinges at the joint
-    where it crosses.
-
-    Reads both back after writing and warns once if either did not take -
-    this class of failure already reached a saved scene silently once, and
-    the fix belongs where the write happens rather than in a separate
-    diagnostic someone has to remember to run.
-
-    Arguments
-        curve (str): animCurve node
-    '''
-    cmds.setAttr(f'{curve}.preInfinity', INFINITY_CYCLE)
-    cmds.setAttr(f'{curve}.postInfinity', INFINITY_CYCLE)
-    pre = cmds.getAttr(f'{curve}.preInfinity')
-    post = cmds.getAttr(f'{curve}.postInfinity')
-    if pre != INFINITY_CYCLE or post != INFINITY_CYCLE:
-        logger.warning(f'{curve}: preInfinity/postInfinity read back as '
-                       f'{pre}/{post} after being set to {INFINITY_CYCLE} - '
-                       f'wave will flatten past one cycle on this curve')
-
-
-def sin_cycle_curve(name):
-    '''
-    An animCurveUU holding one cycle of sin, cycling to infinity.
+    An animCurveUU holding several cycles of sin, keyed once and read by
+    every joint's phase.
 
     Base Maya has no sin utility node, so this is what lets an effect
     carrying a sine be a node graph at all.
 
-    Spanning the module's TWO_PI, the same literal the phase is built
-    from, which is what keeps a loop exact. Cycle infinity repeats the
-    curve's span EXACTLY, so a phase advanced by whole cycles lands on the
-    identical value - where sin() of a 2*pi literal drifts in the last
-    digits every cycle. The approximation is to sin's shape, not its
-    period.
+    Keyed across a FIXED, finite span wide enough to hold any phase the
+    attributes and wrap_expression can produce, with a cycle of margin on
+    each side - not across one cycle with infinity set to repeat it.
+    animCurveUU does not honor preInfinity/postInfinity: setting either
+    reads back unchanged even on a bare, disconnected curve immediately
+    after the set, and evaluation past the keyed span holds the end key
+    regardless. wrap_expression is what makes a fixed span enough despite
+    time being unbounded - see its docstring.
 
     Tangents are left to Maya. The angle keyTangent takes is measured
     against an x axis in SECONDS, so an angle computed from the curve's
-    own slope comes out wrong by the scene's frame rate - a curve that is
-    not a sine at all. Nothing here needs a convention it cannot check:
-    see SIN_CYCLE_START for why auto tangents are enough.
+    own slope came out wrong by the scene's frame rate on a prior version
+    of this curve - a curve that was not a sine at all.
 
     Arguments
         name (str): Node name
@@ -312,11 +288,11 @@ def sin_cycle_curve(name):
 
     cmds.createNode('animCurveUU', n=name)
     step = TWO_PI / SIN_CYCLE_SAMPLES
-    for i in range(SIN_CYCLE_SAMPLES + 1):
-        at = SIN_CYCLE_START + i * step
+    total = SIN_CYCLE_SAMPLES * SIN_SPAN_CYCLES
+    for i in range(total + 1):
+        at = SIN_SPAN_START + i * step
         cmds.setKeyframe(name, float=at, value=math.sin(at))
     cmds.keyTangent(name, e=True, itt='auto', ott='auto')
-    set_cycle_infinity(name)
     return name
 
 
@@ -346,6 +322,35 @@ def step_curve(name, breakpoints):
         cmds.setKeyframe(name, float=at, value=value)
     cmds.keyTangent(name, e=True, itt='clamped', ott='step')
     return name
+
+
+def wrap_expression(name, source_plug, target_plug):
+    '''
+    Fold an unbounded value down to [0, TWO_PI) by one MEL floor(), so a
+    fixed-span curve downstream never sees an input outside its keys.
+
+    Wave's per-joint phase is otherwise bounded by attribute limits alone,
+    but the time term grows with the frame number for as long as the
+    timeline runs, and nothing about a node graph can key a curve wide
+    enough to outrun that. This is the one place the port keeps an
+    expression: one per part, reading the shared clock rather than one
+    per joint or per plug, so it costs about what the loop clock already
+    does and nothing scales with joint count.
+
+    Arguments
+        name (str): Expression node name
+        source_plug (str): Unbounded input
+        target_plug (str): Plug to hold the wrapped result, in [0, TWO_PI)
+
+    Return
+        str: target_plug
+    '''
+    code = f'''// Wrap {source_plug} into one cycle for the sin curve
+float $x = {source_plug};
+{target_plug} = $x - floor($x / {TWO_PI}) * {TWO_PI};
+'''
+    sync_expressions([(name, code, [target_plug])])
+    return target_plug
 
 
 # BUILD ANIM EFFECTS ===================================================
@@ -488,8 +493,12 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     one node each for the whole part, and sin and pow are one node per
     joint rather than one per plug.
 
-    Two things base Maya has no node for are keyed curves instead, see
-    sin_cycle_curve and step_curve.
+    Three things base Maya has no node for are keyed curves or an
+    expression instead, see sin_span_curve, step_curve and
+    wrap_expression - the last of those is the one place this graph still
+    holds an expression, one per part, needed because the time term is
+    unbounded and nothing about a node graph can key a curve wide enough
+    to outrun a timeline that keeps running.
 
     Arguments:
         rigname (str): Name of rig component
@@ -511,7 +520,8 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
 
     # First, so the graph meets free plugs: a superseded wave expression
     # holds the very composeMatrix inputs it is about to take
-    drop_per_joint_expressions(f'{rigname}_*wave*_expression')
+    drop_per_joint_expressions(f'{rigname}_*_wave?_expression',
+                               f'{rigname}_wave_expression')
 
     # resolved_plug: override condition output when the main controller
     # dashboard is active, the basectrl attribute otherwise
@@ -574,6 +584,16 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
     ensure_connect(f'{clock}.outputX', f'{t_speed}.input1X')
     ensure_connect(f'{mode}.outputG', f'{t_speed}.input2X')
 
+    # Folded into one cycle so the sin curve's fixed span can hold it no
+    # matter how far the timeline runs - see wrap_expression
+    wrap_node = f'{rigname}_wave_phaseWrap'
+    if not cmds.objExists(wrap_node):
+        cmds.createNode('network', n=wrap_node)
+        cmds.addAttr(wrap_node, ln='wrapped', at='float', k=1)
+    t_speed_wrapped = wrap_expression(f'{rigname}_wave_phaseWrap_expression',
+                                      f'{t_speed}.outputX',
+                                      f'{wrap_node}.wrapped')
+
     # All three amplitudes in one node, the mirror sign riding on the
     # per-unit factor as it does in build_curl
     amp = f'{rigname}_wave_amp_multiplyDivide'
@@ -585,7 +605,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
                        f'{amp}.input1{rot_axis}')
         cmds.setAttr(f'{amp}.input2{rot_axis}', 3.0 * signs[rot_axis])
 
-    sin_template = sin_cycle_curve(f'{rigname}_wave_sinCycle_animCurveUU')
+    sin_template = sin_span_curve(f'{rigname}_wave_sinSpan_animCurveUU')
 
     driven = 0
     for idx, jnt in enumerate(joints[1:], 1):
@@ -612,7 +632,7 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
             cmds.createNode('plusMinusAverage', n=phase)
         cmds.setAttr(f'{phase}.operation', 1)
         ensure_connect(f'{phase_u}.outputX', f'{phase}.input1D[0]')
-        ensure_connect(f'{t_speed}.outputX', f'{phase}.input1D[1]')
+        ensure_connect(t_speed_wrapped, f'{phase}.input1D[1]')
 
         # Duplicated from the template rather than keyed again: the keys
         # are identical for every joint, and cleanup_rig's scene-wide
@@ -620,9 +640,6 @@ def build_wave(rigname, basectrl, joints, loop_time=None, signs=None):
         sin_node = f'{rigname}_wave_{NN:02d}_sin_animCurveUU'
         if not cmds.objExists(sin_node):
             cmds.duplicate(sin_template, n=sin_node)
-        # Outside the create guard: a curve reached on a rebuild has to be
-        # cycling whatever a previous build left it on
-        set_cycle_infinity(sin_node)
         ensure_connect(f'{phase}.output1D', f'{sin_node}.input')
 
         falloff = f'{rigname}_wave_{NN:02d}_falloff_multiplyDivide'
