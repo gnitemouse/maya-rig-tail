@@ -60,6 +60,7 @@ import rig_tail_cache as rt_cache
 import rig_tail_control as rt_control
 import rig_tail_connect as rt_connect
 import rig_tail_ctrlall as rt_ctrlall
+import rig_tail_mirror as rt_mirror
 
 logger = logger_setup(__name__)
 
@@ -276,6 +277,9 @@ def cleanup_rig(fk, ik):
 
     # Clear control cache
     rt_connect.clear_control_cache()
+    # Same reason: the mirror measurement is memoized for one build, and
+    # Setup can re-orient a chain between two builds of a session
+    rt_mirror.clear_sign_cache()
     # Validate cache
     rt_cache.validate_cache()
     # Control count and build-mode changes invalidate the node layout for

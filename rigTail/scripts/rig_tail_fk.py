@@ -483,7 +483,27 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
             else:
                 sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, typ, NN)
 
-            if fresh or not cmds.objExists(sdk_grp):
+            if fresh:
+                # Created straight under the layer above rather than at the
+                # world and reparented: a new group is at identity, so this
+                # lands it exactly where the relative parent below used to.
+                #
+                # And created UNLOCKED. create_group locks translate/rotate/
+                # scale, which every layer here then has to have unlocked
+                # again before falloff_rotation can connect onto rotate - a
+                # locked plug refuses the connection. Nothing reads the lock
+                # in between, so the pair was two API passes over twelve
+                # plugs to arrive where not locking arrives directly.
+                kwargs = {'p': prev_sdk_grp} if prev_sdk_grp else {}
+                sdk_grp = cmds.createNode('transform', n=sdk_grp, s=1, ss=1,
+                                          **kwargs)
+                rt_maya.set_channel_flags(
+                    sdk_grp, ['translate', 'rotate', 'scale'],
+                    k=False, cb=False)
+                # Visibility is 1 on a new node, so only its flags are owed
+                rt_maya.set_channel_flags(sdk_grp, ['visibility'],
+                                          k=False, cb=True, l=False)
+            elif not cmds.objExists(sdk_grp):
                 rt_maya.create_group(sdk_grp)
 
             if idx > 0:
@@ -503,20 +523,10 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
                                          cb=True, l=True)
 
             if prev_sdk_grp: # Nest current SDK group under previous
-                if fresh:
-                    # create_group locks translate/rotate/scale, and
-                    # falloff_rotation connects onto rotate later - a locked
-                    # plug refuses the connection, so the unlock is owed even
-                    # though nothing else in the skipped pair does anything.
-                    # jointOrient rides along: a transform without it costs
-                    # nothing to skip, which is cheaper than asking.
-                    cmds.parent(sdk_grp, prev_sdk_grp, r=True)
-                    rt_maya.set_channel_flags(
-                        sdk_grp, ['translate', 'rotate', 'scale',
-                                  'jointOrient'], l=False, compound=True)
-                else:
+                if not fresh:
                     rt_maya.parent_to(sdk_grp, prev_sdk_grp, r=True)
                     rt_maya.match_transform(sdk_grp, prev_sdk_grp, moc=1)
+                # fresh groups were created under prev_sdk_grp already
             else:
                 first_sdk_grp = sdk_grp
             prev_sdk_grp = sdk_grp

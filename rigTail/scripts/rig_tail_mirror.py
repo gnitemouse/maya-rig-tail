@@ -94,6 +94,13 @@ MIRROR_TOLERANCE = 0.5
 # Every axis raw. Returned whole, so callers may not mutate it.
 NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
 
+# rigname -> the cosines _axis_cosines measured, for the current build.
+# The measurement is the same every time it is asked inside one build (see
+# _axis_rows: it reads the captured REST matrix precisely so the answer
+# cannot depend on when it is asked), and eight or so call sites per part
+# ask it - two Maya commands per joint per side, each time.
+_COSINE_CACHE = {}
+
 # 'mirror' is the default because it mirrors all three ROTATIONS, and every
 # gizmo and dial in this rig but offset is posed by rotation.
 BEHAVIORS = ('mirror', 'symmetric', 'parallel')
@@ -119,10 +126,26 @@ def rotation_signs(rigname):
     return _signs(rigname, rotation=True)
 
 
+def clear_sign_cache():
+    """
+    Drop every memoized axis measurement, so the next read re-measures the
+    skeleton.
+
+    Called at the start of each cleanup, alongside the control cache: the
+    cache must never outlive the skeleton it was measured from, and Setup
+    can re-orient a chain between two builds of one session.
+    """
+    _COSINE_CACHE.clear()
+
+
 def _axis_cosines(rigname):
     """
     Mean cos between each of this part's local axes and the reflection of
     its L/R partner's matching axis, over the whole chain.
+
+    Memoized for the build (see clear_sign_cache): every consumer of a sign
+    asks for the whole chain's measurement, and they ask per control and per
+    effect rather than once per part.
 
     The one measurement every answer here is built on: -1 is a '-' axis in
     the +aim/+roll/+up notation, +1 a '+' one. Averaged over the chain
@@ -135,6 +158,24 @@ def _axis_cosines(rigname):
     Return
         dict or None: {'X','Y','Z'} mean cosines, or None when this part
             has no partner to be measured against
+    """
+    if rigname in _COSINE_CACHE:
+        cached = _COSINE_CACHE[rigname]
+        return dict(cached) if cached else None
+    cosines = _measure_axis_cosines(rigname)
+    _COSINE_CACHE[rigname] = cosines
+    return dict(cosines) if cosines else None
+
+
+def _measure_axis_cosines(rigname):
+    """
+    The measurement behind _axis_cosines, run once per part per build.
+
+    Arguments
+        rigname (str): Name of rig component
+
+    Return
+        dict or None: as _axis_cosines
     """
     partner = rt_naming.mirror_partner(rigname)
     if not partner:

@@ -1889,6 +1889,10 @@ def test_twist_roll_offset(rigname='tail', amount=45.0, offset_amount=1.0):
     # tests the blocked direction on one of them, where a perfectly wired
     # offset moves nothing and reads as dead. Same source the build signs
     # from, so an inverted mirror still fails rather than being papered over.
+    # Re-measured, not read off the build's memo: a check run after the
+    # skeleton was re-oriented by hand must fail rather than agree with a
+    # sign the last build happened to record.
+    rt_mirror.clear_sign_cache()
     offset_sign = rt_mirror.translation_signs(rigname).get(
         rt_mirror.aim_axis(), 1.0)
 
@@ -2761,6 +2765,9 @@ def _wave_expected(rigname, frame):
 
     joints = rt_constants.JOINTS_BN.get(rigname, [])
     span = float(len(joints) - 1)
+    # Re-measured rather than read off the build's memo - see the same call
+    # in the offset check for why a stale sign here would hide a failure
+    rt_mirror.clear_sign_cache()
     signs = rt_mirror.rotation_signs(rigname)
 
     looped = cmds.objExists(f'{rigname}_loop_time')
