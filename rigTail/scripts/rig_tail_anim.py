@@ -263,11 +263,22 @@ def set_cycle_infinity(curve):
     one cycle stops moving altogether and the chain hinges at the joint
     where it crosses.
 
+    Reads both back after writing and warns once if either did not take -
+    this class of failure already reached a saved scene silently once, and
+    the fix belongs where the write happens rather than in a separate
+    diagnostic someone has to remember to run.
+
     Arguments
         curve (str): animCurve node
     '''
     cmds.setAttr(f'{curve}.preInfinity', INFINITY_CYCLE)
     cmds.setAttr(f'{curve}.postInfinity', INFINITY_CYCLE)
+    pre = cmds.getAttr(f'{curve}.preInfinity')
+    post = cmds.getAttr(f'{curve}.postInfinity')
+    if pre != INFINITY_CYCLE or post != INFINITY_CYCLE:
+        logger.warning(f'{curve}: preInfinity/postInfinity read back as '
+                       f'{pre}/{post} after being set to {INFINITY_CYCLE} - '
+                       f'wave will flatten past one cycle on this curve')
 
 
 def sin_cycle_curve(name):
