@@ -471,6 +471,13 @@ part's name but that no rig part can own, to `<name>_delN`. Two kinds:
 |------|---------|------------------------|
 | Uniquified | `BN_L_wing_base_jnt1` | Maya appends digits to a name already in use. The naming template is the only lens the tool has and it rejects the trailing digits, so detection cannot see the joint — and a part it cannot see reads as missing, which is what had every run leave one more copy behind. |
 | Cross-side | `BN_L_finridge_jnt` under `BN_R_fin_jnt` | The two sides are separate by construction, so a left chain hanging off a right one is damage, not a choice. |
+| Misplaced twin | a second `BN_L_fin_jnt`, where the source side puts only one | Two valid chains for one name are normally a choice Setup refuses. They stop being one when the pair settles it: if exactly **one** candidate sits under the parent the mirror describes, the others are somewhere the mirror does not. Left alone when the answer is not unarguable — no source side, an unresolvable mirrored parent, or several candidates equally well placed. |
+
+Marking is scoped by **name, not by the roster**. A joint competing for a
+rig part's name blocks that name whether or not the roster lists it: an
+unlisted `BN_L_fin_jnt` matching two nodes stops a listed `L_finridge`
+reconciling just as surely as a listed one would. Only an *excluded* part
+is off limits — an unlisted one was never spoken for.
 
 Renamed, never deleted. A joint that looks like garbage may still carry
 skin, a constraint, or unfinished work, and a run is a single undo chunk

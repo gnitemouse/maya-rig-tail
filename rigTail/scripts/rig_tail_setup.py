@@ -1249,10 +1249,15 @@ def _stray_joints(skip=None):
     Return
         dict: {joint DAG path: reason}.
     '''
-    skip = skip or set()
-    active = {p for p in _active() if p not in skip}
+    # Held back by NAME, not by the roster. A joint competing for a rig
+    # part's name blocks that name whether or not the roster lists it -
+    # an unlisted 'BN_L_fin_jnt' that matches two nodes stops L_finridge
+    # reconciling just as surely as a listed one. Only an EXCLUDED part is
+    # deliberately off limits; an unlisted one was never spoken for.
+    held_back = set(rt_cache.excluded_parts()) | (skip or set())
     reasons = {}
-    for node in cmds.ls(type='joint', long=True) or []:
+    joints = cmds.ls(type='joint', long=True) or []
+    for node in joints:
         leaf = rt_maya.leaf(node)
         rigname = rt_naming.get_rigname(leaf, rt_constants.JOINT)
         if not rigname:
@@ -1261,11 +1266,11 @@ def _stray_joints(skip=None):
             base = leaf.rstrip('0123456789')
             owner = rt_naming.get_rigname(base, rt_constants.JOINT) \
                 if base != leaf else None
-            if owner in active:
+            if owner and owner not in held_back:
                 reasons[node] = (f"'{base}' with Maya's uniquifying suffix, "
                                  'which no naming template matches')
             continue
-        if rigname not in active:
+        if rigname in held_back:
             continue
         side = _side_of(rigname)
         if not side:
@@ -1277,7 +1282,97 @@ def _stray_joints(skip=None):
                 reasons[node] = (f'a {side} joint hanging under {ancestor} '
                                  f'on the {other} side')
                 break
+    reasons.update(_misplaced_duplicates(held_back, reasons, joints))
     return reasons
+
+
+def _misplaced_duplicates(held_back, already, joints):
+    '''
+    Of several chains answering to one rig part name, the ones that are not
+    where that part's mirror says it belongs.
+
+    Two validly-named chains are normally a choice Setup refuses to make.
+    They stop being a choice when the pair itself settles it: the source
+    side says which parent the target belongs under, and if exactly ONE
+    candidate is there, the others are in a place the mirror does not
+    describe. That is the same rule reconcile_chain_structure applies, so
+    resolving it here rather than holding the part back only spares a run
+    that would have made the same judgement.
+
+    Left alone when the answer is not unarguable - no source side to
+    compare against, an unresolvable mirrored parent, or several candidates
+    equally well placed. Marking the whole chain, not just its root: a
+    renamed root would leave the joint below it reading as a fresh start
+    and the ambiguity would simply move down one.
+
+    Arguments
+        held_back (set): rignames to leave alone.
+        already (dict): nodes another rule has claimed.
+        joints (list): every joint in the scene, as full paths.
+
+    Return
+        dict: {joint DAG path: reason}.
+    '''
+    reasons = {}
+    candidates = rt_cleanup.bn_start_candidates()
+    for rigname, starts in candidates.items():
+        if len(starts) < 2 or rigname in held_back:
+            continue
+        source = _mirror_source_root(rigname, candidates)
+        if not source:
+            continue
+        want, note = _counterpart_parent(source)
+        if note or not want:
+            continue
+        placed = [s for s in starts if _parent_of(s) == want]
+        if len(placed) != 1:
+            continue
+        for start in starts:
+            if start in placed:
+                continue
+            for node in _chain_from(start, rigname, joints):
+                if node not in already:
+                    reasons[node] = (
+                        f'a second {rigname} chain, not under '
+                        f'{rt_maya.leaf(want)} where the mirror of '
+                        f'{rt_maya.leaf(source)} puts it')
+    return reasons
+
+
+def _mirror_source_root(rigname, candidates):
+    '''
+    The root of the chain a rig part mirrors FROM, taken from the scene
+    rather than the roster.
+
+    The roster is what find_mirror_pairs reads, and the part being asked
+    about here may not be on it - the scene is what has to answer. Only the
+    target side gets an answer, and only when the source resolves to one
+    chain, so nothing is derived from an ambiguity.
+
+    Arguments
+        rigname (str): the rig part to find a source for.
+        candidates (dict): {rigname: [chain start path, ...]} for the scene.
+
+    Return
+        str or None: the source chain's root joint.
+    '''
+    side = _side_of(rigname)
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    if not side or side == source_side:
+        return None
+    match = _SIDE_RE.match(rigname)
+    letter = source_side.lower() if match.group(1).islower() else source_side
+    starts = candidates.get(f'{letter}_{match.group(2)}') or []
+    return starts[0] if len(starts) == 1 else None
+
+
+def _chain_from(start, rigname, joints):
+    ''' Every joint at or under start that names the same rig part, so a
+    chain is marked whole rather than losing only its root. '''
+    return [j for j in joints
+            if (j == start or j.startswith(f'{start}|'))
+            and rt_naming.get_rigname(rt_maya.leaf(j),
+                                      rt_constants.JOINT) == rigname]
 
 
 def _side_of(rigname):
@@ -1314,33 +1409,41 @@ def _report_duplicate_chains(dry_run):
     over. Either may be the chain carrying the skin, so which to delete is
     not Setup's call to make - and Setup deletes no joint.
 
+    Reported for every rig part name in the SCENE, not just the ones the
+    roster lists. An unlisted name that matches two joints blocks the
+    listed part whose mirrored parent is that name, so leaving it unsaid
+    reports the symptom - a chain that would not reconcile - and never the
+    cause. Only a listed part is held back by it, because only a listed
+    part was going to be touched.
+
     Arguments
         dry_run (bool): only log, flag nothing.
 
     Return
-        list: rignames with more than one chain, in RIGPARTS order.
+        list: LISTED rignames with more than one chain, in RIGPARTS order.
     '''
-    duplicates = rt_cleanup.duplicate_rigparts(_active())
+    excluded = set(rt_cache.excluded_parts())
+    duplicates = {rigname: paths
+                  for rigname, paths in rt_cleanup.bn_start_candidates().items()
+                  if len(paths) > 1 and rigname not in excluded}
     if not duplicates:
         return []
-    ambiguous = []
-    for rigname in _active():
-        paths = duplicates.get(rigname)
-        if not paths:
-            continue
-        ambiguous.append(rigname)
+    listed = set(_active())
+    for rigname, paths in duplicates.items():
+        blocked = f'{rigname} was left untouched this run' if rigname in listed \
+            else (f'{rigname} is not a rig part here, but anything whose '
+                  f'mirrored parent resolves to one of these is blocked by it')
         logger.warning(
             f'Setup: {len(paths)} BN chains carry the rig part name '
-            f'{rigname} ({", ".join(rt_maya.leaf(p) for p in paths)}). '
-            f'Setup cannot tell which one the rig means, so {rigname} was '
-            'left untouched this run. Delete or rename the chain you do '
-            'not want, then run Setup again.')
+            f'{rigname} ({", ".join(paths)}). Setup cannot tell which one '
+            f'the rig means, so {blocked}. Delete or rename the chain you '
+            'do not want, then run Setup again.')
         if not dry_run:
             _flag_for_review(paths)
-    if ambiguous and not dry_run:
+    if not dry_run:
         logger.warning(f"Setup: the ambiguous chains are in '{REVIEW_SET}' - "
                        'select it to find them.')
-    return ambiguous
+    return [p for p in _active() if p in duplicates]
 
 
 def _flag_for_review(nodes):
