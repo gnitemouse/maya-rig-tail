@@ -255,9 +255,10 @@ def measure_rebuild_degradation(rignames, rebuilds=2, tol=1.0,
           path reuses the IK curve, so it does NOT resample and will not show
           curve-side degradation.
       invalidate_cache=True -- clear the in-memory joint caches for these parts
-          before each rebuild, so set_joints re-duplicates FK/IK from the
-          (already OPM-smoothed) BN, the way a fresh Maya session does -- the
-          compounding path the memory note identifies.
+          before each rebuild. Clearing them does not on its own force a
+          re-duplication: set_joints recovers the FK/IK chains from the scene
+          and reuses them where they still sit on BN. force_full is what sends
+          the rebuild down the re-duplication path the memory note identifies.
 
     FORCE_REBUILD, RIGPARTS and ROOT are saved and restored on exit.
 

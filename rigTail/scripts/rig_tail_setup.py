@@ -39,7 +39,11 @@ have a toggle in rig_tail_constants:
                    'L_leg' alone is enough to have 'R_leg' built and added.
                    Mirror Orient and Orient Joints only ever rewrite joints
                    that already exist, so they warn about a missing chain
-                   instead.
+                   instead. It owns the target side's HIERARCHY as well:
+                   reconcile_chain_structure hangs each target chain under
+                   the mirror of its source's parent, which a world matrix
+                   cannot say and which a mirror of positions alone leaves
+                   wrong while reporting success.
 MIRROR_ORIENT and MIRROR_JOINTS are independent (either, both, or neither);
 run ORIENT_JOINTS first so a mirror copies a clean source. A typical run
 enables ORIENT_JOINTS + MIRROR_ORIENT (+ MIRROR_JOINTS if the sides are
@@ -66,6 +70,14 @@ mirroring altogether. The same exclusion holds the part back from the
 build, so a tail can be set up and rigged once and then left alone while
 the rest of the roster is iterated on.
 
+A part is held back for one other reason, which the roster does not state:
+a rig part name that more than one BN chain answers to. Detection can only
+pick one of them arbitrarily, so the whole run leaves that part alone and
+puts every candidate in REVIEW_SET rather than orient, reparent or mirror
+the wrong chain of a pair - the failure mode that leaves correct-looking
+joints on a chain nothing is bound to. Setup deletes neither, since either
+may be the one carrying the skin.
+
 Re-orienting or moving a bound joint would drag the mesh. With KEEP_WEIGHTS
 on (the default) the skin stays bound and is RE-BASELINED afterwards - each
 moved joint's new world matrix is written into the skinCluster's
@@ -83,6 +95,8 @@ Functions:
         (MIRROR_ORIENT / MIRROR_JOINTS)
     create_missing_chains: build a pair's absent target chain, stated or
         implied by a lone source side (MIRROR_JOINTS)
+    reconcile_chain_structure: hang each target chain under the mirror of
+        its source's parent (MIRROR_JOINTS)
     roll_chain: interactively roll one chain about its aim axis
     rignames_from_selection: the RIGPARTS of every selected joint (UI)
     rigname_from_selection: resolve the RIGPART of the selected joint (UI)
@@ -109,6 +123,11 @@ logger = logger_setup(__name__)
 # with the pairing it serves, in rig_tail_naming.
 _SIDE_RE = rt_naming.SIDE_RE
 _EPS = 1e-9
+
+# Nodes Setup could not resolve on its own, gathered into one Maya set so
+# they can be selected and dealt with by hand. Setup deletes no joint, so
+# whatever it had to refuse has to stay findable after the run.
+REVIEW_SET = 'rig_tail_review_SET'
 
 
 def _cst(name):
@@ -174,7 +193,8 @@ def setup_tails(root=None, dry_run=None):
         if not found:
             logger.warning('Setup: no BN joints found for any RIGPART')
             return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
-                    'created': [], 'missing_chains': list(_active()),
+                    'created': [], 'reparented': [], 'unresolved': [],
+                    'duplicates': [], 'missing_chains': list(_active()),
                     'missing_geo': [], 'excluded': rt_cache.excluded_parts()}
 
         excluded = rt_cache.excluded_parts()
@@ -185,19 +205,39 @@ def setup_tails(root=None, dry_run=None):
         preview = dry_run if dry_run is not None \
             else bool(_cst('MIRROR_DRYRUN'))
 
+        # Settled before anything acts on a chain: every step below resolves
+        # one chain per rig part, and orienting, reparenting or mirroring
+        # the wrong one of two is the failure that reads as success.
+        with timer.phase('duplicates'):
+            ambiguous = _report_duplicate_chains(preview)
+        skip = set(ambiguous)
+
         # Build any mirror target that has no chain yet, BEFORE the geometry
         # check and the unbind: a chain created here is a full member of this
         # run, so its mesh must be matched and its orient/mirror must happen.
         with timer.phase('create'):
-            created = create_missing_chains(preview, set(found)) \
+            created = create_missing_chains(preview, set(found), skip) \
                 if bool(_cst('MIRROR_JOINTS')) else []
 
         have = set(found) | set(created)
         # Re-read the roster rather than reuse `included`: creating an
         # implied target adds it to RIGPARTS, and it is a full member of
         # this run - it must be geometry-checked and oriented like any other.
-        active = [p for p in _active() if p in have]
+        active = [p for p in _active() if p in have and p not in skip]
         missing_chains = _report_chain_gaps(have, created, preview)
+
+        # Structure before orientation: both passes read each joint's parent
+        # frame, so a chain still owed a move would be oriented against the
+        # hierarchy it is about to leave.
+        with timer.phase('reconcile'):
+            structure = reconcile_chain_structure(preview, skip) \
+                if bool(_cst('MIRROR_JOINTS')) \
+                else {'reparented': [], 'unresolved': []}
+        # Chains are stored as full DAG paths, so a reparent invalidates the
+        # path of the chain that moved and of every chain under it.
+        if structure['reparented'] and not preview:
+            with timer.phase('redetect'):
+                rt_cleanup.detect_joints_bn()
 
         # Warn about parts whose mesh does not follow the naming convention:
         # they are not unbound before re-orienting (so their mesh distorts)
@@ -219,7 +259,7 @@ def setup_tails(root=None, dry_run=None):
                         skinned.append(rigname)
 
         with timer.phase('orient/mirror'):
-            result = run_setup(dry_run=dry_run)
+            result = run_setup(dry_run=dry_run, skip=skip)
 
         # Now that the joints have moved, tell each preserved skinCluster
         # that this is its rest pose. Until this runs the mesh is dragged
@@ -229,13 +269,16 @@ def setup_tails(root=None, dry_run=None):
                 rt_maya.rebaseline_skin(rigname)
 
         result['created'] = created
+        result['reparented'] = structure['reparented']
+        result['unresolved'] = structure['unresolved']
+        result['duplicates'] = ambiguous
         result['missing_chains'] = missing_chains
         result['missing_geo'] = missing_geo
         result['excluded'] = excluded
         return result
 
 
-def run_setup(dry_run=None):
+def run_setup(dry_run=None, skip=None):
     '''
     Run the enabled orient and mirror steps on the BN skeleton.
 
@@ -247,12 +290,17 @@ def run_setup(dry_run=None):
 
     Arguments
         dry_run (bool): Override MIRROR_DRYRUN; None uses the setting.
+        skip (set): rignames to leave alone, on top of RIGPARTS_EXCLUDE.
+            setup_tails passes the parts whose chain it could not resolve to
+            one candidate; acting on an arbitrary pick is the failure this
+            avoids.
 
     Return
         dict: {'oriented': n, 'mirrored': n, 'dry_run': bool}.
     '''
     if dry_run is None:
         dry_run = bool(_cst('MIRROR_DRYRUN'))
+    skip = skip or set()
     do_orient = bool(_cst('ORIENT_JOINTS'))
     mir_orient = bool(_cst('MIRROR_ORIENT'))
     mir_joints = bool(_cst('MIRROR_JOINTS'))
@@ -263,8 +311,8 @@ def run_setup(dry_run=None):
                 f'mirror_orient={mir_orient}{behavior}, '
                 f'mirror_joints={mir_joints}')
 
-    oriented = orient_chains(dry_run) if do_orient else 0
-    mirrored = mirror_chains(dry_run, mir_orient, mir_joints) \
+    oriented = orient_chains(dry_run, skip) if do_orient else 0
+    mirrored = mirror_chains(dry_run, mir_orient, mir_joints, skip) \
         if (mir_orient or mir_joints) else 0
     if not (do_orient or mir_orient or mir_joints):
         logger.info('Setup: nothing enabled (ORIENT_JOINTS, MIRROR_ORIENT '
@@ -281,7 +329,8 @@ def run_setup(dry_run=None):
         # part rebuilds its rest from whatever pose BN is in), and a run with
         # every option off, or with parts held back, moved nothing.
         if do_orient or mir_orient or mir_joints:
-            _clear_rest_pose(rt_cache.active_parts())
+            _clear_rest_pose([p for p in rt_cache.active_parts()
+                              if p not in skip])
 
     return {'oriented': oriented, 'mirrored': mirrored, 'dry_run': dry_run}
 
@@ -351,7 +400,7 @@ def show_joint_orients(show=True):
 # OPERATIONS ===========================================================
 # Both operate on the BN skeleton only (rt_constants.JOINTS_BN).
 
-def orient_chains(dry_run):
+def orient_chains(dry_run, skip=None):
     '''
     Aim-orient every BN chain to remove intra-chain twist.
 
@@ -366,10 +415,12 @@ def orient_chains(dry_run):
 
     Arguments
         dry_run (bool): only log the intended changes, do not modify.
+        skip (set): rignames to leave alone this run.
 
     Return
         int: joints re-oriented (or that would be, in a dry run).
     '''
+    skip = skip or set()
     aim_axis = _cst('ORIENT_AIM_AXIS')
     up_axis = _cst('ORIENT_UP_AXIS')
     up_mode = _up_mode()
@@ -377,7 +428,7 @@ def orient_chains(dry_run):
     count = 0
     for rigname in _active():
         joints = rt_constants.JOINTS_BN.get(rigname)
-        if not joints or len(joints) < 2:
+        if rigname in skip or not joints or len(joints) < 2:
             continue
         try:
             positions = [cmds.xform(j, q=True, ws=True, translation=True)
@@ -448,7 +499,7 @@ def _report_twist(rigname, joints, positions, aim_axis, up_axis):
                 f'(aim={aim_axis}, up={up_axis}, {len(rolls)} segs)')
 
 
-def mirror_chains(dry_run, do_orient, do_positions):
+def mirror_chains(dry_run, do_orient, do_positions, skip=None):
     '''
     Reflect each L/R pair's BN chain across the symmetry plane.
 
@@ -471,10 +522,12 @@ def mirror_chains(dry_run, do_orient, do_positions):
         dry_run (bool): only log the intended changes, do not modify.
         do_orient (bool): reflect orientation (MIRROR_ORIENT).
         do_positions (bool): reflect positions (MIRROR_JOINTS).
+        skip (set): rignames to leave alone this run.
 
     Return
         int: joints changed (or that would be, in a dry run).
     '''
+    skip = skip or set()
     axis = _cst('MIRROR_AXIS')
     aim_axis = _cst('ORIENT_AIM_AXIS')
     up_axis = _cst('ORIENT_UP_AXIS')
@@ -496,6 +549,8 @@ def mirror_chains(dry_run, do_orient, do_positions):
         return 0
     count = 0
     for source, target in pairs:
+        if source in skip or target in skip:
+            continue
         src = rt_constants.JOINTS_BN.get(source)
         tgt = rt_constants.JOINTS_BN.get(target)
         # Which side is missing decides what can be done about it, so say
@@ -600,7 +655,7 @@ def _report_mirror_delta(rigname, joints, before_mats):
 
 # CREATION =============================================================
 
-def create_missing_chains(dry_run, detected=None):
+def create_missing_chains(dry_run, detected=None, skip=None):
     '''
     Build the BN chain for any mirror target that has none (MIRROR_JOINTS).
 
@@ -635,6 +690,9 @@ def create_missing_chains(dry_run, detected=None):
             JOINTS_BN is never cleared, so an entry left by an earlier run
             on a chain since deleted would otherwise read as present and
             suppress the creation. None trusts JOINTS_BN.
+        skip (set): rignames to leave alone this run. A part whose own name
+            resolves to two chains cannot be a creation source either - it
+            is unknown which of them would be copied.
 
     Return
         list: target rignames whose chain was created (empty on a dry run).
@@ -643,11 +701,14 @@ def create_missing_chains(dry_run, detected=None):
     '''
     if detected is None:
         detected = set(rt_constants.JOINTS_BN)
+    skip = skip or set()
     pairs, _ = find_mirror_pairs(_active())
     implied = _implied_mirror_pairs(detected)
     created = []
     for source, target in _creation_order(pairs + implied):
         if target in detected or source not in detected:
+            continue
+        if source in skip or target in skip:
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
@@ -851,16 +912,54 @@ def _mirror_index(src_jnt, position):
     return index
 
 
-def _mirror_parent(src_root):
+def _counterpart_parent(src_root):
     '''
-    Where to hang a created chain: the mirror of the source root's parent.
+    The opposite-side node a mirrored chain belongs under, when one can be
+    named unambiguously.
 
     A parent whose name carries a side token ('L'/'R') resolves to its
     opposite-side counterpart, so a chain parented under an arm joint lands
-    under the other arm. A center or unsided parent is reused as-is, which
-    covers the usual case of both tails hanging off the same body joint.
-    Falls back to the source's own parent when the counterpart does not
-    exist or is ambiguous.
+    under the other arm. A center or unsided parent is shared by both sides
+    and comes back as itself, which covers the usual case of both tails
+    hanging off the same body joint.
+
+    The source's own parent is never offered as a substitute. It is the
+    wrong side, and a target chain hanging there reads as success in every
+    view except the outliner - a caller that can live with that asks
+    _mirror_parent for it explicitly.
+
+    Arguments
+        src_root (str): the source chain's root joint.
+
+    Return
+        tuple: (parent DAG path or None, note). None means the world root
+        when the note is empty and an unresolvable counterpart when it is
+        not, so the two cases stay distinguishable.
+    '''
+    parent = _parent_of(src_root)
+    if not parent:
+        return None, ''
+    counterpart = _swap_side(rt_maya.leaf(parent))
+    if counterpart == rt_maya.leaf(parent):
+        return parent, ''
+    found = cmds.ls(counterpart, long=True) or []
+    if len(found) == 1:
+        return found[0], ''
+    if len(found) > 1:
+        return None, f"{len(found)} nodes are named '{counterpart}'"
+    return None, f"there is no '{counterpart}'"
+
+
+def _mirror_parent(src_root):
+    '''
+    Where to hang a CREATED chain: the mirror of the source root's parent,
+    falling back to the source's own parent when no counterpart resolves.
+
+    The fallback belongs to creation and only to creation. A chain that does
+    not exist yet is better built on the wrong side than not built at all,
+    and the warning says where it landed; a chain that already exists has
+    somewhere to stay instead, which is why reconcile_chain_structure takes
+    the opposite trade.
 
     Arguments
         src_root (str): the source chain's root joint.
@@ -868,29 +967,19 @@ def _mirror_parent(src_root):
     Return
         str or None: parent DAG path, or None to create at the world root.
     '''
-    parents = cmds.listRelatives(src_root, parent=True, fullPath=True) or []
-    if not parents:
-        return None
-    parent = parents[0]
-    counterpart = _swap_side(rt_maya.leaf(parent))
-    if counterpart == rt_maya.leaf(parent):
+    parent, note = _counterpart_parent(src_root)
+    if parent or not note:
         return parent
-    found = cmds.ls(counterpart, long=True) or []
-    if len(found) == 1:
-        return found[0]
-    if len(found) > 1:
-        logger.warning(f"Mirror: {len(found)} nodes named '{counterpart}', "
-                       f'so the created chain was parented under {parent} '
-                       'instead. Rename them and re-parent it by hand.')
-    else:
-        # Said out loud because the chain still gets built, correctly
-        # placed, and hanging off the WRONG SIDE - which reads as success
-        # everywhere except the outliner.
-        logger.warning(f"Mirror: no '{counterpart}' to hang the created "
-                       f'chain under, so it was parented under {parent} - '
-                       'the source side. Mirror or create that parent '
-                       'first, then re-parent the chain.')
-    return parent
+    fallback = _parent_of(src_root)
+    logger.warning(f'Mirror: {note}, so the created chain was parented '
+                   f'under {fallback} - the source side. Mirror or create '
+                   'that parent first, then re-parent the chain.')
+    return fallback
+
+
+def _parent_of(node):
+    ''' A node's parent as a full DAG path, or None at the world root. '''
+    return (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
 
 
 def _swap_side(name):
@@ -927,6 +1016,190 @@ def _copy_joint_attrs(src, dst):
             cmds.setAttr(f'{dst}.{attr}', cmds.getAttr(f'{src}.{attr}'))
         except (RuntimeError, ValueError) as err:
             logger.debug(f'Setup: could not copy {attr} {src} to {dst}: {err}')
+
+
+def reconcile_chain_structure(dry_run, skip=None):
+    '''
+    Hang each mirror target's chain where the mirror of its source says it
+    belongs (MIRROR_JOINTS).
+
+    Mirroring writes world matrices, so a target chain under the wrong
+    parent still lands every joint in the right place and still reports a
+    successful mirror - while deforming through the wrong parent and
+    carrying a hierarchy the source side does not have. This is the half of
+    'mirror the positions' no world matrix can express: the target's ROOT
+    moves under the counterpart of the source root's parent, so a pair
+    agrees on structure as well as on where its joints sit.
+
+    Only that root is ever moved. Whatever hangs below it - another rig
+    part's chain, an end joint, a stray locator - rides along, which is what
+    keeps a structural fix aimed at one part from tearing a nested part off
+    the rig. A nested part reconciles on its own turn against its own
+    source, so a chain that rode along under the wrong parent is moved to
+    the right one by its own pass rather than left where its parent landed.
+
+    Nothing is deleted and nothing outside the pair is touched. A target
+    whose mirrored parent cannot be named unambiguously is left exactly
+    where it is and reported: the source side's own parent is a worse home
+    than the wrong one the chain already has.
+
+    Arguments
+        dry_run (bool): only log the intended moves, reparent nothing.
+        skip (set): rignames to leave alone, ambiguous ones among them.
+
+    Return
+        dict: {'reparented': [rigname, ...], 'unresolved': [rigname, ...]}
+    '''
+    skip = skip or set()
+    mode = ' [dry-run]' if dry_run else ''
+    reparented, unresolved = [], []
+    pairs, _ = find_mirror_pairs(_active())
+    for source, target in pairs:
+        if source in skip or target in skip:
+            continue
+        src = rt_constants.JOINTS_BN.get(source)
+        tgt = rt_constants.JOINTS_BN.get(target)
+        if not src or not tgt:
+            continue
+        # Re-resolved per pair: an earlier move in this same pass rewrites
+        # the stored path of everything that rode along under it.
+        src_root = _live_path(src[0])
+        tgt_root = _live_path(tgt[0])
+        if not src_root or not tgt_root:
+            continue
+
+        want, note = _counterpart_parent(src_root)
+        have = _parent_of(tgt_root)
+        if note:
+            logger.warning(f'Mirror: {target} belongs under the mirror of '
+                           f"{rt_maya.leaf(src_root)}'s parent, but {note}. "
+                           f'Leaving it under {have}. Mirror or create that '
+                           'parent first, then run Setup again.')
+            unresolved.append(target)
+            continue
+        if want == have:
+            continue
+        if want and (want == tgt_root or want.startswith(f'{tgt_root}|')):
+            logger.warning(f'Mirror: {target} cannot hang under {want}, '
+                           f'which is inside its own chain. Leaving it '
+                           f'under {have}.')
+            unresolved.append(target)
+            continue
+
+        logger.info(f'Mirror{mode}: reparent {target} from {have} to {want}')
+        if dry_run:
+            reparented.append(target)
+            continue
+        try:
+            _reparent(tgt_root, want)
+        except Exception as err:
+            logger.error(f'Mirror: could not reparent {target} under '
+                         f'{want}: {err}')
+            unresolved.append(target)
+            continue
+        reparented.append(target)
+    return {'reparented': reparented, 'unresolved': unresolved}
+
+
+def _reparent(node, parent):
+    '''
+    Move a joint under a new parent without moving it in world.
+
+    Maya folds the change of parent frame into jointOrient, so a bound mesh
+    is not dragged by the move; the orient/mirror pass rewrites the frame
+    afterwards anyway.
+    '''
+    if parent:
+        cmds.parent(node, parent)
+    else:
+        cmds.parent(node, world=True)
+
+
+def _live_path(node):
+    '''
+    Re-resolve a DAG path an earlier reparent in the same pass may have
+    invalidated.
+
+    Chains are stored as full paths, so moving one chain rewrites the path
+    of every chain under it. Ambiguous rig parts are held back before this
+    runs, which is what makes a chain root's leaf name enough to find it
+    again.
+
+    Return
+        str or None: the current full path, or None when the name no longer
+        resolves to exactly one node.
+    '''
+    found = cmds.ls(node, long=True) or []
+    if len(found) == 1:
+        return found[0]
+    found = cmds.ls(rt_maya.leaf(node), long=True) or []
+    return found[0] if len(found) == 1 else None
+
+
+def _report_duplicate_chains(dry_run):
+    '''
+    Hold back and flag every rig part that more than one BN chain answers to.
+
+    Detection picks one of the candidates and says which, enough to keep a
+    run moving but not enough to trust what it did: the pick is arbitrary,
+    and orienting or mirroring the wrong chain of a pair leaves
+    correct-looking joints on a chain nothing is bound to, which is the
+    failure that reads as success. So an ambiguous part is skipped by the
+    whole run rather than guessed at.
+
+    Every candidate goes into REVIEW_SET, not just the ones detection passed
+    over. Either may be the chain carrying the skin, so which to delete is
+    not Setup's call to make - and Setup deletes no joint.
+
+    Arguments
+        dry_run (bool): only log, flag nothing.
+
+    Return
+        list: rignames with more than one chain, in RIGPARTS order.
+    '''
+    duplicates = rt_cleanup.duplicate_rigparts(_active())
+    if not duplicates:
+        return []
+    ambiguous = []
+    for rigname in _active():
+        paths = duplicates.get(rigname)
+        if not paths:
+            continue
+        ambiguous.append(rigname)
+        logger.warning(
+            f'Setup: {len(paths)} BN chains carry the rig part name '
+            f'{rigname} ({", ".join(rt_maya.leaf(p) for p in paths)}). '
+            f'Setup cannot tell which one the rig means, so {rigname} was '
+            'left untouched this run. Delete or rename the chain you do '
+            'not want, then run Setup again.')
+        if not dry_run:
+            _flag_for_review(paths)
+    if ambiguous and not dry_run:
+        logger.warning(f"Setup: the ambiguous chains are in '{REVIEW_SET}' - "
+                       'select it to find them.')
+    return ambiguous
+
+
+def _flag_for_review(nodes):
+    '''
+    Add nodes to REVIEW_SET, creating it on first use.
+
+    Return
+        list: the nodes actually added.
+    '''
+    nodes = [n for n in nodes if cmds.objExists(n)]
+    if not nodes:
+        return []
+    try:
+        if cmds.objExists(REVIEW_SET):
+            cmds.sets(nodes, addElement=REVIEW_SET)
+        else:
+            cmds.sets(nodes, name=REVIEW_SET)
+    except (RuntimeError, ValueError) as err:
+        logger.warning(f'Setup: could not flag {len(nodes)} node(s) for '
+                       f'review: {err}')
+        return []
+    return nodes
 
 
 def _report_chain_gaps(have, created, dry_run):

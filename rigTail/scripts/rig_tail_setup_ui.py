@@ -882,6 +882,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # so repeating it here only buries the counts that matter.
         counts = [
             (result.get('created'), 'chain(s) created'),
+            (result.get('reparented'), 'chain(s) reparented'),
+            (result.get('duplicates'), 'ambiguous, skipped'),
+            (result.get('unresolved'), 'chain(s) not reconciled'),
             (result.get('missing_chains'), 'chain(s) missing'),
             (result.get('missing_geo'), 'without geometry'),
             (result.get('excluded'), 'excluded'),
@@ -890,10 +893,24 @@ class RigTailSetupUI(QtWidgets.QDialog):
         detail = f" - {', '.join(notes)}" if notes else ''
         preview = ' Preview only, nothing changed.' \
             if result.get('dry_run') else ''
-        QtWidgets.QMessageBox.information(self, 'Setup complete',
-            f"Oriented {result.get('oriented', 0)} joints, mirrored "
-            f"{result.get('mirrored', 0)}{detail}.{preview} "
-            'See the Script Editor for details.')
+        summary = (f"Oriented {result.get('oriented', 0)} joints, mirrored "
+                   f"{result.get('mirrored', 0)}{detail}.{preview} ")
+        # A part Setup had to hold back is the one result that must not read
+        # as success: the counts alone look like an ordinary partial run.
+        ambiguous = result.get('duplicates') or []
+        unresolved = result.get('unresolved') or []
+        held_back = ambiguous + [p for p in unresolved if p not in ambiguous]
+        if held_back:
+            where = f" The chains involved are in '{rt_setup.REVIEW_SET}'." \
+                if ambiguous else ''
+            QtWidgets.QMessageBox.warning(self, 'Setup incomplete',
+                f'{summary}\n\nThese rig parts were left untouched because '
+                'Setup could not tell which chain they meant, or where the '
+                f"mirrored chain belongs: {', '.join(held_back)}.{where} "
+                'See the Script Editor for what to fix.')
+        else:
+            QtWidgets.QMessageBox.information(self, 'Setup complete',
+                f'{summary}See the Script Editor for details.')
         self.update_display()
         # Close on a real run, like the Builder does; keep the window up
         # after a dry run so the previewed settings can be run for real.
