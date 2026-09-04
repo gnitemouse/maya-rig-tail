@@ -882,7 +882,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # so repeating it here only buries the counts that matter.
         counts = [
             (result.get('created'), 'chain(s) created'),
-            (result.get('marked'), f"stray(s) marked '{rt_setup.STRAY_SUFFIX}'"),
+            (result.get('superseded'), 'chain(s) rebuilt from the source'),
+            (result.get('marked'), f"joint(s) marked '{rt_setup.STRAY_SUFFIX}'"),
+            (result.get('incomplete'), 'not a rig part, blocking a rebuild'),
             (result.get('reparented'), 'chain(s) reparented'),
             (result.get('duplicates'), 'ambiguous, skipped'),
             (result.get('unresolved'), 'chain(s) not reconciled'),
@@ -900,7 +902,9 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # as success: the counts alone look like an ordinary partial run.
         ambiguous = result.get('duplicates') or []
         unresolved = result.get('unresolved') or []
-        held_back = ambiguous + [p for p in unresolved if p not in ambiguous]
+        blocked = result.get('incomplete') or []
+        held_back = ambiguous + [p for p in unresolved + blocked
+                                 if p not in ambiguous]
         if held_back:
             where = f" The chains involved are in '{rt_setup.REVIEW_SET}'." \
                 if ambiguous else ''

@@ -208,10 +208,10 @@ def setup_tails(root=None, dry_run=None):
         if not found:
             logger.warning('Setup: no BN joints found for any RIGPART')
             return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
-                    'created': [], 'marked': [], 'reparented': [],
-                    'unresolved': [], 'duplicates': [],
-                    'missing_chains': list(_active()), 'missing_geo': [],
-                    'excluded': rt_cache.excluded_parts()}
+                    'created': [], 'marked': [], 'superseded': [],
+                    'incomplete': [], 'reparented': [], 'unresolved': [],
+                    'duplicates': [], 'missing_chains': list(_active()),
+                    'missing_geo': [], 'excluded': rt_cache.excluded_parts()}
 
         excluded = rt_cache.excluded_parts()
         if excluded:
@@ -235,6 +235,19 @@ def setup_tails(root=None, dry_run=None):
         with timer.phase('duplicates'):
             ambiguous = _report_duplicate_chains(preview)
         skip = set(ambiguous)
+
+        # A target side whose SHAPE disagrees with its source is superseded
+        # before creation rather than reconciled after it: reconciliation
+        # moves chains the names have already paired up, and these names
+        # pair the wrong joints. Marking clears the names so the rebuild
+        # below can take them.
+        with timer.phase('supersede'):
+            shape = supersede_mismatched_subtrees(preview, skip) \
+                if bool(_cst('MIRROR_JOINTS')) \
+                else {'superseded': [], 'incomplete': [], 'marked': []}
+        marked += shape['marked']
+        if shape['marked'] and not preview:
+            found = rt_cleanup.detect_joints_bn()
 
         # Build any mirror target that has no chain yet, BEFORE the geometry
         # check and the unbind: a chain created here is a full member of this
@@ -294,6 +307,8 @@ def setup_tails(root=None, dry_run=None):
 
         result['created'] = created
         result['marked'] = marked
+        result['superseded'] = shape['superseded']
+        result['incomplete'] = shape['incomplete']
         result['reparented'] = structure['reparented']
         result['unresolved'] = structure['unresolved']
         result['duplicates'] = ambiguous
@@ -737,9 +752,14 @@ def create_missing_chains(dry_run, detected=None, skip=None):
     in_scene = set(rt_cleanup.bn_start_candidates())
     created = []
     for source, target in _creation_order(pairs + implied):
-        if target in detected or target in in_scene or source not in detected:
+        if source not in detected or source in skip or target in skip:
             continue
-        if source in skip or target in skip:
+        if target in detected or target in in_scene:
+            # Nothing to create, but an implied target only ever reached the
+            # roster by BEING created - and a part the roster does not list
+            # is never paired, so it was never mirrored either. The chain
+            # existing already is not a reason to leave it out of its pair.
+            _adopt_existing_target(target, source)
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
@@ -779,6 +799,188 @@ def create_missing_chains(dry_run, detected=None, skip=None):
         logger.info(f'Mirror: created {target} ({len(chain)} joints) '
                     f'mirrored from {source}')
     return created
+
+
+def _adopt_existing_target(target, source):
+    '''
+    List a mirror target whose chain is already in the scene.
+
+    Pairing reads the roster, and an implied target only reached the roster
+    by being created - so a target that already existed was left unlisted,
+    never paired, and never mirrored, which reads as mirroring being off for
+    that part rather than as a roster gap.
+
+    Return
+        bool: True when the roster gained the name.
+    '''
+    if target in rt_constants.RIGPARTS:
+        return False
+    rt_constants.RIGPARTS.append(target)
+    logger.info(f'Mirror: added {target} to RIGPARTS (implied by {source}; '
+                'its chain is already in the scene, so it is paired rather '
+                'than created)')
+    return True
+
+
+def supersede_mismatched_subtrees(dry_run, skip=None):
+    '''
+    Mark a target side that does not have the source side's SHAPE, so the
+    mirror is built fresh instead of reconciled joint by joint.
+
+    Reconciliation moves a chain to where its mirror belongs, which repairs
+    a target whose joints correspond to the source's. It cannot repair one
+    whose NAMES correspond to different joints - a side renamed on the
+    source only, where 'L_finridge' is the mirror of 'R_fin' and every
+    pairing is off by one. Names are the only correspondence this tool has,
+    so nothing can be inferred from them once they are wrong; the shape of
+    the two subtrees is what gives it away.
+
+    Compared as the set of (rig part, its parent's rig part) with the side
+    token dropped, so the two sides are describable in the same terms. Any
+    difference supersedes: the whole target subtree is marked '<name>_delN'
+    and create_missing_chains rebuilds it from the source, where the names
+    come from the source and are right by construction.
+
+    ONLY when every rig part of the source subtree is on the roster. A part
+    that is not listed is never created, so superseding on a partial roster
+    would mark a side and rebuild half of it - worse than the mismatch it
+    was fixing. The missing names are reported instead.
+
+    Nothing is deleted, and the old joints keep whatever is wired to them:
+    a rebuilt side is a NEW set of joints, so skin, constraints and
+    animation stay on the marked ones for you to transfer or discard.
+
+    Arguments
+        dry_run (bool): only log what would be superseded, mark nothing.
+        skip (set): rignames to leave alone this run.
+
+    Return
+        dict: {'superseded': [rigname, ...], 'incomplete': [rigname, ...]}
+    '''
+    skip = skip or set()
+    held_back = set(rt_cache.excluded_parts()) | skip
+    active = set(_active())
+    mode = ' [dry-run]' if dry_run else ''
+    joints = cmds.ls(type='joint', long=True) or []
+    candidates = rt_cleanup.bn_start_candidates()
+    superseded, incomplete, marked = [], [], []
+
+    for source_root, target_root in _mirror_subtree_roots(candidates):
+        src_parts = _subtree_parts(source_root, joints)
+        tgt_parts = _subtree_parts(target_root, joints)
+        if held_back & (src_parts | tgt_parts):
+            continue
+        if _subtree_signature(source_root, joints) == \
+                _subtree_signature(target_root, joints):
+            continue
+
+        unlisted = sorted(p for p in src_parts if p not in active)
+        if unlisted:
+            logger.warning(
+                f'Mirror: {rt_maya.leaf(target_root)} does not have '
+                f'{rt_maya.leaf(source_root)}\'s shape and cannot be rebuilt '
+                f'from it, because {", ".join(unlisted)} '
+                f'{"is" if len(unlisted) == 1 else "are"} not a rig part. '
+                "Add them in 'Edit Rig Parts' and run Setup again; nothing "
+                'was changed.')
+            incomplete.extend(unlisted)
+            continue
+
+        doomed = _chain_from(target_root, None, joints)
+        reason = f'superseded by a fresh mirror of {rt_maya.leaf(source_root)}'
+        logger.warning(
+            f'Mirror{mode}: {rt_maya.leaf(target_root)} does not have '
+            f'{rt_maya.leaf(source_root)}\'s shape, so its {len(doomed)} '
+            f'joint(s) are superseded and the side is rebuilt from '
+            f'{", ".join(sorted(src_parts))}. Skin, constraints and '
+            'animation stay on the marked joints.')
+        for node in sorted(doomed, key=lambda p: -p.count('|')):
+            if dry_run:
+                marked.append((rt_maya.leaf(node),
+                               _stray_name(rt_maya.leaf(node)), reason))
+                continue
+            done = _mark_one(node, reason)
+            if done:
+                marked.append(done)
+        superseded.extend(sorted(tgt_parts))
+    return {'superseded': superseded, 'incomplete': incomplete,
+            'marked': marked}
+
+
+def _mirror_subtree_roots(candidates):
+    '''
+    Source-side chains that top a mirrored subtree, paired with the target
+    chain they are mirrored onto.
+
+    A subtree root is a source-side chain whose parent is not itself part of
+    the same side's subtree, so one root answers for a whole wing rather
+    than each joint of it claiming to be its own.
+
+    Return
+        list: [(source root path, target root path), ...]
+    '''
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    roots = []
+    for rigname, starts in candidates.items():
+        if len(starts) != 1 or _side_of(rigname) != source_side:
+            continue
+        start = starts[0]
+        parent = _parent_of(start)
+        parent_rig = rt_naming.get_rigname(rt_maya.leaf(parent),
+                                           rt_constants.JOINT) if parent else None
+        if parent_rig and _side_of(parent_rig) == source_side:
+            continue
+        target = _swap_side(rt_maya.leaf(start))
+        found = cmds.ls(target, long=True) or []
+        if len(found) == 1:
+            roots.append((start, found[0]))
+    return roots
+
+
+def _subtree_parts(root, joints):
+    ''' Every rig part named by a joint at or under root. '''
+    parts = set()
+    for node in joints:
+        if node != root and not node.startswith(f'{root}|'):
+            continue
+        rigname = rt_naming.get_rigname(rt_maya.leaf(node),
+                                        rt_constants.JOINT)
+        if rigname:
+            parts.add(rigname)
+    return parts
+
+
+def _subtree_signature(root, joints):
+    '''
+    A subtree's shape as (rig part, parent rig part) pairs with the side
+    token dropped, so the two sides are described in the same terms.
+
+    Joints of one rig part collapse to a single entry, so a chain's LENGTH
+    is deliberately not part of the shape - the mirror derives that from the
+    source, and a target one joint short is a reconcile, not a rebuild.
+    '''
+    signature = set()
+    for node in joints:
+        if node != root and not node.startswith(f'{root}|'):
+            continue
+        rigname = rt_naming.get_rigname(rt_maya.leaf(node),
+                                        rt_constants.JOINT)
+        if not rigname:
+            continue
+        parent = _parent_of(node)
+        parent_rig = rt_naming.get_rigname(rt_maya.leaf(parent),
+                                           rt_constants.JOINT) if parent else None
+        if parent_rig == rigname:
+            continue
+        signature.add((_sideless(rigname), _sideless(parent_rig)))
+    return signature
+
+
+def _sideless(rigname):
+    ''' A rig part name without its side token, so 'L_fin' and 'R_fin' are
+    the same thing said twice. '''
+    match = _SIDE_RE.match(rigname) if rigname else None
+    return match.group(2) if match else rigname
 
 
 def _creation_order(pairs):
@@ -1215,18 +1417,14 @@ def mark_stray_nodes(dry_run, skip=None):
     for node in sorted(strays, key=lambda p: -p.count('|')):
         reason = strays[node]
         old = rt_maya.leaf(node)
-        new = _stray_name(old)
-        logger.warning(f'Setup{mode}: {old} is {reason}, marking it {new}')
+        logger.warning(f'Setup{mode}: {old} is {reason}, marking it '
+                       f'{_stray_name(old)}')
         if dry_run:
-            marked.append((old, new, reason))
+            marked.append((old, _stray_name(old), reason))
             continue
-        try:
-            renamed = cmds.rename(node, new)
-        except (RuntimeError, ValueError) as err:
-            logger.error(f'Setup: could not mark {old} as {new}: {err}')
-            continue
-        _flag_for_review([renamed])
-        marked.append((old, new, reason))
+        done = _mark_one(node, reason)
+        if done:
+            marked.append(done)
     if marked and not dry_run:
         logger.warning(f'Setup: marked {len(marked)} stray joint(s) with '
                        f"'{STRAY_SUFFIX}' and added them to '{REVIEW_SET}'. "
@@ -1367,12 +1565,34 @@ def _mirror_source_root(rigname, candidates):
 
 
 def _chain_from(start, rigname, joints):
-    ''' Every joint at or under start that names the same rig part, so a
-    chain is marked whole rather than losing only its root. '''
-    return [j for j in joints
-            if (j == start or j.startswith(f'{start}|'))
-            and rt_naming.get_rigname(rt_maya.leaf(j),
-                                      rt_constants.JOINT) == rigname]
+    ''' Every joint at or under start, or only those naming one rig part
+    when rigname is given, so a chain is marked whole rather than losing
+    only its root. '''
+    under = [j for j in joints if j == start or j.startswith(f'{start}|')]
+    if rigname is None:
+        return under
+    return [j for j in under
+            if rt_naming.get_rigname(rt_maya.leaf(j),
+                                     rt_constants.JOINT) == rigname]
+
+
+def _mark_one(node, reason):
+    '''
+    Rename one joint to '<name>_delN' and put it in the review set.
+
+    Return
+        tuple or None: (old leaf, new leaf, reason), None when the rename
+        failed.
+    '''
+    old = rt_maya.leaf(node)
+    new = _stray_name(old)
+    try:
+        renamed = cmds.rename(node, new)
+    except (RuntimeError, ValueError) as err:
+        logger.error(f'Setup: could not mark {old} as {new}: {err}')
+        return None
+    _flag_for_review([renamed])
+    return (old, new, reason)
 
 
 def _side_of(rigname):
