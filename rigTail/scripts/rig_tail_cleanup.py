@@ -42,7 +42,6 @@ Functions:
     detect_joints_bn: fill JOINTS_BN by chain detection only (Setup phase)
     detect_joints_fk_ik: recover a part's FK/IK chains from the scene
     fk_ik_match_bn: are the FK/IK chains still on BN, and facing with it
-    reset_controls_to_rest: rest the unconnected control channels
     create_rename_joints: rename BN in place, duplicate FK/IK from it
     rigpart_has_joints: does the scene hold BN joints for a rig part
     rename_rigpart: rename a rig part in place across scene and caches
@@ -1709,97 +1708,6 @@ def detect_joints_bn():
         found.append(rigname)
         logger.debug(f'{rigname}: {len(chain)} BN joints detected')
     return found
-
-def reset_controls_to_rest(parts=None):
-    '''
-    Put a rig part's controls back to their default values, so the FK and
-    IK chains settle onto BN and fk_ik_match_bn can reuse them.
-
-    WHY THE BUILD DOES THIS. restore_bn_skeleton returns BN to its stored
-    rest, and nothing returns the controls - so on a posed rig the FK and
-    IK chains stay where the controls hold them, read as 'moved off BN',
-    and are deleted and re-duplicated for every part. Resting the controls
-    first is what lets a reopened scene reuse the chains already in it.
-
-    A CONNECTED CHANNEL IS NEVER TOUCHED. Keyed, constrained and driven
-    channels are left exactly as they are: an animator's curves are not
-    the build's to discard, and a channel this skips simply leaves its
-    part failing the reuse test and taking the full rebuild it would have
-    taken anyway. So this costs an animated scene nothing and buys a posed
-    one the fast path. Locked channels are skipped for the same reason.
-
-    Values go back to each attribute's OWN default, not to zero: falloff
-    rests at 2, wave_frequency at 2, scale at 1, and zeroing those would
-    pose the rig rather than rest it.
-
-    Arguments
-        parts (list): rig parts to rest, or None for the active roster
-
-    Return
-        int: channels reset
-    '''
-    parts = parts if parts is not None else rt_cache.active_parts()
-    reset = skipped = 0
-    for rigname in parts:
-        for ctrl in _rigpart_controls(rigname):
-            for attr in cmds.listAttr(ctrl, keyable=True, unlocked=True) or []:
-                plug = f'{ctrl}.{attr}'
-                # A compound (translate) reports alongside its children;
-                # setting the children covers it and skips the type juggling
-                if cmds.attributeQuery(attr, node=ctrl, listChildren=True):
-                    continue
-                if cmds.listConnections(plug, s=True, d=False) or []:
-                    skipped += 1
-                    continue
-                default = cmds.attributeQuery(attr, node=ctrl,
-                                              listDefault=True)
-                if not default:
-                    continue
-                try:
-                    cmds.setAttr(plug, default[0])
-                    reset += 1
-                except RuntimeError as err:
-                    logger.trace(f"Skip reset on '{plug}': {err}")
-                    skipped += 1
-    logger.debug(f'Rested {reset} control channels, left {skipped} '
-                 f'connected or unsettable')
-    return reset
-
-
-def _rigpart_controls(rigname):
-    '''
-    Every control node belonging to one rig part.
-
-    Read off the naming template rather than a stored list: the controls
-    of a part built in an earlier session are exactly what this has to
-    find, and no cache describes them.
-
-    Arguments
-        rigname (str): Name of rig component
-
-    Return
-        list: control transform names
-    '''
-    ctrl = rt_constants.CTRL
-    fk = rt_constants.TYPE_FK
-    ik = rt_constants.TYPE_IK
-    # Globs rather than fstr: fstr casts its index token with int(), so a
-    # wildcard cannot go through it. Each pattern is anchored on the rig
-    # part name and the trailing CTRL label, which is what stops 'C_tail'
-    # from reaching into 'C_tail1'.
-    patterns = [
-        f'{rigname}_*_{ctrl}',            # variable FK, no type label
-        f'{fk}_{rigname}_*_{ctrl}',       # per-joint FK
-        f'{ik}_{rigname}_*_{ctrl}',       # spline IK, float, up-vector
-        f'{ik}_{rigname}_base_{ctrl}',
-        f'{fk}_{rigname}_base_{ctrl}',
-        rt_naming.fstr(rigname, rt_constants.BASECTRL),
-    ]
-    found = []
-    for pattern in patterns:
-        found.extend(cmds.ls(pattern, type='transform') or [])
-    return sorted(set(found))
-
 
 # Lowest per-axis cosine at which a duplicated chain still counts as
 # facing the way its BN source does - about one degree. Loose enough for
