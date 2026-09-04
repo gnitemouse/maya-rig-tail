@@ -277,6 +277,12 @@ def restore_bn_for_build(rignames=None):
     on a posed rig re-anchors to rest rather than freezing the pose into the
     skeleton. See rig_tail_cleanup.capture_bn_poses.
 
+    The CONTROLS are rested here too, which is the other half of the same
+    precondition: BN back at rest while the controls still hold a pose is
+    exactly the state that makes the FK/IK chains read as moved off BN, and
+    costs every part a re-duplication of both chains. See
+    rig_tail_cleanup.reset_controls_to_rest for what it will not touch.
+
     Runs before set_joints/set_joints_auto, and only on the parts being
     built - an excluded part's rig is still live and still driving its
     joints.
@@ -297,6 +303,17 @@ def restore_bn_for_build(rignames=None):
         return
     with rt_maya.timed('cleanup.restore_bn'):
         rt_cleanup.restore_bn_skeleton(parts)
+
+    # BN is at rest now and the controls still hold whatever pose they were
+    # left in, which is what would read as 'the FK/IK chains have moved off
+    # BN' and cost every part a re-duplication. Resting the controls closes
+    # that gap; a keyed or driven channel is left alone, so an animated part
+    # simply takes the rebuild it would have taken anyway.
+    with rt_maya.timed('cleanup.reset_controls'):
+        rt_cleanup.reset_controls_to_rest(parts)
+    # The reuse test reads world matrices, so the DG has to have caught up
+    # with the values just written
+    rt_maya.force_refresh()
 
 
 def rig_tail_single(root=None, fk=True, ik=True, start_jnt=None, end_jnt=None):
