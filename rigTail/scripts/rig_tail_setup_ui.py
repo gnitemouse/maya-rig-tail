@@ -903,16 +903,26 @@ class RigTailSetupUI(QtWidgets.QDialog):
         ambiguous = result.get('duplicates') or []
         unresolved = result.get('unresolved') or []
         blocked = result.get('incomplete') or []
-        held_back = ambiguous + [p for p in unresolved + blocked
-                                 if p not in ambiguous]
-        if held_back:
+        notes = []
+        if ambiguous or unresolved:
+            held = ambiguous + [p for p in unresolved if p not in ambiguous]
             where = f" The chains involved are in '{rt_setup.REVIEW_SET}'." \
                 if ambiguous else ''
+            notes.append(
+                'These rig parts were left untouched because Setup could '
+                'not tell which chain they meant, or where the mirrored '
+                f"chain belongs: {', '.join(held)}.{where}")
+        # A different problem with a different fix: these are names the
+        # roster is MISSING, not chains Setup could not read.
+        if blocked:
+            notes.append(
+                'A side could not be rebuilt from its source because these '
+                f"are not rig parts: {', '.join(blocked)}. Add them in "
+                "'Edit Rig Parts' and run Setup again.")
+        if notes:
             QtWidgets.QMessageBox.warning(self, 'Setup incomplete',
-                f'{summary}\n\nThese rig parts were left untouched because '
-                'Setup could not tell which chain they meant, or where the '
-                f"mirrored chain belongs: {', '.join(held_back)}.{where} "
-                'See the Script Editor for what to fix.')
+                summary + '\n\n' + '\n\n'.join(notes)
+                + '\n\nSee the Script Editor for details.')
         else:
             QtWidgets.QMessageBox.information(self, 'Setup complete',
                 f'{summary}See the Script Editor for details.')

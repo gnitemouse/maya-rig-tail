@@ -233,7 +233,11 @@ def setup_tails(root=None, dry_run=None):
         # one chain per rig part, and orienting, reparenting or mirroring
         # the wrong one of two is the failure that reads as success.
         with timer.phase('duplicates'):
-            ambiguous = _report_duplicate_chains(preview)
+            # A preview renames nothing, so the chains marking WOULD have
+            # taken out are still competing for their names here; without
+            # them the preview reports an ambiguity the real run never sees.
+            ambiguous = _report_duplicate_chains(
+                preview, {m[3] for m in marked} if preview else set())
         skip = set(ambiguous)
 
         # A target side whose SHAPE disagrees with its source is superseded
@@ -252,9 +256,17 @@ def setup_tails(root=None, dry_run=None):
         # Build any mirror target that has no chain yet, BEFORE the geometry
         # check and the unbind: a chain created here is a full member of this
         # run, so its mesh must be matched and its orient/mirror must happen.
+        roster_before = list(rt_constants.RIGPARTS)
         with timer.phase('create'):
             created = create_missing_chains(preview, set(found), skip) \
                 if bool(_cst('MIRROR_JOINTS')) else []
+        # A part the roster gained by ADOPTION has a chain in the scene that
+        # the first detection never looked for, so JOINTS_BN holds nothing
+        # for it and every step below would read it as missing and offer to
+        # create the chain it already has. A created part is already stored.
+        if rt_constants.RIGPARTS != roster_before:
+            with timer.phase('redetect'):
+                found = rt_cleanup.detect_joints_bn()
 
         have = set(found) | set(created)
         # Re-read the roster rather than reuse `included`: creating an
@@ -759,7 +771,7 @@ def create_missing_chains(dry_run, detected=None, skip=None):
             # roster by BEING created - and a part the roster does not list
             # is never paired, so it was never mirrored either. The chain
             # existing already is not a reason to leave it out of its pair.
-            _adopt_existing_target(target, source)
+            _adopt_existing_target(target, source, dry_run)
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
@@ -801,7 +813,7 @@ def create_missing_chains(dry_run, detected=None, skip=None):
     return created
 
 
-def _adopt_existing_target(target, source):
+def _adopt_existing_target(target, source, dry_run):
     '''
     List a mirror target whose chain is already in the scene.
 
@@ -810,10 +822,18 @@ def _adopt_existing_target(target, source):
     never paired, and never mirrored, which reads as mirroring being off for
     that part rather than as a roster gap.
 
+    The roster is state that outlives the run and is written back to the
+    config, so a preview must not touch it either.
+
     Return
         bool: True when the roster gained the name.
     '''
     if target in rt_constants.RIGPARTS:
+        return False
+    if dry_run:
+        logger.info(f'Mirror [dry-run]: would add {target} to RIGPARTS '
+                    f'(implied by {source}; its chain is already in the '
+                    'scene, so it would be paired rather than created)')
         return False
     rt_constants.RIGPARTS.append(target)
     logger.info(f'Mirror: added {target} to RIGPARTS (implied by {source}; '
@@ -897,7 +917,7 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
         for node in sorted(doomed, key=lambda p: -p.count('|')):
             if dry_run:
                 marked.append((rt_maya.leaf(node),
-                               _stray_name(rt_maya.leaf(node)), reason))
+                               _stray_name(rt_maya.leaf(node)), reason, node))
                 continue
             done = _mark_one(node, reason)
             if done:
@@ -1420,7 +1440,7 @@ def mark_stray_nodes(dry_run, skip=None):
         logger.warning(f'Setup{mode}: {old} is {reason}, marking it '
                        f'{_stray_name(old)}')
         if dry_run:
-            marked.append((old, _stray_name(old), reason))
+            marked.append((old, _stray_name(old), reason, node))
             continue
         done = _mark_one(node, reason)
         if done:
@@ -1592,7 +1612,7 @@ def _mark_one(node, reason):
         logger.error(f'Setup: could not mark {old} as {new}: {err}')
         return None
     _flag_for_review([renamed])
-    return (old, new, reason)
+    return (old, new, reason, node)
 
 
 def _side_of(rigname):
@@ -1614,7 +1634,7 @@ def _stray_name(leaf):
     return f'{base}{STRAY_SUFFIX}{index}'
 
 
-def _report_duplicate_chains(dry_run):
+def _report_duplicate_chains(dry_run, ignore=None):
     '''
     Hold back and flag every rig part that more than one BN chain answers to.
 
@@ -1638,14 +1658,22 @@ def _report_duplicate_chains(dry_run):
 
     Arguments
         dry_run (bool): only log, flag nothing.
+        ignore (set): chain start paths marking has already taken out of the
+            convention. A preview renames nothing, so without this it would
+            report an ambiguity the real run resolves a step earlier.
 
     Return
         list: LISTED rignames with more than one chain, in RIGPARTS order.
     '''
+    ignore = ignore or set()
     excluded = set(rt_cache.excluded_parts())
-    duplicates = {rigname: paths
-                  for rigname, paths in rt_cleanup.bn_start_candidates().items()
-                  if len(paths) > 1 and rigname not in excluded}
+    duplicates = {}
+    for rigname, paths in rt_cleanup.bn_start_candidates().items():
+        if rigname in excluded:
+            continue
+        left = [p for p in paths if p not in ignore]
+        if len(left) > 1:
+            duplicates[rigname] = left
     if not duplicates:
         return []
     listed = set(_active())
