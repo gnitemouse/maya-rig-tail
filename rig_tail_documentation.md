@@ -437,7 +437,7 @@ that moves joints, and moving them is its purpose.
 |----------|--------|-----------|
 | `ORIENT_JOINTS` | Aim-orient each chain so its up-axis stops twisting from joint to joint. Both sides are oriented from their own geometry. | kept |
 | `MIRROR_ORIENT` | Reflect matching `L_`/`R_` pairs' **orientation** across the symmetry plane. | kept |
-| `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions**, and build a target side that has no chain at all. | **moved** |
+| `MIRROR_JOINTS` | Reflect matching `L_`/`R_` pairs' **positions**, reconcile the target side's **hierarchy**, and build a target side that has no chain at all. | **moved** |
 
 `ORIENT_JOINTS` runs first, then the mirrors, so a mirror copies a clean
 source and one run with several toggles enabled is correct.
@@ -449,6 +449,29 @@ world origin. `MIRROR_DRYRUN` previews every batch operation.
 one that derives the target's positions in full. The other two rewrite joints
 that already exist, so an included rig part with no chain is reported
 instead.
+
+It also owns the target side's **hierarchy**. A mirror writes world
+matrices, so a target chain hanging off the wrong parent still lands every
+joint in the right place and still reports a successful mirror, while
+deforming through the wrong parent. `reconcile_chain_structure` moves each
+target chain's root under the counterpart of its source root's parent, so a
+pair agrees on structure and not only on where its joints sit. Only that
+root moves; whatever hangs below it rides along and is reconciled on its own
+turn against its own source, which is what keeps a fix aimed at one part
+from tearing a nested part off the rig. A target whose mirrored parent
+cannot be named unambiguously is left where it is and reported — the source
+side's own parent is a worse home than the wrong one the chain already has.
+
+### Ambiguous chains
+
+A rig part name that more than one BN chain answers to cannot be resolved by
+Setup: the pick would be arbitrary, and orienting, reparenting or mirroring
+the wrong chain of a pair leaves correct-looking joints on a chain nothing
+is bound to. Such a part is held back from the whole run — as if excluded —
+and every candidate chain is put in the `rig_tail_review_SET` Maya set to be
+found and sorted out by hand. Setup deletes neither, since either may be the
+one carrying the skin. The Setup dialog reports this as an incomplete run
+rather than a successful one.
 
 `roll_chain` is an interactive per-chain fix-up with no constant. It rolls a
 single chain about its aim axis to turn a correctly-oriented but wrong-facing
@@ -910,10 +933,11 @@ The Setup phase: orient, mirror and roll the BN skeleton before the build.
 | Function | Purpose |
 |----------|---------|
 | `setup_tails(root=None, dry_run=None)` | Detect BN chains, run the enabled steps, re-baseline skinned meshes |
-| `run_setup(dry_run=None)` | Run the enabled batch steps on `JOINTS_BN` |
-| `orient_chains(dry_run)` | Aim-orient every included chain |
-| `mirror_chains(dry_run, do_orient, do_positions)` | Mirror orientation and/or positions across pairs |
-| `create_missing_chains(pairs, dry_run)` | Build a target side that has no joints |
+| `run_setup(dry_run=None, skip=None)` | Run the enabled batch steps on `JOINTS_BN` |
+| `orient_chains(dry_run, skip=None)` | Aim-orient every included chain |
+| `mirror_chains(dry_run, do_orient, do_positions, skip=None)` | Mirror orientation and/or positions across pairs |
+| `create_missing_chains(dry_run, detected=None, skip=None)` | Build a target side that has no joints |
+| `reconcile_chain_structure(dry_run, skip=None)` | Hang each target chain under the mirror of its source's parent |
 | `roll_chain(rigname, degrees)` | Roll one chain about its aim axis |
 | `aim_frames(positions, aim_axis, up_axis, up_ref=None)` | Per-joint world frames for a chain |
 | `mirror_frames(src_matrices, axis, aim_axis, up_axis)` | Reflect a set of frames across the plane |

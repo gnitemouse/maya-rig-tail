@@ -422,7 +422,8 @@ def test_mirror_index():
     import rig_tail_naming as rt_naming
     ok = True
     # An unnumbered source stays unnumbered, so the two sides read as the
-    # same name but for the side token - and _mirror_parent can find it.
+    # same name but for the side token - and the counterpart lookup that
+    # places a created chain can find it.
     ok &= _verdict('unnumbered source gives no index',
                    rt_setup._mirror_index('BN_L_leg_jnt', 0) == '')
     ok &= _verdict('and so names the mirror BN_R_leg_jnt',

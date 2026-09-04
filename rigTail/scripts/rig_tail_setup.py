@@ -704,14 +704,31 @@ def create_missing_chains(dry_run, detected=None, skip=None):
     skip = skip or set()
     pairs, _ = find_mirror_pairs(_active())
     implied = _implied_mirror_pairs(detected)
+    # Detection only looks for the rig parts the roster NAMES, and an implied
+    # target is added to the roster by this function - so it is never among
+    # the detected and would read as missing on every run, each one leaving
+    # another uniquified copy behind. The scene is the authority on what
+    # already exists.
+    in_scene = set(rt_cleanup.bn_start_candidates())
     created = []
     for source, target in _creation_order(pairs + implied):
-        if target in detected or source not in detected:
+        if target in detected or target in in_scene or source not in detected:
             continue
         if source in skip or target in skip:
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
+            continue
+        # Resolved before anything is built: a chain that cannot be hung on
+        # its own side is not built at all. Landing it under the SOURCE's
+        # parent puts left joints on the right side of the rig, which is
+        # worse than the missing chain it was standing in for.
+        parent, note = _counterpart_parent(src[0])
+        if note:
+            logger.warning(f'Mirror: {target} was not created - it belongs '
+                           f'under the mirror of {rt_maya.leaf(src[0])}\'s '
+                           f'parent, but {note}. Create or mirror that '
+                           f'parent first, then run Setup again.')
             continue
         if dry_run:
             listed = '' if (source, target) not in implied \
@@ -720,7 +737,7 @@ def create_missing_chains(dry_run, detected=None, skip=None):
                         f'({len(src)} joints) mirrored from {source}{listed}')
             continue
         try:
-            chain = _build_mirror_chain(src, target)
+            chain = _build_mirror_chain(src, target, parent)
         except Exception as err:
             logger.error(f'Mirror: could not create {target} from '
                          f'{source}: {err}')
@@ -743,17 +760,17 @@ def _creation_order(pairs):
     '''
     Order pairs so a chain is created before anything that hangs off it.
 
-    _mirror_parent hangs a created chain under the MIRROR of the source's
-    parent, which only works if that mirror already exists. Three chains
-    off one leg - 'L_leg' the pivot, 'L_rear_wing' and 'L_rear_eye' below
-    it - therefore have to be built root first, or the two lower ones land
-    under the LEFT leg and the new side is left half-attached. Roster order
-    happens to get this right when the names sort that way and silently
-    wrong when they do not, so it is not left to the roster: the order
-    comes from the SOURCE side's own shape, shallower roots first and
-    siblings in the order they sit under their parent. The created side
-    then reads as the mirror it is in the outliner, rather than in
-    whatever order the rig parts happen to be listed.
+    A created chain hangs under the MIRROR of the source's parent, which
+    only works if that mirror already exists. Three chains off one leg -
+    'L_leg' the pivot, 'L_rear_wing' and 'L_rear_eye' below it - therefore
+    have to be built root first, or the two lower ones have nowhere on
+    their own side to hang and are refused. Roster order happens to get
+    this right when the names sort that way and silently wrong when they do
+    not, so it is not left to the roster: the order comes from the SOURCE
+    side's own shape, shallower roots first and siblings in the order they
+    sit under their parent. The created side then reads as the mirror it is
+    in the outliner, rather than in whatever order the rig parts happen to
+    be listed.
 
     Arguments
         pairs (list): [(source_rigname, target_rigname), ...].
@@ -829,7 +846,7 @@ def _implied_mirror_pairs(detected):
     return pairs
 
 
-def _build_mirror_chain(src_joints, target):
+def _build_mirror_chain(src_joints, target, parent):
     '''
     Create one chain as the mirror of another and return its joints.
 
@@ -841,12 +858,24 @@ def _build_mirror_chain(src_joints, target):
     Positions and orientations are the reflected source's, written by the
     same _apply_frames the batch mirror uses.
 
+    Every name is claimed before the first joint is made. Maya answers a
+    name that is already taken by quietly uniquifying it, and a
+    'BN_L_wing_jnt1' matches no naming template, so nothing downstream can
+    see it: detection reads the part as still missing and the next run
+    leaves another copy behind it. Refusing leaves the scene as it was.
+
     Arguments
         src_joints (list): the source chain's joints, root first.
         target (str): rig part name for the new chain.
+        parent (str): node to hang the chain under, or None for the world
+            root. Resolved by the caller, which refuses the whole chain
+            rather than let it land on the source side.
 
     Return
         list: the new chain's joints as full DAG paths, root first.
+
+    Raises
+        RuntimeError: a name the chain needs is already taken.
     '''
     axis = _cst('MIRROR_AXIS')
     keep = {'x': 0, 'y': 1, 'z': 2}.get(str(axis).lower(), 0)
@@ -855,13 +884,24 @@ def _build_mirror_chain(src_joints, target):
     frames = mirror_frames(src_mats, axis, _cst('ORIENT_AIM_AXIS'),
                            _cst('ORIENT_UP_AXIS'))
 
-    parent = _mirror_parent(src_joints[0])
+    names = [rt_naming.fstr(target, rt_constants.JOINT, rt_constants.TYPE_BN,
+                            _mirror_index(src_jnt, i))
+             for i, src_jnt in enumerate(src_joints)]
+    src_ee = _find_end_joint(src_joints[-1])
+    if src_ee:
+        names.append(rt_naming.fstr(target, rt_constants.JOINT,
+                                    rt_constants.TYPE_BN, 'ee'))
+    taken = [n for n in names if cmds.objExists(n)]
+    if taken:
+        raise RuntimeError(
+            f'{len(taken)} of its joint names already exist in the scene '
+            f'({", ".join(taken[:3])}). Rename or delete them, or exclude '
+            f'{target} - creating it now would leave uniquified copies '
+            'nothing can see.')
+
     chain = []
-    for i, src_jnt in enumerate(src_joints):
-        jnt = _create_joint(rt_naming.fstr(target, rt_constants.JOINT,
-                                           rt_constants.TYPE_BN,
-                                           _mirror_index(src_jnt, i)),
-                            parent)
+    for src_jnt, name in zip(src_joints, names):
+        jnt = _create_joint(name, parent)
         _copy_joint_attrs(src_jnt, jnt)
         chain.append(jnt)
         parent = jnt
@@ -869,11 +909,8 @@ def _build_mirror_chain(src_joints, target):
 
     # The '_ee_' joint is excluded from the chain, so it is created and
     # placed here rather than by _apply_frames.
-    src_ee = _find_end_joint(src_joints[-1])
     if src_ee:
-        ee = _create_joint(rt_naming.fstr(target, rt_constants.JOINT,
-                                          rt_constants.TYPE_BN, 'ee'),
-                           chain[-1])
+        ee = _create_joint(names[-1], chain[-1])
         _copy_joint_attrs(src_ee, ee)
         ee_pos = _reflect(cmds.xform(src_ee, q=True, ws=True,
                                      translation=True), keep)
@@ -889,9 +926,9 @@ def _mirror_index(src_jnt, position):
     the source's index is carried across AS IT IS, its absence included. A
     one-joint chain is commonly authored unnumbered, and numbering the
     mirror of 'BN_L_leg_jnt' as 'BN_R_leg_00_jnt' breaks the pair twice
-    over: the names stop matching, and _mirror_parent's lookup for
-    'BN_R_leg_jnt' misses the joint just created, so everything hanging
-    off that pivot is parented back under the source side.
+    over: the names stop matching, and the counterpart lookup for
+    'BN_R_leg_jnt' misses the joint just created, so everything hanging off
+    that pivot is refused for want of a parent on its own side.
 
     Arguments
         src_jnt (str): the source joint being mirrored.
@@ -923,10 +960,11 @@ def _counterpart_parent(src_root):
     and comes back as itself, which covers the usual case of both tails
     hanging off the same body joint.
 
-    The source's own parent is never offered as a substitute. It is the
-    wrong side, and a target chain hanging there reads as success in every
-    view except the outliner - a caller that can live with that asks
-    _mirror_parent for it explicitly.
+    The source's own parent is never offered as a substitute, by any caller.
+    It is the wrong side, and a left chain hanging off a right one reads as
+    success in every view except the outliner while binding the two sides
+    together - so a chain that cannot be placed on its own side is not
+    created and not moved, only reported.
 
     Arguments
         src_root (str): the source chain's root joint.
@@ -948,33 +986,6 @@ def _counterpart_parent(src_root):
     if len(found) > 1:
         return None, f"{len(found)} nodes are named '{counterpart}'"
     return None, f"there is no '{counterpart}'"
-
-
-def _mirror_parent(src_root):
-    '''
-    Where to hang a CREATED chain: the mirror of the source root's parent,
-    falling back to the source's own parent when no counterpart resolves.
-
-    The fallback belongs to creation and only to creation. A chain that does
-    not exist yet is better built on the wrong side than not built at all,
-    and the warning says where it landed; a chain that already exists has
-    somewhere to stay instead, which is why reconcile_chain_structure takes
-    the opposite trade.
-
-    Arguments
-        src_root (str): the source chain's root joint.
-
-    Return
-        str or None: parent DAG path, or None to create at the world root.
-    '''
-    parent, note = _counterpart_parent(src_root)
-    if parent or not note:
-        return parent
-    fallback = _parent_of(src_root)
-    logger.warning(f'Mirror: {note}, so the created chain was parented '
-                   f'under {fallback} - the source side. Mirror or create '
-                   'that parent first, then re-parent the chain.')
-    return fallback
 
 
 def _parent_of(node):
