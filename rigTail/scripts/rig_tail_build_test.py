@@ -2766,9 +2766,8 @@ def _wave_expected(rigname, frame):
 
     joints = rt_constants.JOINTS_BN.get(rigname, [])
     span = float(len(joints) - 1)
-    # Re-measured, not read off the build's memo: a sign the last build
-    # recorded would agree with a skeleton that has since been re-oriented,
-    # and hide the failure this check exists to catch.
+    # Re-measured, so a re-oriented skeleton fails here rather than agreeing
+    # with the sign the last build memoized
     rt_mirror.clear_sign_cache()
     signs = rt_mirror.rotation_signs(rigname)
 

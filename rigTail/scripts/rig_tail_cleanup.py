@@ -1743,9 +1743,9 @@ def detect_joints_fk_ik(rigname):
     Ordered by the index in each joint's name rather than by traversal,
     since rig_tail_matrix pairs these lists against BN one to one.
 
-    Short names, matching what create_rename_joints stores; guard_unique_
-    rigparts has already refused the build if a rig part is carried by
-    more than one chain, so each name picks out one node.
+    Short names, matching what create_rename_joints stores. The build has
+    already refused to run if a rig part is carried by more than one chain,
+    so each name picks out exactly one node.
 
     Arguments
         rigname (str): Name of rig component
@@ -1775,21 +1775,26 @@ def detect_joints_fk_ik(rigname):
 
 def fk_ik_match_bn(rigname, tol=None):
     '''
-    Whether the cached FK and IK chains are still one-to-one with BN, and on it.
+    Whether the cached FK and IK chains are still one-to-one with BN, sitting
+    on it and facing with it.
 
-    FK and IK are duplicated from BN and, at rest, sit on it. So one test
-    covers everything set_joints needs to know about whether its cached
-    chains are reusable - count, membership and position - without keeping
-    any history to compare against: ask whether the duplicates are still
-    where BN is.
+    FK and IK are duplicated from BN and, at rest, stand exactly where it
+    stands. So one test covers everything set_joints needs to know about
+    whether its cached chains are reusable - count, membership, position and
+    orientation - without keeping any history to compare against: ask
+    whether the duplicates are still where BN is.
 
-    The tolerance is rt_constants.JOINT_POS_TOLERANCE, the same one
+    Orientation is asked because position alone cannot see it. A chain can
+    sit on its source to the last decimal and be turned about it, and a rig
+    built on one reads as twist and roll behaving wrongly rather than as an
+    error. Both come off the same world matrix, so the question is free.
+
+    The position tolerance is rt_constants.JOINT_POS_TOLERANCE, the same one
     rt_cache.validate_cache_joints uses, and for the same reason: the OPM
-    network perturbs world positions by float noise. It is safe to compare
-    the IK chain this way only because the solver curve now rests on the
-    joints exactly (rig_tail_curve.connect_driver_to_solver_curve) - before
-    that the spline settled the IK joints visibly off BN and this would
-    have reported a change on every build.
+    network perturbs world positions by float noise. Comparing the IK chain
+    this way is safe only while the solver curve rests on the joints exactly
+    (rig_tail_curve.connect_driver_to_solver_curve); a spline that settled
+    its joints off BN would report a change on every build.
 
     Arguments
         rigname (str): rig part to check
