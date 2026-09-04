@@ -78,6 +78,15 @@ the wrong chain of a pair - the failure mode that leaves correct-looking
 joints on a chain nothing is bound to. Setup deletes neither, since either
 may be the one carrying the skin.
 
+Where the competing chain is provably damage rather than a choice -
+Maya's uniquifying digits, or a left chain hanging off the right side -
+mark_stray_nodes renames it '<name>_delN' first, which takes it out of the
+convention and lets the rig part resolve to one chain after all. That is
+the whole of the cleanup Setup does on its own: it renames, reports and
+leaves the node in the scene for you to delete once you are satisfied,
+because a joint that looks like garbage may still carry skin or a
+constraint, and a run is one undo chunk holding hundreds of operations.
+
 Re-orienting or moving a bound joint would drag the mesh. With KEEP_WEIGHTS
 on (the default) the skin stays bound and is RE-BASELINED afterwards - each
 moved joint's new world matrix is written into the skinCluster's
@@ -97,6 +106,7 @@ Functions:
         implied by a lone source side (MIRROR_JOINTS)
     reconcile_chain_structure: hang each target chain under the mirror of
         its source's parent (MIRROR_JOINTS)
+    mark_stray_nodes: rename joints no rig part can own to '<name>_delN'
     roll_chain: interactively roll one chain about its aim axis
     rignames_from_selection: the RIGPARTS of every selected joint (UI)
     rigname_from_selection: resolve the RIGPART of the selected joint (UI)
@@ -128,6 +138,11 @@ _EPS = 1e-9
 # they can be selected and dealt with by hand. Setup deletes no joint, so
 # whatever it had to refuse has to stay findable after the run.
 REVIEW_SET = 'rig_tail_review_SET'
+
+# Suffix marking a joint no rig part can own. Renaming rather than deleting
+# keeps the node and everything wired to it recoverable, while taking the
+# name out of the convention so detection stops competing with it.
+STRAY_SUFFIX = '_del'
 
 
 def _cst(name):
@@ -193,9 +208,10 @@ def setup_tails(root=None, dry_run=None):
         if not found:
             logger.warning('Setup: no BN joints found for any RIGPART')
             return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
-                    'created': [], 'reparented': [], 'unresolved': [],
-                    'duplicates': [], 'missing_chains': list(_active()),
-                    'missing_geo': [], 'excluded': rt_cache.excluded_parts()}
+                    'created': [], 'marked': [], 'reparented': [],
+                    'unresolved': [], 'duplicates': [],
+                    'missing_chains': list(_active()), 'missing_geo': [],
+                    'excluded': rt_cache.excluded_parts()}
 
         excluded = rt_cache.excluded_parts()
         if excluded:
@@ -204,6 +220,14 @@ def setup_tails(root=None, dry_run=None):
 
         preview = dry_run if dry_run is not None \
             else bool(_cst('MIRROR_DRYRUN'))
+
+        # Marked before the roster is resolved, because a stray competes for
+        # a rig part's name: taking it out of the convention is what lets
+        # the part below resolve to one chain instead of being held back.
+        with timer.phase('strays'):
+            marked = mark_stray_nodes(preview)
+        if marked and not preview:
+            found = rt_cleanup.detect_joints_bn()
 
         # Settled before anything acts on a chain: every step below resolves
         # one chain per rig part, and orienting, reparenting or mirroring
@@ -269,6 +293,7 @@ def setup_tails(root=None, dry_run=None):
                 rt_maya.rebaseline_skin(rigname)
 
         result['created'] = created
+        result['marked'] = marked
         result['reparented'] = structure['reparented']
         result['unresolved'] = structure['unresolved']
         result['duplicates'] = ambiguous
@@ -1145,6 +1170,133 @@ def _live_path(node):
         return found[0]
     found = cmds.ls(rt_maya.leaf(node), long=True) or []
     return found[0] if len(found) == 1 else None
+
+
+def mark_stray_nodes(dry_run, skip=None):
+    '''
+    Rename joints no rig part can own to '<name>_delN'.
+
+    Two kinds, both left behind by a mirror that could not finish:
+
+        UNIQUIFIED  Maya answers a name already in use by appending digits,
+            so a second attempt at 'BN_L_wing_base_jnt' becomes
+            'BN_L_wing_base_jnt1'. The trailing digits put it outside the
+            naming template, which is the only lens this tool has, so
+            detection cannot see it - and a part it cannot see reads as
+            missing, which is what had every run leave one more copy behind.
+        CROSS-SIDE  a chain whose rig part names one side while an ancestor
+            names the other, 'BN_L_finridge_jnt' under 'BN_R_fin_jnt'. The
+            two sides are separate by construction, so this cannot be
+            anything but damage.
+
+    Renamed, not deleted. A joint that looks like garbage may still be
+    carrying skin, a constraint or an artist's unfinished work, and a run
+    is one undo chunk holding hundreds of other operations - the cost of
+    being wrong is far worse than the clutter. The rename is reversible,
+    reports what it touched, and is enough on its own: it takes the name
+    out of the convention, so a rig part two chains answered to resolves to
+    one and the run carries on instead of holding that part back.
+
+    Scoped to the active parts, so an excluded part's joints are left alone
+    like the rest of its skeleton.
+
+    Arguments
+        dry_run (bool): only log the intended renames, rename nothing.
+        skip (set): rignames to leave alone this run.
+
+    Return
+        list: [(old leaf, new leaf, reason), ...] for what was renamed.
+    '''
+    mode = ' [dry-run]' if dry_run else ''
+    strays = _stray_joints(skip)
+    marked = []
+    # Deepest first: renaming a parent rewrites its descendants' paths, and
+    # the shallower entries of this same scan would go stale.
+    for node in sorted(strays, key=lambda p: -p.count('|')):
+        reason = strays[node]
+        old = rt_maya.leaf(node)
+        new = _stray_name(old)
+        logger.warning(f'Setup{mode}: {old} is {reason}, marking it {new}')
+        if dry_run:
+            marked.append((old, new, reason))
+            continue
+        try:
+            renamed = cmds.rename(node, new)
+        except (RuntimeError, ValueError) as err:
+            logger.error(f'Setup: could not mark {old} as {new}: {err}')
+            continue
+        _flag_for_review([renamed])
+        marked.append((old, new, reason))
+    if marked and not dry_run:
+        logger.warning(f'Setup: marked {len(marked)} stray joint(s) with '
+                       f"'{STRAY_SUFFIX}' and added them to '{REVIEW_SET}'. "
+                       'Nothing was deleted - check them, then delete them '
+                       'yourself once you are satisfied.')
+    return marked
+
+
+def _stray_joints(skip=None):
+    '''
+    Joints that carry a rig part's name but that no rig part can own.
+
+    One scene scan answers for the whole roster, and each node comes back
+    with the reason it was picked so the caller can report it without
+    measuring twice.
+
+    Arguments
+        skip (set): rignames to leave alone this run.
+
+    Return
+        dict: {joint DAG path: reason}.
+    '''
+    skip = skip or set()
+    active = {p for p in _active() if p not in skip}
+    reasons = {}
+    for node in cmds.ls(type='joint', long=True) or []:
+        leaf = rt_maya.leaf(node)
+        rigname = rt_naming.get_rigname(leaf, rt_constants.JOINT)
+        if not rigname:
+            # Only a name the convention would otherwise have accepted:
+            # anything else in the scene is somebody else's node.
+            base = leaf.rstrip('0123456789')
+            owner = rt_naming.get_rigname(base, rt_constants.JOINT) \
+                if base != leaf else None
+            if owner in active:
+                reasons[node] = (f"'{base}' with Maya's uniquifying suffix, "
+                                 'which no naming template matches')
+            continue
+        if rigname not in active:
+            continue
+        side = _side_of(rigname)
+        if not side:
+            continue
+        for ancestor in node.split('|')[1:-1]:
+            other = _side_of(rt_naming.get_rigname(ancestor,
+                                                   rt_constants.JOINT))
+            if other and other != side:
+                reasons[node] = (f'a {side} joint hanging under {ancestor} '
+                                 f'on the {other} side')
+                break
+    return reasons
+
+
+def _side_of(rigname):
+    ''' The 'L'/'R' side token of a rig part name, or None for a center or
+    unsided one. '''
+    match = _SIDE_RE.match(rigname) if rigname else None
+    return match.group(1).upper() if match else None
+
+
+def _stray_name(leaf):
+    '''
+    A free '<name>_delN' for a stray, with Maya's own digits stripped first
+    so the mark reads against the name the joint was trying to take.
+    '''
+    base = leaf.rstrip('0123456789') or leaf
+    index = 1
+    while cmds.objExists(f'{base}{STRAY_SUFFIX}{index}'):
+        index += 1
+    return f'{base}{STRAY_SUFFIX}{index}'
 
 
 def _report_duplicate_chains(dry_run):

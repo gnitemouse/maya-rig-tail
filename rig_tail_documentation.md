@@ -462,16 +462,31 @@ from tearing a nested part off the rig. A target whose mirrored parent
 cannot be named unambiguously is left where it is and reported — the source
 side's own parent is a worse home than the wrong one the chain already has.
 
-### Ambiguous chains
+### Strays and ambiguous chains
 
-A rig part name that more than one BN chain answers to cannot be resolved by
-Setup: the pick would be arbitrary, and orienting, reparenting or mirroring
-the wrong chain of a pair leaves correct-looking joints on a chain nothing
-is bound to. Such a part is held back from the whole run — as if excluded —
-and every candidate chain is put in the `rig_tail_review_SET` Maya set to be
-found and sorted out by hand. Setup deletes neither, since either may be the
-one carrying the skin. The Setup dialog reports this as an incomplete run
-rather than a successful one.
+`mark_stray_nodes` runs first and renames any joint that carries a rig
+part's name but that no rig part can own, to `<name>_delN`. Two kinds:
+
+| Kind | Example | Why it cannot be owned |
+|------|---------|------------------------|
+| Uniquified | `BN_L_wing_base_jnt1` | Maya appends digits to a name already in use. The naming template is the only lens the tool has and it rejects the trailing digits, so detection cannot see the joint — and a part it cannot see reads as missing, which is what had every run leave one more copy behind. |
+| Cross-side | `BN_L_finridge_jnt` under `BN_R_fin_jnt` | The two sides are separate by construction, so a left chain hanging off a right one is damage, not a choice. |
+
+Renamed, never deleted. A joint that looks like garbage may still carry
+skin, a constraint, or unfinished work, and a run is a single undo chunk
+holding hundreds of operations — being wrong costs far more than the
+clutter. The rename is reversible, reported, and enough on its own: it
+takes the name out of the convention, so a rig part that two chains
+answered to resolves to one and the run carries on. Marked nodes go into
+`rig_tail_review_SET` for you to delete once satisfied.
+
+What is left after that is a genuine ambiguity — two chains both validly
+named for one rig part. Setup cannot resolve it: the pick would be
+arbitrary, and orienting, reparenting or mirroring the wrong chain of a
+pair leaves correct-looking joints on a chain nothing is bound to. That
+part is held back from the whole run, as if excluded, and every candidate
+goes into the review set. The Setup dialog reports this as an incomplete
+run rather than a successful one.
 
 `roll_chain` is an interactive per-chain fix-up with no constant. It rolls a
 single chain about its aim axis to turn a correctly-oriented but wrong-facing
@@ -938,6 +953,7 @@ The Setup phase: orient, mirror and roll the BN skeleton before the build.
 | `mirror_chains(dry_run, do_orient, do_positions, skip=None)` | Mirror orientation and/or positions across pairs |
 | `create_missing_chains(dry_run, detected=None, skip=None)` | Build a target side that has no joints |
 | `reconcile_chain_structure(dry_run, skip=None)` | Hang each target chain under the mirror of its source's parent |
+| `mark_stray_nodes(dry_run, skip=None)` | Rename joints no rig part can own to `<name>_delN` |
 | `roll_chain(rigname, degrees)` | Roll one chain about its aim axis |
 | `aim_frames(positions, aim_axis, up_axis, up_ref=None)` | Per-joint world frames for a chain |
 | `mirror_frames(src_matrices, axis, aim_axis, up_axis)` | Reflect a set of frames across the plane |

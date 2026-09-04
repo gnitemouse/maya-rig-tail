@@ -882,6 +882,7 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # so repeating it here only buries the counts that matter.
         counts = [
             (result.get('created'), 'chain(s) created'),
+            (result.get('marked'), f"stray(s) marked '{rt_setup.STRAY_SUFFIX}'"),
             (result.get('reparented'), 'chain(s) reparented'),
             (result.get('duplicates'), 'ambiguous, skipped'),
             (result.get('unresolved'), 'chain(s) not reconciled'),
