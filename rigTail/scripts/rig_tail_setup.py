@@ -220,6 +220,9 @@ def setup_tails(root=None, dry_run=None):
 
         preview = dry_run if dry_run is not None \
             else bool(_cst('MIRROR_DRYRUN'))
+        # A preview reasons as though the roster had grown - adoption feeds
+        # the pairing every later step reads - and hands it back untouched.
+        roster = list(rt_constants.RIGPARTS)
 
         # Marked before the roster is resolved, because a stray competes for
         # a rig part's name: taking it out of the convention is what lets
@@ -327,6 +330,8 @@ def setup_tails(root=None, dry_run=None):
         result['missing_chains'] = missing_chains
         result['missing_geo'] = missing_geo
         result['excluded'] = excluded
+        if preview:
+            rt_constants.RIGPARTS[:] = roster
         return result
 
 
@@ -830,15 +835,16 @@ def _adopt_existing_target(target, source, dry_run):
     '''
     if target in rt_constants.RIGPARTS:
         return False
-    if dry_run:
-        logger.info(f'Mirror [dry-run]: would add {target} to RIGPARTS '
-                    f'(implied by {source}; its chain is already in the '
-                    'scene, so it would be paired rather than created)')
-        return False
+    # Adopted even in a preview, because pairing reads the roster: without
+    # the name there are no L/R pairs and the dry run reports nothing about
+    # the mirror at all, which is the part most worth previewing. setup_tails
+    # puts the roster back afterwards.
     rt_constants.RIGPARTS.append(target)
-    logger.info(f'Mirror: added {target} to RIGPARTS (implied by {source}; '
-                'its chain is already in the scene, so it is paired rather '
-                'than created)')
+    mode = ' [dry-run]' if dry_run else ''
+    would = 'would be added to' if dry_run else 'added to'
+    logger.info(f'Mirror{mode}: {target} {would} RIGPARTS (implied by '
+                f'{source}; its chain is already in the scene, so it is '
+                'paired rather than created)')
     return True
 
 
