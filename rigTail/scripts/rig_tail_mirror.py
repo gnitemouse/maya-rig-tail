@@ -67,6 +67,7 @@ Functions:
     aim_axis: the chain's aim axis as a signs key ('X'/'Y'/'Z')
     aim_reversed: whether a part's aim runs back up its own chain
     behavior: the validated MIRROR_BEHAVIOR
+    clear_sign_cache: drop the per-build memo of the axis measurement
 '''
 
 import math
@@ -94,11 +95,11 @@ MIRROR_TOLERANCE = 0.5
 # Every axis raw. Returned whole, so callers may not mutate it.
 NO_MIRROR = {'X': 1.0, 'Y': 1.0, 'Z': 1.0}
 
-# rigname -> the cosines _axis_cosines measured, for the current build.
-# The measurement is the same every time it is asked inside one build (see
-# _axis_rows: it reads the captured REST matrix precisely so the answer
-# cannot depend on when it is asked), and eight or so call sites per part
-# ask it - two Maya commands per joint per side, each time.
+# rigname -> the cosines _axis_cosines measures, for the current build.
+# Safe to hold because _axis_rows reads the captured REST matrix, so the
+# answer does not depend on when in the build it is asked. Worth holding
+# because every control and every effect asks for it separately, at two
+# Maya commands per joint per side.
 _COSINE_CACHE = {}
 
 # 'mirror' is the default because it mirrors all three ROTATIONS, and every
@@ -143,9 +144,7 @@ def _axis_cosines(rigname):
     Mean cos between each of this part's local axes and the reflection of
     its L/R partner's matching axis, over the whole chain.
 
-    Memoized for the build (see clear_sign_cache): every consumer of a sign
-    asks for the whole chain's measurement, and they ask per control and per
-    effect rather than once per part.
+    Memoized per rig part for the current build; clear_sign_cache drops it.
 
     The one measurement every answer here is built on: -1 is a '-' axis in
     the +aim/+roll/+up notation, +1 a '+' one. Averaged over the chain

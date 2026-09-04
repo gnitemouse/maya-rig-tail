@@ -428,7 +428,8 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
     the reuse tests can only answer the same way for all of them and the
     fresh loop skips them. It also skips the match/bake pair, which on two
     groups created at identity matches what already matches and bakes an
-    identity; the unlock that pair owes is made directly instead.
+    identity, and creates each group nested and unlocked outright rather
+    than placing and unlocking it afterwards.
 
     Arguments
         rigname (str): Name of rig component
@@ -484,16 +485,10 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
                 sdk_grp = rt_naming.fstr(rigname, rt_constants.SDK_JNT, typ, NN)
 
             if fresh:
-                # Created straight under the layer above rather than at the
-                # world and reparented: a new group is at identity, so this
-                # lands it exactly where the relative parent below used to.
-                #
-                # And created UNLOCKED. create_group locks translate/rotate/
-                # scale, which every layer here then has to have unlocked
-                # again before falloff_rotation can connect onto rotate - a
-                # locked plug refuses the connection. Nothing reads the lock
-                # in between, so the pair was two API passes over twelve
-                # plugs to arrive where not locking arrives directly.
+                # Nested at creation and left unlocked. A new group sits at
+                # identity, so creating it under the layer above places it
+                # there outright; and falloff_rotation connects onto rotate
+                # further down, which a locked plug refuses.
                 kwargs = {'p': prev_sdk_grp} if prev_sdk_grp else {}
                 sdk_grp = cmds.createNode('transform', n=sdk_grp, s=1, ss=1,
                                           **kwargs)
@@ -523,10 +518,10 @@ def create_sdk_groups(rigname, joints, typ=rt_constants.TYPE_FK):
                                          cb=True, l=True)
 
             if prev_sdk_grp: # Nest current SDK group under previous
+                # Only a reused group moves; a fresh one is already nested
                 if not fresh:
                     rt_maya.parent_to(sdk_grp, prev_sdk_grp, r=True)
                     rt_maya.match_transform(sdk_grp, prev_sdk_grp, moc=1)
-                # fresh groups were created under prev_sdk_grp already
             else:
                 first_sdk_grp = sdk_grp
             prev_sdk_grp = sdk_grp

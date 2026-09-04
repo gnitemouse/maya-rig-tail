@@ -277,8 +277,8 @@ def cleanup_rig(fk, ik):
 
     # Clear control cache
     rt_connect.clear_control_cache()
-    # Same reason: the mirror measurement is memoized for one build, and
-    # Setup can re-orient a chain between two builds of a session
+    # The mirror measurement is memoized per build, and Setup can re-orient
+    # a chain between two builds of one session
     rt_mirror.clear_sign_cache()
     # Validate cache
     rt_cache.validate_cache()
