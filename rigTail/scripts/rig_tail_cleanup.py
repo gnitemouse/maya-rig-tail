@@ -1728,12 +1728,20 @@ def detect_joints_fk_ik(rigname):
     empty and re-duplicates both chains for every part, over a scene that
     already holds them.
 
-    The walk is the validation of the chain's SHAPE: get_joint_chain
-    follows first-child from the root and stops where the chain stops
-    being this rig part's, so a chain missing a joint, carrying an extra
-    one, or reparented comes back the wrong length and fails the count
-    test in fk_ik_match_bn. Whether the chain is still USABLE - on BN, and
-    oriented with it - is that function's question, not this one's.
+    NOT a first-child walk. An FK chain is not a chain in the DAG:
+    create_sdk_groups nests NUM_CTRL_FK + 1 transform groups between every
+    pair of FK joints, so a joint's direct children are groups and a
+    first-child joint walk stops on the root. The whole subtree is
+    collected instead and filtered to this rig part's own joints, which
+    reads an FK stack and a bare IK chain the same way.
+
+    So the collection does NOT vouch for the hierarchy - a joint reparented
+    within the subtree still comes back. What it does catch is a joint
+    missing or added, through the count test in fk_ik_match_bn; a joint
+    moved or turned is that function's position and orientation tests.
+
+    Ordered by the index in each joint's name rather than by traversal,
+    since rig_tail_matrix pairs these lists against BN one to one.
 
     Short names, matching what create_rename_joints stores; guard_unique_
     rigparts has already refused the build if a rig part is carried by
@@ -1749,9 +1757,18 @@ def detect_joints_fk_ik(rigname):
         root = rt_naming.fstr(rigname, rt_constants.JOINT, typ, 0)
         if not cmds.objExists(root):
             continue
-        chain = [p.split('|')[-1] for p in rt_joint.get_joint_chain(root)]
+        chain = []
+        for jnt in cmds.ls(root, dag=True, type='joint') or []:
+            leaf = jnt.split('|')[-1]
+            if rt_naming.get_rigname(leaf, rt_constants.JOINT) != rigname:
+                continue
+            index = rt_naming.get_index_from_name(leaf)
+            # The end joint is not part of the chain the build indexes
+            if index == 'ee' or index is None:
+                continue
+            chain.append((index, leaf))
         if chain:
-            cache[rigname] = chain
+            cache[rigname] = [leaf for _, leaf in sorted(chain)]
             logger.debug(f'{rigname}: {len(chain)} {typ} joints recovered '
                          f'from the scene')
 
