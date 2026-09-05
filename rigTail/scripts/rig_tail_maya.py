@@ -2336,7 +2336,7 @@ def rebaseline_skin(rigname, tolerance=None):
     # or not it is named the way the convention asks.
     for skincluster in skinclusters_for_joints(joints):
         indices = skin_influence_indices(skincluster)
-        updated, max_drift = 0, 0.0
+        written, max_drift = [], 0.0
         for jnt in joints:
             index = indices.get(_leaf(jnt))
             if index is None:
@@ -2348,8 +2348,13 @@ def rebaseline_skin(rigname, tolerance=None):
                 continue
             cmds.setAttr(plug, cmds.getAttr(f'{jnt}.worldInverseMatrix[0]'),
                          type='matrix')
-            updated += 1
-        _reset_bindpose(skincluster, joints)
+            written.append(jnt)
+        updated = len(written)
+        # Only what was rewritten: a joint whose rest pose still holds has
+        # nothing to re-stamp, and every name handed over is a name the
+        # pose has to be searched for.
+        if written:
+            _reset_bindpose(skincluster, written)
         total += updated
         if updated:
             logger.info(f'{rigname}: re-baselined {updated} influence(s) on '
@@ -2367,6 +2372,14 @@ def _reset_bindpose(skincluster, joints):
     so 'Go to Bind Pose' and any later rebind agree with the skinCluster.
     Best-effort: a missing or shared bindPose is not worth failing over.
 
+    Asked only about the joints the pose actually holds. A dagPose lists the
+    influences a mesh was bound with, which is rarely the whole chain and
+    never the chains bound later, and naming one it does not hold makes Maya
+    print 'Joint X is not in the pose' - an error it prints rather than
+    raises, so no amount of catching quiets it. Since a joint outside the
+    pose has nothing to re-stamp, the fix and the silence are the same
+    thing.
+
     Arguments:
         skincluster (str): skinCluster node
         joints (list): Joints that moved
@@ -2374,8 +2387,13 @@ def _reset_bindpose(skincluster, joints):
     poses = cmds.listConnections(f'{skincluster}.bindPose',
                                  s=True, d=False) or []
     for pose in poses:
+        members = set(cmds.listConnections(f'{pose}.members',
+                                           s=True, d=False) or [])
+        held = [j for j in joints if _leaf(j) in {_leaf(m) for m in members}]
+        if not held:
+            continue
         try:
-            cmds.dagPose(*joints, reset=True, n=pose)
+            cmds.dagPose(*held, reset=True, n=pose)
         except Exception as err:
             logger.debug(f"Could not reset bindPose '{pose}': {err}")
 
