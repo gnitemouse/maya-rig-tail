@@ -1529,14 +1529,27 @@ def _reparent(node, parent):
     '''
     Move a joint under a new parent without moving it in world.
 
-    Maya folds the change of parent frame into jointOrient, so a bound mesh
-    is not dragged by the move; the orient/mirror pass rewrites the frame
-    afterwards anyway.
+    Maya compensates the change of parent frame only when it can WRITE the
+    joint's transform. A BN joint of a built rig cannot be written: its
+    translate and rotate are driven through the offsetParentMatrix network,
+    so the compensation is dropped and the joint snaps onto its new parent -
+    which is how an already-rigged tail ended up at its fin's origin having
+    been asked only to hang somewhere else.
+
+    So the drivers come off first, exactly as _apply_frames takes them off
+    before writing a frame, and the world matrix is put back afterwards
+    rather than trusted to survive. The build rebuilds the network; the
+    outgoing worldMatrix that feeds a skinCluster is left alone.
     '''
+    world = cmds.xform(node, q=True, ws=True, matrix=True)
+    rt_maya.disconnect_all(node, source=True, destination=False)
+    rt_maya.reset_opm(node)
     if parent:
         cmds.parent(node, parent)
     else:
         cmds.parent(node, world=True)
+    live = _live_path(node) or node
+    cmds.xform(live, ws=True, matrix=world)
 
 
 def _live_path(node):
@@ -1659,6 +1672,14 @@ def _stray_joints(skip=None):
         side = _side_of(rigname)
         if not side:
             continue
+        # A tip the source side does not keep. The mirror gives a target the
+        # '_ee_' its source has; the other direction is this - a leftover
+        # from when the chain was a leaf, still answering to the rig part
+        # whose real tip is now a child chain.
+        if rt_maya.is_end_joint(node) and _source_lacks_end_joint(rigname):
+            reasons[node] = (f'an end joint for {rigname}, where its mirror '
+                             'source keeps none')
+            continue
         for ancestor in node.split('|')[1:-1]:
             other = _side_of(rt_naming.get_rigname(ancestor,
                                                    rt_constants.JOINT))
@@ -1779,6 +1800,41 @@ def _mark_one(node, reason):
         return None
     _flag_for_review([renamed])
     return (old, new, reason, node)
+
+
+def _source_lacks_end_joint(rigname):
+    '''
+    Whether this rig part mirrors a source that has no end joint of its own.
+
+    Asked by NAME rather than by walking the source chain: the '_ee_' a rig
+    part would own is named by the same template on either side, so its
+    absence answers the question without resolving a chain that may itself
+    be ambiguous.
+
+    Only the target side of a pair can answer True - a source part has
+    nothing to be measured against.
+
+    Arguments
+        rigname (str): the rig part the end joint belongs to.
+
+    Return
+        bool: True when the mirrored side keeps no end joint here.
+    '''
+    side = _side_of(rigname)
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    match = _SIDE_RE.match(rigname or '')
+    if not match or not side or side == source_side:
+        return False
+    letter = source_side.lower() if match.group(1).islower() else source_side
+    source = f'{letter}_{match.group(2)}'
+    # The source part has to be there at all; a name with no chain behind it
+    # says nothing about what its tip should be.
+    if not (cmds.ls(rt_naming.fstr(source, rt_constants.JOINT,
+                                   rt_constants.TYPE_BN, ''), long=True)
+            or rt_constants.JOINTS_BN.get(source)):
+        return False
+    return not cmds.objExists(rt_naming.fstr(source, rt_constants.JOINT,
+                                             rt_constants.TYPE_BN, 'ee'))
 
 
 def _side_of(rigname):
