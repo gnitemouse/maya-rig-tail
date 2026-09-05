@@ -56,6 +56,13 @@ def get_joint_chain(start, end=None):
     while True:
         children = cmds.listRelatives(j, typ='joint', c=True,
                                       fullPath=True) or []
+        # A '_del' joint is one Setup could not attribute to any rig part.
+        # Marking works by taking the name out of the convention, so
+        # _same_rigpart reads it as a hand-named chain and would weld the
+        # discarded joint onto whatever it still hangs under - which is how
+        # a one-joint wing came back as two and was aim-oriented at rubbish.
+        # Filtered rather than stopped at, so a real sibling is still found.
+        children = [c for c in children if not rt_maya.is_marked_stray(c)]
         if not children:
             break
         j = children[0]

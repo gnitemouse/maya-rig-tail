@@ -387,6 +387,25 @@ def is_end_joint(node):
     return '_ee_' in leaf(node)
 
 
+def is_marked_stray(node):
+    '''
+    Whether a node carries the Setup phase's '_del' mark, by its own name.
+
+    The mark says no rig part owns this joint. It has to be recognized
+    wherever a name is read, because marking works by taking the name OUT
+    of the convention - and an unreadable name is read as a hand-named
+    chain everywhere else, which would walk straight through the joint it
+    was meant to exclude.
+
+    Arguments
+        node (str): Node name or DAG path
+
+    Return
+        bool: True when the node's own name carries the mark
+    '''
+    return rt_constants.STRAY_SUFFIX in leaf(node)
+
+
 def remove(node):
     """
     Delete Maya object safely, handling connected nodes.

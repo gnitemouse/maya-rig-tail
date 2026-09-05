@@ -141,8 +141,9 @@ REVIEW_SET = 'rig_tail_review_SET'
 
 # Suffix marking a joint no rig part can own. Renaming rather than deleting
 # keeps the node and everything wired to it recoverable, while taking the
-# name out of the convention so detection stops competing with it.
-STRAY_SUFFIX = '_del'
+# name out of the convention so detection stops competing with it. Held in
+# rig_tail_constants because the chain walk has to recognize it too.
+STRAY_SUFFIX = rt_constants.STRAY_SUFFIX
 
 
 def _cst(name):
@@ -658,11 +659,16 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
             # mirrored source-end position when positions are mirrored,
             # otherwise pin it to where it started (never the swung position).
             ee_pos = tgt_ee_pos
-            if do_positions:
-                src_ee = _find_end_joint(src[-1])
-                if src_ee:
-                    sp = cmds.xform(src_ee, q=True, ws=True, translation=True)
-                    ee_pos = _reflect(sp, keep)
+            src_ee = _find_end_joint(src[-1])
+            if do_positions and src_ee:
+                sp = cmds.xform(src_ee, q=True, ws=True, translation=True)
+                ee_pos = _reflect(sp, keep)
+            # A source tip the target never had: _orient_end_joint only
+            # aligns an end joint that exists, and only a chain built from
+            # scratch gets one made for it, so a target that grew children
+            # where the source keeps a tip would never acquire one.
+            if src_ee and not _find_end_joint(tgt[-1]):
+                _mirror_end_joint(target, tgt[-1], src_ee, ee_pos, dry_run)
             _orient_end_joint(tgt[-1], frames[-1], dry_run, position=ee_pos)
 
             if not dry_run:
@@ -2339,6 +2345,48 @@ def _end_joint_position(parent):
     if not ee:
         return None
     return cmds.xform(ee, q=True, ws=True, translation=True)
+
+
+def _mirror_end_joint(rigname, parent, src_ee, position, dry_run):
+    '''
+    Give a mirrored chain the end joint its source has and it lacks.
+
+    An '_ee_' is excluded from the chain, so nothing in the orient or mirror
+    pass creates one: _build_mirror_chain makes it for a chain built from
+    scratch, and _orient_end_joint only aligns one already there. A target
+    that acquired children where the source kept a tip therefore stays
+    without a tip forever, and the two sides never agree.
+
+    Arguments
+        rigname (str): rig part the end joint belongs to.
+        parent (str): last real joint of the target chain.
+        src_ee (str): the source chain's end joint, for its channels.
+        position (list): world position for the new joint.
+        dry_run (bool): only log, create nothing.
+
+    Return
+        str or None: the new end joint, None on a dry run or a failure.
+    '''
+    name = rt_naming.fstr(rigname, rt_constants.JOINT,
+                          rt_constants.TYPE_BN, 'ee')
+    if dry_run:
+        logger.info(f'  [dry-run] {name}: end joint created under '
+                    f'{rt_maya.leaf(parent)} to match {rt_maya.leaf(src_ee)}')
+        return None
+    if cmds.objExists(name):
+        logger.warning(f'Mirror: {rigname} has no end joint and {name} is '
+                       'already taken, so none was created. Rename or '
+                       'delete that node.')
+        return None
+    try:
+        ee = _create_joint(name, parent)
+    except (RuntimeError, ValueError) as err:
+        logger.error(f'Mirror: could not create {name}: {err}')
+        return None
+    _copy_joint_attrs(src_ee, ee)
+    cmds.xform(ee, ws=True, translation=position)
+    logger.info(f'Mirror: created {name} to match {rt_maya.leaf(src_ee)}')
+    return ee
 
 
 def _orient_end_joint(parent, frame, dry_run, position=None):

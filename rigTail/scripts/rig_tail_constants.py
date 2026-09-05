@@ -197,6 +197,14 @@ ORIENT_UP_AXIS = 'z'
 #       overwrites any mirrored or hand-rolled orientation.
 ORIENT_UP_MODE = 'cascade'
 
+# Suffix the Setup phase appends to a joint no rig part can own, in place
+# of deleting it (rig_tail_setup.mark_stray_nodes). Defined here rather
+# than there because the chain walk has to recognize it too, and
+# rig_tail_setup.py is an optional install: a marked joint carries no
+# readable rig part name, and an unreadable name is otherwise taken as a
+# hand-named chain to keep walking through.
+STRAY_SUFFIX = '_del'
+
 # Max per-joint world position drift (scene units) still treated as
 # "unchanged" on re-rig. Building the rig drives joints through the OPM
 # network, which perturbs world positions by float noise; drift within
