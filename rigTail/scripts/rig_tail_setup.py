@@ -958,6 +958,13 @@ def _joint_counts_differ(source_root, target_root, joints):
         for node in joints:
             if node != root and not node.startswith(f'{root}|'):
                 continue
+            # An '_ee_' is not a chain member - get_joint_chain stops before
+            # it, _build_mirror_chain creates it and _orient_end_joint aligns
+            # it. Counting one would read a side that is merely missing its
+            # tip marker as a side with no joint to correspond, and send a
+            # chain the mirror could finish off to be rebuilt instead.
+            if rt_maya.is_end_joint(node):
+                continue
             rigname = rt_naming.get_rigname(rt_maya.leaf(node),
                                             rt_constants.JOINT)
             if rigname:
