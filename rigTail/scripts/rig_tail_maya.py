@@ -2273,6 +2273,33 @@ def _rest_drift(bind_pre, joint):
     return pos, rot
 
 
+def skinclusters_for_joints(joints):
+    '''
+    Every skinCluster these joints drive, found through the connection
+    rather than through the mesh's name.
+
+    A joint reaches its skinCluster by worldMatrix, so the deformer can be
+    named anything and the mesh can be named anything. That matters because
+    the naming convention is what the geometry lookup depends on, and a
+    mesh that does not follow it is exactly the mesh nobody will re-baseline
+    - Setup moves the joints out from under a skin it could not find, and
+    the model tears.
+
+    Arguments:
+        joints (list): Joints to trace.
+
+    Return:
+        list: skinCluster nodes, in the order first met.
+    '''
+    found = []
+    for jnt in joints:
+        for node in cmds.listConnections(jnt, type='skinCluster',
+                                         source=False, destination=True) or []:
+            if node not in found:
+                found.append(node)
+    return found
+
+
 def rebaseline_skin(rigname, tolerance=None):
     '''
     Accept the joints' CURRENT pose as the skin's rest pose.
@@ -2304,10 +2331,10 @@ def rebaseline_skin(rigname, tolerance=None):
         tolerance = rt_constants.JOINT_POS_TOLERANCE
 
     total = 0
-    for geo in find_geometry_for_rigname(rigname):
-        skincluster = find_skincluster(geo)
-        if not skincluster:
-            continue
+    # Traced from the joints, not from the mesh names: these joints are
+    # about to move, so whatever they deform has to be re-baselined whether
+    # or not it is named the way the convention asks.
+    for skincluster in skinclusters_for_joints(joints):
         indices = skin_influence_indices(skincluster)
         updated, max_drift = 0, 0.0
         for jnt in joints:
@@ -2326,7 +2353,7 @@ def rebaseline_skin(rigname, tolerance=None):
         total += updated
         if updated:
             logger.info(f'{rigname}: re-baselined {updated} influence(s) on '
-                        f"'{_leaf(geo)}' (max move {max_drift:.4f}); "
+                        f"'{_leaf(skincluster)}' (max move {max_drift:.4f}); "
                         f'skin weights kept')
         else:
             logger.debug(f"{rigname}: '{_leaf(geo)}' rest pose unchanged, "

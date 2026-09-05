@@ -250,6 +250,10 @@ class RigTailSetupUI(QtWidgets.QDialog):
         for chk in (self.chk_orient, self.chk_mirror_orient,
                     self.chk_mirror_joints, self.chk_dryrun):
             self.style_checkbox(chk)
+            # The summary reads the boxes, so it has to be told when one
+            # moves. The dropdowns already refresh it on change; without
+            # this the box only caught up when one of THOSE was touched.
+            chk.toggled.connect(self.update_display)
 
         # Up Mode sits in the Orient Joints row, and is disabled alongside
         # it: it only picks where that operation takes its up reference.

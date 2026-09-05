@@ -314,11 +314,19 @@ def setup_tails(root=None, dry_run=None):
         with timer.phase('orient/mirror'):
             result = run_setup(dry_run=dry_run, skip=skip)
 
-        # Now that the joints have moved, tell each preserved skinCluster
+        # Now that the joints have moved, tell each skinCluster they drive
         # that this is its rest pose. Until this runs the mesh is dragged
         # out of shape by the re-orient.
+        #
+        # Every part this run touched, not only those the name-based unbind
+        # returned: a mesh that does not follow the naming convention is
+        # never matched, so it was never unbound and never re-baselined
+        # either - the joints moved out from under a skin nothing had
+        # found, which is the one case that tears the model. Tracing the
+        # skinCluster from the joints reaches it whatever it is called, and
+        # a part that did not move writes nothing.
         with timer.phase('rebaseline'):
-            for rigname in skinned:
+            for rigname in sorted(set(active) | set(skinned)):
                 rt_maya.rebaseline_skin(rigname)
 
         result['created'] = created
