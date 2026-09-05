@@ -1602,6 +1602,14 @@ def bn_start_candidates():
         leaf = parts[-1]
         if rt_constants.TYPE_BN not in leaf:
             continue
+        # An '_ee_' marks a chain's tip and can never be its root. One left
+        # hanging under a joint of ANOTHER rig part - a wing's tip under the
+        # fin - passes the parent test below, and would be handed back as
+        # that rig part's whole chain: the mirror then reads the tip's
+        # parent as where the part belongs and reparents the real chain
+        # under it.
+        if rt_maya.is_end_joint(leaf):
+            continue
         rigname = rt_naming.get_rigname(leaf, rt_constants.JOINT)
         if not rigname:
             continue

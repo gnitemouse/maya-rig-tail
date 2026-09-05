@@ -1696,6 +1696,11 @@ def _stray_joints(skip=None):
 
     for node in joints:
         leaf = rt_maya.leaf(node)
+        # The Setup phase owns the BN skeleton and nothing else. An FK or IK
+        # joint is the build's, rebuilt with it, and renaming one takes a
+        # node out from under a rig that is still wired to it.
+        if rt_constants.TYPE_BN not in leaf:
+            continue
         rigname = rigname_of(leaf)
         if not rigname:
             # Only a name the convention would otherwise have accepted:
