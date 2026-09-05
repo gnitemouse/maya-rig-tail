@@ -2356,8 +2356,8 @@ def rebaseline_skin(rigname, tolerance=None):
                         f"'{_leaf(skincluster)}' (max move {max_drift:.4f}); "
                         f'skin weights kept')
         else:
-            logger.debug(f"{rigname}: '{_leaf(geo)}' rest pose unchanged, "
-                         f'no re-baseline needed')
+            logger.debug(f"{rigname}: '{_leaf(skincluster)}' rest pose "
+                         'unchanged, no re-baseline needed')
     return total
 
 
