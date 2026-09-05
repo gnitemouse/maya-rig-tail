@@ -501,10 +501,15 @@ def orient_chains(dry_run, skip=None):
             frames = aim_frames(positions, aim_axis, up_axis, up_ref)
             logger.info(f'Orient{mode}: aim {rigname} ({len(joints)} jnts, '
                         f'{up_mode})')
+            # Re-aiming a joint swings everything below it. This chain's
+            # own joints keep their positions by construction; a rig part
+            # hanging off one of them has to be held there by hand.
+            held = [] if dry_run else _hold_world(_foreign_children(joints))
             count += _apply_frames(joints, frames, dry_run)
             # The end ('_ee_') joint is excluded from the chain, so align it
             # to the chain's final frame or it keeps the stale orientation.
             _orient_end_joint(joints[-1], frames[-1], dry_run, position=ee_pos)
+            _restore_world(held)
             if not dry_run:
                 _report_twist(rigname, joints, positions, aim_axis, up_axis)
         except Exception as err:
@@ -656,6 +661,10 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
 
             logger.info(f'Mirror{mode}: {source} to {target} '
                         f'(axis={axis}, {what})')
+            # Everything hanging off this chain that it does not own stays
+            # where it is: the mirror describes THIS part's joints, not the
+            # rig parts that happen to hang below them.
+            held = [] if dry_run else _hold_world(_foreign_children(tgt))
             count += _apply_frames(tgt, frames, dry_run, positions=positions)
 
             # End joint: orient to the chain's final frame. Move it to the
@@ -673,6 +682,7 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
             if src_ee and not _find_end_joint(tgt[-1]):
                 _mirror_end_joint(target, tgt[-1], src_ee, ee_pos, dry_run)
             _orient_end_joint(tgt[-1], frames[-1], dry_run, position=ee_pos)
+            _restore_world(held)
 
             if not dry_run:
                 _report_mirror_delta(target, tgt, before)
@@ -1455,6 +1465,56 @@ def _scene_mirror_pairs(skip=None):
             continue
         pairs.append((rigname, target, starts[0], target_starts[0]))
     return pairs
+
+
+def _foreign_children(chain):
+    '''
+    Joint children hanging off a chain that are not part of it.
+
+    Moving or re-aiming a joint carries everything below it, so a chain put
+    right on its own account drags whatever else happens to hang there. A
+    part Setup owns is put back on its own turn, parents being dealt with
+    first; one it does not own - an already-rigged tail under a fin - would
+    simply stay dragged, and it had no reason to move because the fin was
+    corrected.
+
+    The '_ee_' is left out: _orient_end_joint places it deliberately.
+
+    Arguments
+        chain (list): the chain being rewritten, as full DAG paths.
+
+    Return
+        list: joint DAG paths hanging off it that belong to something else.
+    '''
+    own = set(chain)
+    foreign = []
+    for jnt in chain:
+        for child in cmds.listRelatives(jnt, typ='joint', children=True,
+                                        fullPath=True) or []:
+            if child not in own and not rt_maya.is_end_joint(child):
+                foreign.append(child)
+    return foreign
+
+
+def _hold_world(nodes):
+    ''' The world matrices to put back after a move that should not have
+    carried these nodes with it. '''
+    return [(n, cmds.xform(n, q=True, ws=True, matrix=True)) for n in nodes]
+
+
+def _restore_world(held):
+    '''
+    Put each node back on the world matrix it was holding.
+
+    Best-effort per node: one child that cannot be placed must not cost the
+    rest of them their positions.
+    '''
+    for node, matrix in held:
+        try:
+            cmds.xform(node, ws=True, matrix=matrix)
+        except (RuntimeError, ValueError) as err:
+            logger.warning(f'Setup: could not hold {rt_maya.leaf(node)} '
+                           f'where it was: {err}')
 
 
 def _reparent(node, parent):
