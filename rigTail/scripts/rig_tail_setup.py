@@ -606,7 +606,10 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
         logger.info(f'Mirror{mode}: no L/R pairs in RIGPARTS, skipping')
         return 0
     count = 0
-    for source, target in pairs:
+    # Parents first: mirroring positions moves joints, and a joint carries
+    # its children with it, so a child placed on its mirror and then dragged
+    # by its parent needs another whole run to settle.
+    for source, target in _hierarchy_order(pairs):
         if source in skip or target in skip:
             continue
         src = rt_constants.JOINTS_BN.get(source)
@@ -774,7 +777,7 @@ def create_missing_chains(dry_run, detected=None, skip=None):
     # already exists.
     in_scene = set(rt_cleanup.bn_start_candidates())
     created = []
-    for source, target in _creation_order(pairs + implied):
+    for source, target in _hierarchy_order(pairs + implied):
         if source not in detected or source in skip or target in skip:
             continue
         if target in detected or target in in_scene:
@@ -1056,21 +1059,27 @@ def _sideless(rigname):
     return match.group(2) if match else rigname
 
 
-def _creation_order(pairs):
+def _hierarchy_order(pairs):
     '''
-    Order pairs so a chain is created before anything that hangs off it.
+    Order pairs so a chain is dealt with before anything that hangs off it.
 
-    A created chain hangs under the MIRROR of the source's parent, which
-    only works if that mirror already exists. Three chains off one leg -
-    'L_leg' the pivot, 'L_rear_wing' and 'L_rear_eye' below it - therefore
-    have to be built root first, or the two lower ones have nowhere on
-    their own side to hang and are refused. Roster order happens to get
-    this right when the names sort that way and silently wrong when they do
-    not, so it is not left to the roster: the order comes from the SOURCE
-    side's own shape, shallower roots first and siblings in the order they
-    sit under their parent. The created side then reads as the mirror it is
-    in the outliner, rather than in whatever order the rig parts happen to
-    be listed.
+    Creation needs it because a created chain hangs under the MIRROR of the
+    source's parent, which only works if that mirror already exists. Three
+    chains off one leg - 'L_leg' the pivot, 'L_rear_wing' and 'L_rear_eye'
+    below it - have to be built root first, or the two lower ones have
+    nowhere on their own side to hang and are refused.
+
+    Mirroring needs it for the opposite reason: a world matrix is written
+    per rig part, but moving a joint carries its children with it. A child
+    placed on its mirrored position and THEN dragged by its parent's move
+    ends up off it, and the run converges only when a later pass finds the
+    parent already in place - so the pair reads as still moving on a second
+    run of a Setup that changed nothing.
+
+    Roster order happens to get this right when the names sort that way and
+    silently wrong when they do not, so it is not left to the roster: the
+    order comes from the SOURCE side's own shape, shallower roots first and
+    siblings in the order they sit under their parent.
 
     Arguments
         pairs (list): [(source_rigname, target_rigname), ...].
