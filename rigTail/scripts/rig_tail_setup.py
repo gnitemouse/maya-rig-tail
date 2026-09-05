@@ -899,6 +899,17 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
         if _subtree_signature(source_root, joints) == \
                 _subtree_signature(target_root, joints):
             continue
+        # A side whose parts are all there, one joint for one joint, is not
+        # a rebuild: reconciliation puts each chain under the parent the
+        # mirror names and Mirror Joints moves it onto the mirrored
+        # position, which between them repair a shape that is only mis-hung.
+        # Rebuilding is for a target that has no joint to correspond.
+        if not _joint_counts_differ(source_root, target_root, joints):
+            logger.debug(
+                f'Mirror: {rt_maya.leaf(target_root)} is shaped differently '
+                f'from {rt_maya.leaf(source_root)} but has a joint for each '
+                'of its own, so it is reconciled rather than rebuilt')
+            continue
 
         unlisted = sorted(p for p in src_parts if p not in active)
         if unlisted:
@@ -931,6 +942,29 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
         superseded.extend(sorted(tgt_parts))
     return {'superseded': superseded, 'incomplete': incomplete,
             'marked': marked}
+
+
+def _joint_counts_differ(source_root, target_root, joints):
+    '''
+    Whether the two sides disagree about how many joints a rig part has,
+    counting each side's parts by their sideless name.
+
+    The one disagreement no amount of reparenting or mirroring can settle:
+    a chain with nothing on the other side to correspond to, joint for
+    joint, has to be built rather than moved.
+    '''
+    def census(root):
+        counts = {}
+        for node in joints:
+            if node != root and not node.startswith(f'{root}|'):
+                continue
+            rigname = rt_naming.get_rigname(rt_maya.leaf(node),
+                                            rt_constants.JOINT)
+            if rigname:
+                key = _sideless(rigname)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+    return census(source_root) != census(target_root)
 
 
 def _mirror_subtree_roots(candidates):
@@ -1317,18 +1351,11 @@ def reconcile_chain_structure(dry_run, skip=None):
     skip = skip or set()
     mode = ' [dry-run]' if dry_run else ''
     reparented, unresolved = [], []
-    pairs, _ = find_mirror_pairs(_active())
-    for source, target in pairs:
-        if source in skip or target in skip:
-            continue
-        src = rt_constants.JOINTS_BN.get(source)
-        tgt = rt_constants.JOINTS_BN.get(target)
-        if not src or not tgt:
-            continue
+    for source, target, src_start, tgt_start in _scene_mirror_pairs(skip):
         # Re-resolved per pair: an earlier move in this same pass rewrites
         # the stored path of everything that rode along under it.
-        src_root = _live_path(src[0])
-        tgt_root = _live_path(tgt[0])
+        src_root = _live_path(src_start)
+        tgt_root = _live_path(tgt_start)
         if not src_root or not tgt_root:
             continue
 
@@ -1363,6 +1390,49 @@ def reconcile_chain_structure(dry_run, skip=None):
             continue
         reparented.append(target)
     return {'reparented': reparented, 'unresolved': unresolved}
+
+
+def _scene_mirror_pairs(skip=None):
+    '''
+    L/R pairs read off the SCENE rather than the roster.
+
+    The roster names the parts Setup may rewrite. It does not name every
+    part whose place in the hierarchy the mirror describes: a chain hanging
+    off one that moves has to travel with it, listed or not. An unlisted
+    L_fintail under a fin being reparented would otherwise be left behind
+    on a node nothing owns, and listing it only to move it would put an
+    already-rigged tail back in reach of the orient and mirror passes,
+    which is the opposite of what leaving it off the roster asked for.
+
+    An EXCLUDED part is still excluded. Only a pair where each side
+    resolves to exactly one chain is offered, so nothing is derived from
+    an ambiguity.
+
+    Arguments
+        skip (set): rignames to leave alone this run.
+
+    Return
+        list: [(source, target, source root path, target root path), ...]
+    '''
+    held_back = set(rt_cache.excluded_parts()) | (skip or set())
+    source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
+    candidates = rt_cleanup.bn_start_candidates()
+    pairs = []
+    for rigname, starts in candidates.items():
+        match = _SIDE_RE.match(rigname or '')
+        if not match or len(starts) != 1:
+            continue
+        if match.group(1).upper() != source_side or rigname in held_back:
+            continue
+        letter = 'L' if source_side == 'R' else 'R'
+        if match.group(1).islower():
+            letter = letter.lower()
+        target = f'{letter}_{match.group(2)}'
+        target_starts = candidates.get(target) or []
+        if target in held_back or len(target_starts) != 1:
+            continue
+        pairs.append((rigname, target, starts[0], target_starts[0]))
+    return pairs
 
 
 def _reparent(node, parent):
