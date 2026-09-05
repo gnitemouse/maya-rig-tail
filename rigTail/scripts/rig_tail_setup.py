@@ -625,6 +625,7 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
         logger.info(f'Mirror{mode}: no L/R pairs in RIGPARTS, skipping')
         return 0
     count = 0
+    done = []
     # Parents first: mirroring positions moves joints, and a joint carries
     # its children with it, so a child placed on its mirror and then dragged
     # by its parent needs another whole run to settle.
@@ -673,8 +674,8 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
             positions = [_reflect([m[12], m[13], m[14]], keep)
                          for m in src_mats] if do_positions else None
 
-            logger.info(f'Mirror{mode}: {source} to {target} '
-                        f'(axis={axis}, {what})')
+            logger.debug(f'Mirror{mode}: {source} to {target} '
+                         f'(axis={axis}, {what})')
             # Everything hanging off this chain that it does not own stays
             # where it is: the mirror describes THIS part's joints, not the
             # rig parts that happen to hang below them.
@@ -698,10 +699,14 @@ def mirror_chains(dry_run, do_orient, do_positions, skip=None):
             _orient_end_joint(tgt[-1], frames[-1], dry_run, position=ee_pos)
             _restore_world(held)
 
+            done.append(target)
             if not dry_run:
                 _report_mirror_delta(target, tgt, before)
         except Exception as err:
             logger.error(f'Mirror: failed on {source} to {target}: {err}')
+    if done:
+        logger.info(f'Mirror{mode}: {len(done)} pair(s) {what} - '
+                    f'{", ".join(done)}')
     return count
 
 
@@ -738,9 +743,15 @@ def _report_mirror_delta(rigname, joints, before_mats):
     pos_moved = sum(1 for d in pos_deltas if d > 1e-4)
     rot_max = max(rot_deltas) if rot_deltas else 0.0
     pos_max = max(pos_deltas) if pos_deltas else 0.0
-    logger.info(f'Mirror: {rigname} re-oriented {rot_moved}/{n} joints '
-                f'(max {rot_max:.1f} deg), moved {pos_moved}/{n} joints '
-                f'(max {pos_max:.4f} units)')
+    line = (f'Mirror: {rigname} re-oriented {rot_moved}/{n} joints '
+            f'(max {rot_max:.1f} deg), moved {pos_moved}/{n} joints '
+            f'(max {pos_max:.4f} units)')
+    # A pair that already matched its mirror is the ordinary case on a
+    # re-run, and saying so once per part buries the ones that moved.
+    if rot_moved or pos_moved:
+        logger.info(line)
+    else:
+        logger.debug(line)
 
 
 # CREATION =============================================================
@@ -800,7 +811,7 @@ def create_missing_chains(dry_run, detected=None, skip=None):
     # another uniquified copy behind. The scene is the authority on what
     # already exists.
     in_scene = set(rt_cleanup.bn_start_candidates())
-    created = []
+    created, adopted = [], []
     for source, target in _hierarchy_order(pairs + implied):
         if source not in detected or source in skip or target in skip:
             continue
@@ -809,7 +820,8 @@ def create_missing_chains(dry_run, detected=None, skip=None):
             # roster by BEING created - and a part the roster does not list
             # is never paired, so it was never mirrored either. The chain
             # existing already is not a reason to leave it out of its pair.
-            _adopt_existing_target(target, source, dry_run)
+            if _adopt_existing_target(target, source, dry_run):
+                adopted.append(target)
             continue
         src = rt_constants.JOINTS_BN.get(source)
         if not src:
@@ -848,6 +860,10 @@ def create_missing_chains(dry_run, detected=None, skip=None):
                         f'{source} with Mirror Joints on)')
         logger.info(f'Mirror: created {target} ({len(chain)} joints) '
                     f'mirrored from {source}')
+    if adopted:
+        mode = ' [dry-run]' if dry_run else ''
+        logger.info(f'Mirror{mode}: paired {len(adopted)} rig part(s) whose '
+                    f'chain the scene already holds - {", ".join(adopted)}')
     return created
 
 
@@ -875,9 +891,9 @@ def _adopt_existing_target(target, source, dry_run):
     rt_constants.RIGPARTS.append(target)
     mode = ' [dry-run]' if dry_run else ''
     would = 'would be added to' if dry_run else 'added to'
-    logger.info(f'Mirror{mode}: {target} {would} RIGPARTS (implied by '
-                f'{source}; its chain is already in the scene, so it is '
-                'paired rather than created)')
+    logger.debug(f'Mirror{mode}: {target} {would} RIGPARTS (implied by '
+                 f'{source}; its chain is already in the scene, so it is '
+                 'paired rather than created)')
     return True
 
 
@@ -1622,19 +1638,26 @@ def mark_stray_nodes(dry_run, skip=None):
     for node in sorted(strays, key=lambda p: -p.count('|')):
         reason = strays[node]
         old = rt_maya.leaf(node)
-        logger.warning(f'Setup{mode}: {old} is {reason}, marking it '
-                       f'{_stray_name(old)}')
+        # Why each one was picked is the detail; the summary below is what a
+        # run needs to say out loud.
+        logger.debug(f'Setup{mode}: {old} is {reason}, marking it '
+                     f'{_stray_name(old)}')
         if dry_run:
             marked.append((old, _stray_name(old), reason, node))
             continue
         done = _mark_one(node, reason)
         if done:
             marked.append(done)
-    if marked and not dry_run:
-        logger.warning(f'Setup: marked {len(marked)} stray joint(s) with '
-                       f"'{STRAY_SUFFIX}' and added them to '{REVIEW_SET}'. "
-                       'Nothing was deleted - check them, then delete them '
-                       'yourself once you are satisfied.')
+    if marked:
+        names = ', '.join(new for _, new, _, _ in marked[:6])
+        if len(marked) > 6:
+            names += f', and {len(marked) - 6} more'
+        did = 'would mark' if dry_run else 'marked'
+        logger.warning(
+            f'Setup{mode}: {did} {len(marked)} joint(s) no rig part can own '
+            f"- {names}. They are in '{REVIEW_SET}'; nothing was deleted, so "
+            'check them and delete them yourself. Raise the log level for '
+            'why each was picked.')
     return marked
 
 
