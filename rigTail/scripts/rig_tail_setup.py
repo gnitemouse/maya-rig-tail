@@ -326,7 +326,13 @@ def setup_tails(root=None, dry_run=None):
         # skinCluster from the joints reaches it whatever it is called, and
         # a part that did not move writes nothing.
         with timer.phase('rebaseline'):
-            for rigname in sorted(set(active) | set(skinned)):
+            # Nothing moved in a preview, so there is no new rest pose to
+            # accept - and writing one would change the skin under a run
+            # that reports changing nothing. The old code was safe only by
+            # accident: it iterated the list the unbind filled, which a
+            # preview left empty.
+            for rigname in ([] if preview
+                            else sorted(set(active) | set(skinned))):
                 rt_maya.rebaseline_skin(rigname)
 
         result['created'] = created
@@ -1654,15 +1660,25 @@ def _stray_joints(skip=None):
     held_back = set(rt_cache.excluded_parts()) | (skip or set())
     reasons = {}
     joints = cmds.ls(type='joint', long=True) or []
+    # Resolving a name is a regex match, and the ancestor walk below asks
+    # about the SAME names over and over - every joint of a fifty-joint
+    # chain shares its whole ancestry, so a scene of a few thousand joints
+    # was matching hundreds of thousands of times. One answer per name.
+    resolved = {}
+
+    def rigname_of(name):
+        if name not in resolved:
+            resolved[name] = rt_naming.get_rigname(name, rt_constants.JOINT)
+        return resolved[name]
+
     for node in joints:
         leaf = rt_maya.leaf(node)
-        rigname = rt_naming.get_rigname(leaf, rt_constants.JOINT)
+        rigname = rigname_of(leaf)
         if not rigname:
             # Only a name the convention would otherwise have accepted:
             # anything else in the scene is somebody else's node.
             base = leaf.rstrip('0123456789')
-            owner = rt_naming.get_rigname(base, rt_constants.JOINT) \
-                if base != leaf else None
+            owner = rigname_of(base) if base != leaf else None
             if owner and owner not in held_back:
                 reasons[node] = (f"'{base}' with Maya's uniquifying suffix, "
                                  'which no naming template matches')
@@ -1681,8 +1697,7 @@ def _stray_joints(skip=None):
                              'source keeps none')
             continue
         for ancestor in node.split('|')[1:-1]:
-            other = _side_of(rt_naming.get_rigname(ancestor,
-                                                   rt_constants.JOINT))
+            other = _side_of(rigname_of(ancestor))
             if other and other != side:
                 reasons[node] = (f'a {side} joint hanging under {ancestor} '
                                  f'on the {other} side')
