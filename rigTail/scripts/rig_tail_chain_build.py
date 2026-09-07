@@ -592,12 +592,12 @@ def _shrink_chain(joints, positions, rigname, ee_distance, ee_pos=None):
     if ee:
         ee = _reparent(ee, anchor)
 
-    for j in delete:
-        children = cmds.listRelatives(j, children=True, typ='joint',
-                                      fullPath=True) or []
-        for child in children:
-            _reparent(child, anchor)
-        cmds.delete(j)
+    # One delete takes the whole surplus tail: _guard_chain refuses a span
+    # with branch children and the _ee_ has just moved off, so nothing
+    # below the cut survives. Going joint by joint would instead re-resolve
+    # every path still to come, each moving as the joint above it goes.
+    if delete:
+        cmds.delete(delete[0])
 
     _place_ee(ee, positions, ee_distance, ee_pos)
     return [(cmds.ls(j, long=True) or [j])[0] for j in keep]
