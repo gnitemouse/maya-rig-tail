@@ -2392,9 +2392,9 @@ def mirror_frames(src_matrices, axis, aim_axis, up_axis, behavior=None):
         axis (str): symmetry-plane normal, 'x'|'y'|'z'.
         aim_axis (str): local axis aimed down the chain, 'x'|'y'|'z'.
         up_axis (str): local axis aligned to the plane normal, 'x'|'y'|'z'.
-        behavior (str): 'symmetric' or 'parallel'; None reads
+        behavior (str): 'mirror', 'symmetric' or 'parallel'; None reads
             rt_constants.MIRROR_BEHAVIOR. An unrecognized value falls back to
-            'symmetric' with a warning.
+            rt_mirror.BEHAVIOR_DEFAULT with a warning.
 
     Return
         list: one [X_row, Y_row, Z_row] world frame per joint.
