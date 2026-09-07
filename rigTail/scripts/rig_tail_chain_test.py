@@ -1226,6 +1226,12 @@ def test_cache_no_compounding(rigname=DEFAULT_CHAIN):
         # Back to the start, cache and all, then ten passes out and back.
         for joint, pos in zip(_chain_bn(root), original):
             cmds.xform(joint, ws=True, t=pos)
+        # The _ee_ hangs off the tip, so the loop above drags it. It is the
+        # baseline's final point: left where it lands, the ten passes
+        # resample a longer tail than the one pass did.
+        ee_start = rt_chain_build._end_joint(_chain_bn(root)[-1])
+        if ee_start and state['ee_pos']:
+            cmds.xform(ee_start, ws=True, t=state['ee_pos'])
         rt_chain_build.clear_cache(root)
         counts = [n + 5, n - 2, n + 9, n - 3, n + 12, n + 1,
                   n - 1, n + 7, n - 4, n + 3]
