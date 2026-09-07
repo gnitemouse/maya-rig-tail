@@ -145,6 +145,15 @@ REVIEW_SET = 'rig_tail_review_SET'
 # rig_tail_constants because the chain walk has to recognize it too.
 STRAY_SUFFIX = rt_constants.STRAY_SUFFIX
 
+# Joints a PREVIEW would have marked. Marking clears a name out of the
+# convention, and every stage after it reads the scene by name, so a run
+# that renames nothing leaves the later stages looking at joints the real
+# run has already taken out - reporting an ambiguity it resolves, and
+# refusing chains it goes on to reconcile. Held here for the length of one
+# preview so those stages can be told what to disregard; setup_tails fills
+# it and empties it again.
+_PENDING_MARKS = set()
+
 
 def _cst(name):
     ''' Read a Setup setting from the constants module. '''
@@ -198,6 +207,9 @@ def setup_tails(root=None, dry_run=None):
     # rewrites the world matrix of every joint in every chain, and each
     # write would otherwise trigger a redraw and an EM graph rebuild -
     # exactly the churn the build already avoids. See rig_tail_maya.
+    # Emptied however the run ends: a preview's disregard list surviving
+    # into the next run would hide joints that are really there.
+    _PENDING_MARKS.clear()
     with rt_maya.build_performance_scope('rig_tail setup'), \
             rt_maya.build_timer('setup_tails') as timer:
         # Detect over the FULL roster (cheap, non-destructive) so JOINTS_BN
@@ -232,6 +244,10 @@ def setup_tails(root=None, dry_run=None):
             marked = mark_stray_nodes(preview)
         if marked and not preview:
             found = rt_cleanup.detect_joints_bn()
+        elif preview:
+            # A preview renamed nothing, so the stages below would still be
+            # reading joints the real run has taken out of the convention.
+            _PENDING_MARKS.update(m[3] for m in marked)
 
         # Settled before anything acts on a chain: every step below resolves
         # one chain per rig part, and orienting, reparenting or mirroring
@@ -256,6 +272,8 @@ def setup_tails(root=None, dry_run=None):
         marked += shape['marked']
         if shape['marked'] and not preview:
             found = rt_cleanup.detect_joints_bn()
+        elif preview:
+            _PENDING_MARKS.update(m[3] for m in shape['marked'])
 
         # Build any mirror target that has no chain yet, BEFORE the geometry
         # check and the unbind: a chain created here is a full member of this
@@ -328,9 +346,7 @@ def setup_tails(root=None, dry_run=None):
         with timer.phase('rebaseline'):
             # Nothing moved in a preview, so there is no new rest pose to
             # accept - and writing one would change the skin under a run
-            # that reports changing nothing. The old code was safe only by
-            # accident: it iterated the list the unbind filled, which a
-            # preview left empty.
+            # that reports changing nothing.
             for rigname in ([] if preview
                             else sorted(set(active) | set(skinned))):
                 rt_maya.rebaseline_skin(rigname)
@@ -935,8 +951,9 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
     held_back = set(rt_cache.excluded_parts()) | skip
     active = set(_active())
     mode = ' [dry-run]' if dry_run else ''
-    joints = cmds.ls(type='joint', long=True) or []
-    candidates = rt_cleanup.bn_start_candidates()
+    joints = [j for j in cmds.ls(type='joint', long=True) or []
+              if not _pending(j)]
+    candidates = _live_chains()
     superseded, marked = [], []
 
     for source_root, target_root in _mirror_subtree_roots(candidates):
@@ -1331,12 +1348,38 @@ def _counterpart_parent(src_root):
     counterpart = _swap_side(rt_maya.leaf(parent))
     if counterpart == rt_maya.leaf(parent):
         return parent, ''
-    found = cmds.ls(counterpart, long=True) or []
+    found = [f for f in cmds.ls(counterpart, long=True) or []
+             if not _pending(f)]
     if len(found) == 1:
         return found[0], ''
     if len(found) > 1:
         return None, f"{len(found)} nodes are named '{counterpart}'"
     return None, f"there is no '{counterpart}'"
+
+
+def _pending(node):
+    ''' Whether a preview has already accounted for this joint as a stray,
+    so the stages after marking read the scene the real run would see. '''
+    return node in _PENDING_MARKS
+
+
+def _live_chains():
+    '''
+    The scene's chain starts, less anything a preview would have marked.
+
+    Every stage after marking asks this question, and each has to be given
+    the same answer the real run gets - one where a discarded chain has
+    already stopped answering to its rig part's name.
+
+    Return
+        dict: {rigname: [chain start path, ...]}
+    '''
+    live = {}
+    for rigname, paths in rt_cleanup.bn_start_candidates().items():
+        kept = [p for p in paths if not _pending(p)]
+        if kept:
+            live[rigname] = kept
+    return live
 
 
 def _parent_of(node):
@@ -1480,7 +1523,7 @@ def _scene_mirror_pairs(skip=None):
     '''
     held_back = set(rt_cache.excluded_parts()) | (skip or set())
     source_side = str(_cst('MIRROR_SOURCE_SIDE')).upper()
-    candidates = rt_cleanup.bn_start_candidates()
+    candidates = _live_chains()
     pairs = []
     for rigname, starts in candidates.items():
         match = _SIDE_RE.match(rigname or '')
@@ -1557,8 +1600,8 @@ def _reparent(node, parent):
     joint's transform. A BN joint of a built rig cannot be written: its
     translate and rotate are driven through the offsetParentMatrix network,
     so the compensation is dropped and the joint snaps onto its new parent -
-    which is how an already-rigged tail ended up at its fin's origin having
-    been asked only to hang somewhere else.
+    so an already-rigged tail asked only to hang somewhere else arrives at
+    its new parent's origin instead.
 
     So the drivers come off first, exactly as _apply_frames takes them off
     before writing a frame, and the world matrix is put back afterwards
@@ -1608,7 +1651,7 @@ def mark_stray_nodes(dry_run, skip=None):
             'BN_L_wing_base_jnt1'. The trailing digits put it outside the
             naming template, which is the only lens this tool has, so
             detection cannot see it - and a part it cannot see reads as
-            missing, which is what had every run leave one more copy behind.
+            missing, and each run leaves one more copy behind it.
         CROSS-SIDE  a chain whose rig part names one side while an ancestor
             names the other, 'BN_L_finridge_jnt' under 'BN_R_fin_jnt'. The
             two sides are separate by construction, so this cannot be
@@ -1684,7 +1727,8 @@ def _stray_joints(skip=None):
     # deliberately off limits; an unlisted one was never spoken for.
     held_back = set(rt_cache.excluded_parts()) | (skip or set())
     reasons = {}
-    joints = cmds.ls(type='joint', long=True) or []
+    joints = [j for j in cmds.ls(type='joint', long=True) or []
+              if not _pending(j)]
     # Resolving a name is a regex match, and the ancestor walk below asks
     # about the SAME names over and over - every joint of a fifty-joint
     # chain shares its whole ancestry, so a scene of a few thousand joints
@@ -1764,7 +1808,7 @@ def _misplaced_duplicates(held_back, already, joints):
         dict: {joint DAG path: reason}.
     '''
     reasons = {}
-    candidates = rt_cleanup.bn_start_candidates()
+    candidates = _live_chains()
     for rigname, starts in candidates.items():
         if len(starts) < 2 or rigname in held_back:
             continue
@@ -1935,7 +1979,7 @@ def _report_duplicate_chains(dry_run, ignore=None):
     ignore = ignore or set()
     excluded = set(rt_cache.excluded_parts())
     duplicates = {}
-    for rigname, paths in rt_cleanup.bn_start_candidates().items():
+    for rigname, paths in _live_chains().items():
         if rigname in excluded:
             continue
         left = [p for p in paths if p not in ignore]

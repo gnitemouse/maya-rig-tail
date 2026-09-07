@@ -473,6 +473,12 @@ part's name but that no rig part can own, to `<name>_delN`. Two kinds:
 | Cross-side | `BN_L_finridge_jnt` under `BN_R_fin_jnt` | The two sides are separate by construction, so a left chain hanging off a right one is damage, not a choice. |
 | Misplaced twin | a second `BN_L_fin_jnt`, where the source side puts only one | Two valid chains for one name are normally a choice Setup refuses. They stop being one when the pair settles it: if exactly **one** candidate sits under the parent the mirror describes, the others are somewhere the mirror does not. Left alone when the answer is not unarguable — no source side, an unresolvable mirrored parent, or several candidates equally well placed. |
 
+`MIRROR_DRYRUN` reaches the same verdicts a real run does. Marking clears a
+name out of the convention and every stage after it reads the scene by
+name, so a preview records the joints it would have marked and the later
+stages disregard them: the ambiguity a real run resolves is not reported,
+and the chains it goes on to reconcile are not refused.
+
 Marking is scoped by **name, not by the roster**. A joint competing for a
 rig part's name blocks that name whether or not the roster lists it: an
 unlisted `BN_L_fin_jnt` matching two nodes stops a listed `L_finridge`
