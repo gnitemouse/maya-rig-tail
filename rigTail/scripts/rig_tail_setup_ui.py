@@ -888,7 +888,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
             (result.get('created'), 'chain(s) created'),
             (result.get('superseded'), 'chain(s) rebuilt from the source'),
             (result.get('marked'), f"joint(s) marked '{rt_setup.STRAY_SUFFIX}'"),
-            (result.get('incomplete'), 'not a rig part, blocking a rebuild'),
             (result.get('reparented'), 'chain(s) reparented'),
             (result.get('duplicates'), 'ambiguous, skipped'),
             (result.get('unresolved'), 'chain(s) not reconciled'),
@@ -906,7 +905,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
         # as success: the counts alone look like an ordinary partial run.
         ambiguous = result.get('duplicates') or []
         unresolved = result.get('unresolved') or []
-        blocked = result.get('incomplete') or []
         notes = []
         if ambiguous or unresolved:
             held = ambiguous + [p for p in unresolved if p not in ambiguous]
@@ -916,13 +914,6 @@ class RigTailSetupUI(QtWidgets.QDialog):
                 'These rig parts were left untouched because Setup could '
                 'not tell which chain they meant, or where the mirrored '
                 f"chain belongs: {', '.join(held)}.{where}")
-        # A different problem with a different fix: these are names the
-        # roster is MISSING, not chains Setup could not read.
-        if blocked:
-            notes.append(
-                'A side could not be rebuilt from its source because these '
-                f"are not rig parts: {', '.join(blocked)}. Add them in "
-                "'Edit Rig Parts' and run Setup again.")
         if notes:
             QtWidgets.QMessageBox.warning(self, 'Setup incomplete',
                 summary + '\n\n' + '\n\n'.join(notes)

@@ -210,7 +210,7 @@ def setup_tails(root=None, dry_run=None):
             logger.warning('Setup: no BN joints found for any RIGPART')
             return {'oriented': 0, 'mirrored': 0, 'dry_run': True,
                     'created': [], 'marked': [], 'superseded': [],
-                    'incomplete': [], 'reparented': [], 'unresolved': [],
+                    'reparented': [], 'unresolved': [],
                     'duplicates': [], 'missing_chains': list(_active()),
                     'missing_geo': [], 'excluded': rt_cache.excluded_parts()}
 
@@ -252,7 +252,7 @@ def setup_tails(root=None, dry_run=None):
         with timer.phase('supersede'):
             shape = supersede_mismatched_subtrees(preview, skip) \
                 if bool(_cst('MIRROR_JOINTS')) \
-                else {'superseded': [], 'incomplete': [], 'marked': []}
+                else {'superseded': [], 'marked': []}
         marked += shape['marked']
         if shape['marked'] and not preview:
             found = rt_cleanup.detect_joints_bn()
@@ -338,7 +338,6 @@ def setup_tails(root=None, dry_run=None):
         result['created'] = created
         result['marked'] = marked
         result['superseded'] = shape['superseded']
-        result['incomplete'] = shape['incomplete']
         result['reparented'] = structure['reparented']
         result['unresolved'] = structure['unresolved']
         result['duplicates'] = ambiguous
@@ -930,7 +929,7 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
         skip (set): rignames to leave alone this run.
 
     Return
-        dict: {'superseded': [rigname, ...], 'incomplete': [rigname, ...]}
+        dict: {'superseded': [rigname, ...], 'marked': [(rename), ...]}
     '''
     skip = skip or set()
     held_back = set(rt_cache.excluded_parts()) | skip
@@ -938,7 +937,7 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
     mode = ' [dry-run]' if dry_run else ''
     joints = cmds.ls(type='joint', long=True) or []
     candidates = rt_cleanup.bn_start_candidates()
-    superseded, incomplete, marked = [], [], []
+    superseded, marked = [], []
 
     for source_root, target_root in _mirror_subtree_roots(candidates):
         src_parts = _subtree_parts(source_root, joints)
@@ -962,14 +961,18 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
 
         unlisted = sorted(p for p in src_parts if p not in active)
         if unlisted:
-            logger.warning(
-                f'Mirror: {rt_maya.leaf(target_root)} does not have '
-                f'{rt_maya.leaf(source_root)}\'s shape and cannot be rebuilt '
-                f'from it, because {", ".join(unlisted)} '
-                f'{"is" if len(unlisted) == 1 else "are"} not a rig part. '
-                "Add them in 'Edit Rig Parts' and run Setup again; nothing "
-                'was changed.')
-            incomplete.extend(unlisted)
+            # Not something to fix. Leaving a part off the roster is how an
+            # already-rigged chain is kept out of Setup's hands, and a
+            # rebuild would mark and replace it along with the rest of the
+            # subtree - so the roster saying 'not yours' is the answer, not
+            # an obstacle to it. Reconciliation still hangs those chains
+            # where the mirror says they belong, which is all they need.
+            logger.info(
+                f'Mirror: {rt_maya.leaf(target_root)} is shaped differently '
+                f'from {rt_maya.leaf(source_root)}, but rebuilding it would '
+                f'take {", ".join(unlisted)} with it, which '
+                f'{"is" if len(unlisted) == 1 else "are"} not Setup\'s to '
+                'replace. Reconciling the hierarchy instead.')
             continue
 
         doomed = _chain_from(target_root, None, joints)
@@ -989,8 +992,7 @@ def supersede_mismatched_subtrees(dry_run, skip=None):
             if done:
                 marked.append(done)
         superseded.extend(sorted(tgt_parts))
-    return {'superseded': superseded, 'incomplete': incomplete,
-            'marked': marked}
+    return {'superseded': superseded, 'marked': marked}
 
 
 def _joint_counts_differ(source_root, target_root, joints):
