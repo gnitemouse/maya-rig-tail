@@ -2598,7 +2598,9 @@ def _orient_end_joint(parent, frame, dry_run, position=None):
     if not ee:
         return 0
     if dry_run:
-        logger.info(f'  [dry-run] {ee}: end joint aligned to chain')
+        # Aligning a tip that already exists follows from the chain it
+        # belongs to, which the caller has already reported.
+        logger.debug(f'  [dry-run] {ee}: end joint aligned to chain')
         return 1
     pos = position if position is not None \
         else cmds.xform(ee, q=True, ws=True, translation=True)
@@ -2655,10 +2657,13 @@ def _apply_frames(joints, frames, dry_run, positions=None):
         positions = [cmds.xform(joints[i], q=True, ws=True, translation=True)
                      for i in range(n)]
     if dry_run:
+        # One line per JOINT, each carrying a full DAG path, buries a
+        # preview of a fifty-joint chain in its own detail. The caller
+        # already names the chain; this is the detail behind it.
         for i in range(n):
             before = cmds.xform(joints[i], q=True, ws=True, ro=True)
-            logger.info(f'  [dry-run] {joints[i]}: world rot '
-                        f'{[round(v, 2) for v in before]} to aligned')
+            logger.debug(f'  [dry-run] {joints[i]}: world rot '
+                         f'{[round(v, 2) for v in before]} to aligned')
         return n
 
     for i in range(n):
